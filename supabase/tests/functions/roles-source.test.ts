@@ -127,6 +127,43 @@ describe('keep', () => {
     expect(b!.text).toBe('New words for the role and the team.');
   });
 
+  it('a posting pasted as text has no link and is kept all the same; a board role without one is not', async () => {
+    const pasted: JobListing = {
+      source: 'posting',
+      externalId: 'pasted:0123456789abcdef',
+      companyName: 'Unknown company',
+      title: 'Data Engineer Intern at Lumen',
+      locations: [],
+      url: '',
+      text: 'Data Engineer Intern at Lumen. You will build pipelines in Python and SQL with the data team.',
+    };
+    const [job] = await roleSources.keep(t.db, [pasted]);
+    expect(job).toMatchObject({
+      source: 'posting',
+      title: 'Data Engineer Intern at Lumen',
+      url: '',
+      level: 'intern',
+    });
+    // its text is the pasted text: asking for it reads no page
+    const f = fakeBoards([]);
+    expect(await roleSources.text(t.db, net(f, DAY1), job!.id)).toMatch(/pipelines in Python and SQL/);
+    expect(f.calls).toHaveLength(0);
+    expect(await roleSources.keep(t.db, [listing('nolink', 'Data Analyst', { url: '' })])).toEqual([]);
+  });
+
+  it('the same title and text at two companies, kept with no board, are two roles', async () => {
+    const r = await keepListings(
+      t.db,
+      [
+        listing('x1', 'Software Engineer Intern', { companyName: 'Quarry', text: 'Must have Python.' }),
+        listing('x2', 'Software Engineer Intern', { companyName: 'Harbor', text: 'Must have Python.' }),
+      ],
+      { now: DAY1 },
+    );
+    expect(r.jobs.map((j) => j.companyName)).toEqual(['Quarry', 'Harbor']);
+    expect((await jobs(`title = 'Software Engineer Intern'`)).every((j) => !j.dupe_of)).toBe(true);
+  });
+
   it('a non-English listing is not stored', async () => {
     const r = await keepListings(t.db, [listing('de', 'Entwickler', { language: 'de' })], { now: DAY1 });
     expect(r).toMatchObject({ added: 0, skipped: 1, jobs: [] });

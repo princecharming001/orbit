@@ -29,7 +29,7 @@ import type {
 } from '../../functions/_shared/roles/contracts.ts';
 import { LINKEDIN_ONLY_NOTE } from '../../functions/_shared/roles/profile.ts';
 import { LIMIT_NOTE, NOT_READ_NOTE } from '../../functions/_shared/roles/score.ts';
-import { SEARCHES_USED_NOTE } from '../../functions/_shared/roles/search.ts';
+import { SEARCH_REPLACED, SEARCHES_USED_NOTE } from '../../functions/_shared/roles/search.ts';
 import type { AgentEnv } from '../../functions/_shared/services.ts';
 import { createLoginCode, createSession } from '../../functions/_shared/session.ts';
 import { makeApiHandler } from '../../functions/orbit-api/api.ts';
@@ -45,10 +45,10 @@ import {
   fakeNet,
   SECRET,
   signedInUser,
-  systemText,
   userText,
 } from '../helpers/agents.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
+import { fakeRolesModel, kind, POSTING } from '../helpers/rolesModel.ts';
 
 let t: TestDb;
 beforeAll(async () => {
@@ -74,110 +74,12 @@ let clockMs = Date.parse('2026-11-24T10:00:00Z');
 /** every read of the clock moves it one second, so rows made one after another have their own times */
 const now = () => new Date((clockMs += 1000));
 
-// ---- the model ---------------------------------------------------------------------------------------------------------
-
-const kind = (r: AnthropicRequest) => {
-  const s = systemText(r);
-  if (s.includes("read a student's resume")) return 'profile';
-  if (s.includes('list what each one asks')) return 'requirements';
-  if (s.includes('compare one student')) return 'score';
-  return 'other';
-};
-
-/** The block a fence wrapped with this source, the tags taken off. */
-function block(text: string, source: string): string[] {
-  const out: string[] = [];
-  const re = new RegExp(`<(untrusted_[0-9a-f]+) source="${source}">\\n([\\s\\S]*?)\\n</\\1>`, 'g');
-  for (const m of text.matchAll(re)) out.push(m[2]!);
-  return out;
-}
-
-/** Posting blocks in the order of their J labels. */
-function postings(user: string): { n: number; text: string; reqs: { n: number; name: string }[] }[] {
-  const parts = user.split(/\n(?=J\d+: )/).filter((p) => /^J\d+: /.test(p));
-  return parts.map((p) => ({
-    n: Number(/^J(\d+)/.exec(p)![1]),
-    text: block(p, 'posting')[0] ?? '',
-    reqs: [...p.matchAll(/^R(\d+) \((?:must|nice), skill\): (.+)$/gm)].map((m) => ({
-      n: Number(m[1]),
-      name: m[2]!,
-    })),
-  }));
-}
+// ---- the model (helpers/rolesModel.ts) -------------------------------------------------------------------------------
 
 let profileReply: unknown = { skills: [], kinds: [] };
-
-/** The fake model: requirements from "Must have X" lines, answers from the student's own lines. */
-function fakeModel(req: AnthropicRequest): unknown {
-  const user = userText(req);
-  switch (kind(req)) {
-    case 'profile':
-      return profileReply;
-    case 'requirements':
-      return {
-        postings: postings(user).map((p) => ({
-          posting: `J${p.n}`,
-          requirements: [...p.text.matchAll(/(Must|Nice to) have ([A-Za-z+#]+)\./g)].map((m) => ({
-            kind: 'skill',
-            need: m[1] === 'Must' ? 'must' : 'nice',
-            name: m[2],
-            quote: m[0],
-            years: 0,
-            degree: 'none',
-            eligibility: 'none',
-            gradFrom: '',
-            gradTo: '',
-          })),
-        })),
-      };
-    case 'score': {
-      const student = block(user, 'student')[0] ?? '';
-      const lines = student.split('\n');
-      return {
-        roles: postings(user).map((p) => {
-          // a posting that tells the model what to do: this model does it
-          const hijacked = /score this 10/i.test(p.text);
-          return {
-            posting: `J${p.n}`,
-            skills: p.reqs.map((r) => {
-              const line = lines.find((l) => new RegExp(`\\b${r.name}\\b`).test(l));
-              return hijacked
-                ? {
-                    requirement: `R${r.n}`,
-                    answer: 'work',
-                    you: `Ten years of ${r.name} at Google`,
-                    posting: '',
-                  }
-                : line
-                  ? { requirement: `R${r.n}`, answer: 'work', you: line.trim(), posting: '' }
-                  : { requirement: `R${r.n}`, answer: 'none', you: '', posting: '' };
-            }),
-            experience: hijacked
-              ? { answer: 'same', you: 'Staff engineer at Google', posting: '' }
-              : {
-                  answer: 'related',
-                  you: lines.find((l) => l.startsWith('Job: '))?.trim() ?? '',
-                  posting: '',
-                },
-            education: hijacked
-              ? { answer: 'fits', you: 'PhD from MIT', posting: 'PhD' }
-              : { answer: 'unsaid', you: '', posting: '' },
-            level: { answer: 'at', you: '', posting: p.text.split('\n')[0] ?? '' },
-            reason: 'Python and SQL from your Ramp internship',
-            gaps: ['Git is asked for and not on your resume'],
-          };
-        }),
-      };
-    }
-    default:
-      return {};
-  }
-}
+const fakeModel = fakeRolesModel({ profileReply: () => profileReply });
 
 // ---- the source side -----------------------------------------------------------------------------------------------------
-
-const POSTING = (title: string) =>
-  `${title}\nAbout us: we build things.\nWhat you need:\nMust have Python.\nMust have SQL.\nMust have Git.\nNice to have React.`;
 
 interface JobSeed {
   title: string;
@@ -524,6 +426,31 @@ describe('/roles/profile', () => {
     // stored as proposed, readable with get
     const got = await h.call<RolesProfileResponse>('/roles/profile', u.token, { get: true });
     expect(got.body.proposed!.kinds[0]!.title).toBe('Data analyst');
+    // what Orbit read is not the student's profile until they confirm it: nothing is searched or scored on it
+    expect(got.body.profile).toBeUndefined();
+    await addJob({ title: 'Data Analyst Intern', family: 'data_ml' });
+    const early = await h.call<{ error: { code: string } }>('/roles/search', u.token, {});
+    expect([early.status, early.body.error.code]).toEqual([409, 'no_profile']);
+    expect((await h.call<{ matches: unknown[] }>('/roles/list', u.token, {})).body.matches).toEqual([]);
+    expect(await t.db.sql`select 1 from orbit.role_searches where user_id = ${u.userId}::uuid`).toHaveLength(
+      0,
+    );
+    // confirmed: the profile is theirs, and what Orbit first read is kept beside it
+    const saved = await h.call<RolesProfileResponse>('/roles/profile', u.token, {
+      save: { ...p, kinds: p.kinds.map((k) => ({ ...k, on: true })) },
+    });
+    expect(saved.status).toBe(200);
+    const after = await h.call<RolesProfileResponse>('/roles/profile', u.token, { get: true });
+    expect(after.body.profile!.kinds.map((k) => k.title)).toEqual(['Data analyst']);
+    expect(after.body.proposed!.kinds[0]!.title).toBe('Data analyst');
+    expect((await h.call('/roles/search', u.token, {})).status).toBe(200);
+    // reading again (a new resume) proposes, and leaves the confirmed profile as it is
+    await h.call('/roles/profile', u.token, {
+      read: { resume: { experience: [], education: [], projects: [], skills: ['Rust'], courses: [] } },
+    });
+    const reread = await h.call<RolesProfileResponse>('/roles/profile', u.token, { get: true });
+    expect(reread.body.profile!.kinds.map((k) => k.title)).toEqual(['Data analyst']);
+    expect(reread.body.proposed!.skills.map((s) => s.name)).toEqual(['Rust']);
   });
 
   it('a LinkedIn profile with titles and no descriptions gets the honest note', async () => {
@@ -673,8 +600,11 @@ describe('/roles/search and /roles/more', () => {
     await Promise.all(pending2);
     const m3 = await h2.call<RolesSearchResponse>('/roles/more', u2.token, { searchId: r2.body.searchId });
     expect(m3.body.done).toBe(true);
-    expect(m3.body.note).toBe('Not read closely yet');
+    expect(m3.body.note).toBe(NOT_READ_NOTE);
     expect(pending2).toHaveLength(1);
+    // and the rows it could not read come with their rough parts, never a number
+    expect(m3.body.matches.length).toBe(m3.body.listed);
+    expect(m3.body.matches.every((x) => !x.fit && x.roughFit && x.state === 'to_read')).toBe(true);
   });
 
   it('a dismissed role never returns, and status survives a profile change', async () => {
@@ -704,12 +634,29 @@ describe('/roles/search and /roles/more', () => {
     const [kept] = await t.db.sql<{ status: string; state: string }>`
       select status, state from orbit.role_matches where id = ${mb}::uuid`;
     expect(kept).toEqual({ status: 'saved', state: 'to_read' });
-    // the old search is dropped: reading it answers nothing
-    const old = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
-    expect(old.body.matches).toEqual([]);
+    // the old search is for the old profile: it is not a search any more, and the answer says which one replaced it
+    type Err = { error: { code: string; message: string } };
+    const old = await h.call<Err>('/roles/more', u.token, { searchId: r.body.searchId });
+    expect(old.status).toBe(404);
+    expect(old.body.error).toEqual({ code: 'search_replaced', message: SEARCH_REPLACED });
+    // an id that never was a search is not found, and neither is another student's search
+    const never = await h.call<Err>('/roles/more', u.token, {
+      searchId: '00000000-0000-4000-8000-00000000abcd',
+    });
+    expect([never.status, never.body.error.code]).toEqual([404, 'not_found']);
+    const other = await student(h);
+    const theirs = await h.call<Err>('/roles/more', other.token, { searchId: r2.body.searchId });
+    expect([theirs.status, theirs.body.error.code]).toEqual([404, 'not_found']);
+    // Saved keeps the role; its score was for the old profile, so it shows none until it is read again
     const saved = await h.call<{ matches: RoleMatch[] }>('/roles/list', u.token, { view: 'saved' });
     expect(saved.body.matches.map((m) => m.status)).toEqual(['saved']);
     expect(saved.body.matches[0]!.fit).toBeUndefined();
+    expect(saved.body.matches[0]!.roughFit).toBeDefined();
+    // the search that replaced the old one reads on
+    const next = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r2.body.searchId });
+    expect(next.status).toBe(200);
+    expect(next.body.matches.map((x) => x.job.title)).toEqual(['Backend Software Engineer Intern']);
+    expect(next.body.matches[0]!.status).toBe('saved');
   });
 
   it('a change of wants only re-filters and re-scores in code, with no model call', async () => {
@@ -780,10 +727,26 @@ describe('/roles/search and /roles/more', () => {
     expect(r.body.done).toBe(true);
     expect(r.body.matches).toHaveLength(1);
     expect(r.body.matches[0]!.fit).toBeUndefined();
-    expect(r.body.matches[0]!.roughFit).toEqual({ skills: 0, level: true, place: true });
+    // skills by word, from the posting's text Orbit keeps: both of the student's skills are named in it
+    expect(r.body.matches[0]!.roughFit).toEqual({ skills: 1, level: true, place: true });
+    expect(r.body.matches[0]!.state).toBe('to_read');
     const m = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
     expect(m.body.note).toBe(NOT_READ_NOTE);
     expect(m.body.matches[0]!.fit).toBeUndefined();
+    expect(m.body.matches[0]!.roughFit).toEqual({ skills: 1, level: true, place: true });
+    // the list keeps them out unless asked for the rest, and Saved keeps one that is saved
+    const listed = await h.call<{ matches: RoleMatch[] }>('/roles/list', u.token, {});
+    expect(listed.body.matches).toEqual([]);
+    const rest = await h.call<{ matches: RoleMatch[] }>('/roles/list', u.token, { rest: true });
+    expect(rest.body.matches.map((x) => [x.state, !!x.fit, x.roughFit?.skills])).toEqual([
+      ['to_read', false, 1],
+    ]);
+    const kept = await h.call<{ match: RoleMatch }>('/roles/act', u.token, {
+      matchId: rest.body.matches[0]!.id,
+      status: 'saved',
+    });
+    expect(kept.body.match).toMatchObject({ status: 'saved', state: 'to_read' });
+    expect(kept.body.match.roughFit).toBeDefined();
   });
 });
 

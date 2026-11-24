@@ -51,9 +51,11 @@ export const REQUIREMENTS_PER_DAY = 2000;
 export const READS_PER_DAY = 200;
 export const MAX_REQUIREMENTS = 12;
 export const POSTING_CHARS = 8000;
-export const NOT_READ_NOTE = 'Not read closely yet';
+/** Notes are whole sentences: the page shows one on its own line, above rows marked "Not read closely yet". */
+export const NOT_READ_NOTE =
+  'Orbit could not read some of these roles closely just now. They are ranked by what it can read without that.';
 export const LIMIT_NOTE =
-  "Not read closely yet. Today's limit is reached, so these are ranked by what Orbit can read without the model.";
+  "Today's limit for close reads is reached, so the rest are ranked by what Orbit can read without one. More are read tomorrow.";
 /**
  * How long each step may take. One /roles/more call reads the text, then the requirements (one call per posting, side
  * by side), then the answers (one call per two postings, side by side), and must answer well inside the browser's

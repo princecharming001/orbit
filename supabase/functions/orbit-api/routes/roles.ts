@@ -1,13 +1,14 @@
 /**
  * Plan 44 §9.3, Roles for you. All POST, the shapes in packages/core/src/roles/types.ts.
  *
- *   /roles/profile  {read: ProfileLines} → {proposed, note?}; {save: RoleProfile} → {profile}; {get: true} → {profile,
- *                   proposed}
+ *   /roles/profile  {read: ProfileLines} → {proposed, note?}; {save: RoleProfile} → {profile, proposed?};
+ *                   {get: true} → {profile?, proposed?}: `profile` is the one the student confirmed, absent until then
  *   /roles/search   {fresh?} → RolesSearchResponse: filter, rank, list the 60 to read, what is already read
- *   /roles/more     {searchId} → the next 15 read closely
- *   /roles/list     {view?: 'matches' | 'saved'} → what is stored, free
- *   /roles/score    {url? | text?, title?, company?} → {match} or {problem}
- *   /roles/act      {matchId, status, dismissReason?} | {watch: {companyName, on}}
+ *   /roles/more     {searchId} → the next 10 read closely; in production the answer comes at once with every row read so
+ *                   far and the reading carries on behind it. 404 `search_replaced` when a newer search took its place
+ *   /roles/list     {view?: 'matches' | 'saved', rest?} → what is stored, free; Saved keeps closed roles
+ *   /roles/score    {url? | text?, title?, company?} → {match} or {problem} (no profile yet is a problem, not an error)
+ *   /roles/act      {matchId, status, dismissReason?} → {match} | {watch: {companyName, on}} → {watching}
  *
  * Every route answers 404 `not_offered` while the feature is not offered (the owner's Launch switch or ORBIT_FEATURES)
  * to anyone but the owner, who can always try it.
@@ -95,9 +96,14 @@ async function profile(ctx: Ctx): Promise<Response> {
     return json(200, out);
   }
   if (b.get === true) {
+    // `profile` only once the student has confirmed one; before that, what Orbit proposed, so the browser opens the
+    // review screen on it again and never a search on a profile nobody checked
     const stored = await loadProfile(ctx.db, ctx.userId!);
     const out: RolesProfileResponse = stored
-      ? { profile: stored.profile, ...(stored.proposed ? { proposed: stored.proposed } : {}) }
+      ? {
+          ...(stored.confirmed ? { profile: stored.profile } : {}),
+          ...(stored.proposed ? { proposed: stored.proposed } : {}),
+        }
       : {};
     return json(200, out);
   }
@@ -117,7 +123,7 @@ async function moreRoute(ctx: Ctx): Promise<Response> {
 async function listRoute(ctx: Ctx): Promise<Response> {
   const b = await body(ctx, true);
   const view = b.view === 'saved' ? 'saved' : 'matches';
-  return json(200, await list(ctx.services(), ctx.userId!, view));
+  return json(200, await list(ctx.services(), ctx.userId!, view, { rest: b.rest === true }));
 }
 
 async function score(ctx: Ctx): Promise<Response> {

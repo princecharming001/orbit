@@ -378,7 +378,9 @@ const metaStr = (m: Record<string, unknown> | undefined, k: string) =>
 /** One listing read into its row. Undefined: not stored (not in English, or no title or link). */
 export async function intake(l: JobListing, o: { now: Date; boardId?: string }): Promise<JobRow | undefined> {
   const title = l.title?.trim().replace(/\s+/g, ' ');
-  if (!title || !l.url || !l.externalId || !l.companyName?.trim()) return undefined;
+  // a posting the student pasted as text has no page to link to; every other role names the page a person reads
+  if (!title || (!l.url && l.source !== 'posting') || !l.externalId || !l.companyName?.trim())
+    return undefined;
   const text = cleanText(l.text);
   const lang = (l.language ?? '').toLowerCase().slice(0, 2);
   if (lang && lang !== 'en') return undefined;
@@ -623,7 +625,8 @@ export async function keepListings(
     const byExt = new Map(existing.map((e) => [`${e.source}:${e.external_id}`, e]));
     const groups = new Map<string, JobRow[]>();
     for (const r of boardRows) {
-      const k = `${r.board_id ?? r.source}|${keyOf(r)}`;
+      // repeats are of one board; listings kept with no board (a posting read by its link) are of one company
+      const k = `${r.board_id ?? `${r.source}:${r.company_key}`}|${keyOf(r)}`;
       const g = groups.get(k);
       if (g) g.push(r);
       else groups.set(k, [r]);
