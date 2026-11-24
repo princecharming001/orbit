@@ -42,17 +42,53 @@ interface FindSession {
   run: number;
 }
 const NO_SESSION: FindSession = { query: '', phase: 'idle', picked: new Set(), added: {}, run: 0 };
-const findKey = (userId: string) => `find-people:${userId}`;
+/** Where Discover's own Find people keeps its search. */
+export const findPeopleKey = (userId: string) => `find-people:${userId}`;
+const findKey = findPeopleKey;
+
+/** A search that already ran somewhere else (the chat ran it): the sentence and what came back. */
+export interface FindSeed {
+  query: string;
+  result: PeopleSearchResult;
+}
+const seeded = (seed: FindSeed): FindSession => ({
+  ...NO_SESSION,
+  query: seed.query,
+  form: seed.result.form,
+  result: seed.result,
+});
+
+/**
+ * Show a search in Discover's Find people as it stands somewhere else: the table in a chat card, opened in Discover,
+ * is the same search with the same picks, not a new one.
+ */
+export function carryFindPeople(fromKey: string, userId: string, fallback?: FindSeed): void {
+  const from = readView<FindSession>(fromKey) ?? (fallback ? seeded(fallback) : undefined);
+  if (from) writeView<FindSession>(findKey(userId), { ...from, phase: 'idle' }, NO_SESSION);
+}
 
 /**
  * Discover's "Find people" tab: one sentence says who, Orbit reads it into filters and criteria the student can open
  * and change, searches the student's own network and (with an Orbit account) people outside it, and lists everyone
  * in one table: the warm path to each, how well they match, and an answer for every criterion.
  */
-export function FindPeople({ userId }: { userId: string }) {
+export function FindPeople({
+  userId,
+  storeKey,
+  seed,
+  embedded,
+}: {
+  userId: string;
+  /** where this table keeps its search (the chat gives each card its own); Discover's own by default */
+  storeKey?: string;
+  /** a search that already ran: shown as it is, no second search */
+  seed?: FindSeed;
+  /** inside a chat card: the sentence was said in the chat, so there is no search box, only the table and its tools */
+  embedded?: boolean;
+}) {
   const { user } = useSession();
-  const key = findKey(userId);
-  const [session] = useViewState<FindSession>(key, NO_SESSION);
+  const key = storeKey ?? findKey(userId);
+  const [session] = useViewState<FindSession>(key, () => (seed ? seeded(seed) : NO_SESSION));
   // the work below outlives this component, so it reads and writes the session by its key, never through a closure
   const now = () => readView<FindSession>(key) ?? NO_SESSION;
   const change = (part: Partial<FindSession> | ((s: FindSession) => Partial<FindSession>)) =>
@@ -229,7 +265,13 @@ export function FindPeople({ userId }: { userId: string }) {
   return (
     <div data-testid="find-people">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <form onSubmit={submit} className="flex min-w-[260px] flex-1 items-center gap-2 sm:max-w-[640px]">
+        <form
+          onSubmit={submit}
+          className={cx(
+            'min-w-[260px] flex-1 items-center gap-2 sm:max-w-[640px]',
+            embedded ? 'hidden' : 'flex',
+          )}
+        >
           <label className="relative block min-w-0 flex-1">
             <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-3" />
             <input

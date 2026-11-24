@@ -49,7 +49,14 @@ import { ClarifyCard } from './Clarify';
 import { ChatsCard, WeekCard } from './goalCards';
 import { MessagesCard, readMessages } from './MessagesCard';
 import { addPicked, askForIntro, type Picked, writeTo } from './next';
-import { ClosenessSignal, closenessOf, FoundPeopleCard, isPeopleList, KnownPeopleCard } from './PeopleCards';
+import {
+  ClosenessSignal,
+  closenessOf,
+  FoundPeopleCard,
+  FoundTableCard,
+  isPeopleList,
+  KnownPeopleCard,
+} from './PeopleCards';
 import { PeopleTableCard, readTable } from './PeopleTable';
 import {
   CardHead,
@@ -84,6 +91,7 @@ import {
   readNote,
   readPeople,
   readPeopleQuery,
+  readPeopleTable,
   readPerson,
   readPipeline,
   readPrep,
@@ -171,8 +179,12 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
     }
     case 'people':
       return readPeople(d).length ? <KnownPeople env={env} actions={actions} /> : <Summary env={env} />;
-    case 'people_table':
+    case 'people_table': {
+      // the same table Discover's Find people draws, when the search came with one
+      const found = readPeopleTable(d);
+      if (found) return <FoundTableCard env={env} block={block} table={found} />;
       return readTable(d) ? <PeopleTableCard env={env} send={actions.send} /> : <Summary env={env} />;
+    }
     case 'choices':
       return <Choices options={readChoices(d)} actions={actions} />;
     case 'clarify': {
@@ -1756,6 +1768,9 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       <WeekCard week={week} href={env.href} steps={cardSteps(block.toolName, env)} send={actions.send} />
     );
   if (!items.length) return <Summary env={env} />;
+  // a people search run through Find people's engine: the same table Discover draws
+  const table = readPeopleTable(env.data);
+  if (table) return <FoundTableCard env={env} block={block} table={table} />;
   // people found in a search: the people card's look, with the email and how sure it is
   if (isPeopleList(items))
     return <FoundPeopleCard env={env} block={block} items={items} title={title} actions={actions} />;

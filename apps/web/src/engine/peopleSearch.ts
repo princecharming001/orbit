@@ -854,6 +854,24 @@ function outsideRows(found: SourcedCandidate[], form: SearchForm, have: Set<stri
   return out;
 }
 
+/**
+ * A search of the student's own network that already ran (the chat's search_network), as the table Find people
+ * draws: the same rows, read from the same result, under the same rule for who is listed.
+ */
+export function tableOfSet(set: SearchSet): PeopleSearchResult {
+  const read = formOf(set.spec);
+  const form: SearchForm = { ...read, filters: { ...read.filters, reach: 'mine' } };
+  const judged = !(set.judgeUnavailable || !claudeReachable('chat', 'judge'));
+  const rows = networkRows(set, form, judged).sort(compareRows);
+  return {
+    form,
+    rows,
+    counts: { network: rows.length, outside: 0 },
+    notes: [...new Set(set.notes)],
+    unchecked: rows.length > 0 && form.criteria.length > 0 && !judged,
+  };
+}
+
 /** What the outside search is for, from the ask: investors mean fundraising; else the student's first goal. */
 export async function purposeOf(
   userId: string,
@@ -957,7 +975,8 @@ export function compareRows(a: ResultRow, b: ResultRow): number {
 export async function runPeopleSearch(
   user: Pick<User, 'id' | 'school'>,
   input: SearchForm,
-  opts: { signal?: AbortSignal } = {},
+  /** `purpose` and `goalId`: what the people are for, when the caller knows (the chat does); else read from the form */
+  opts: { signal?: AbortSignal; purpose?: GoalKind; goalId?: string } = {},
 ): Promise<PeopleSearchResult> {
   const form = tidyForm(input);
   const notes: string[] = [];
@@ -972,7 +991,10 @@ export async function runPeopleSearch(
   const outside =
     form.filters.reach === 'mine' || !isServerUser(user.id)
       ? Promise.resolve(undefined)
-      : purposeOf(user.id, form)
+      : (opts.purpose
+          ? Promise.resolve({ purpose: opts.purpose, goalId: opts.goalId })
+          : purposeOf(user.id, form)
+        )
           .then(({ purpose, goalId }) =>
             searchPeople(user, {
               purpose,

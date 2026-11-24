@@ -575,6 +575,42 @@ test.describe('account mode (mocked orbit-api)', () => {
       expect(asked).toMatchObject({ purpose: 'fundraising', query: 'investors', peopleOnly: true });
       expect((asked.filters as { titles: string[] }).titles).toContain('investor');
       if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/find-table.png` });
+      // nobody starts picked, whoever they are; Shift-click picks the rows in between
+      const picks = page.getByTestId('find-pick');
+      await expect(picks).toHaveCount(5);
+      for (const box of await picks.all()) await expect(box).not.toBeChecked();
+      await picks.nth(1).click();
+      await picks.nth(3).click({ modifiers: ['Shift'] });
+      await expect(page.getByTestId('find-picked')).toContainText('3 picked');
+      // a company opens its page in Orbit, or who the student knows there
+      await expect(rhea.getByTestId('find-company')).toHaveAttribute(
+        'href',
+        /(companies\/|map\?reach=1&company=)/,
+      );
+      // open someone and come back: the search, its rows and the picks are as they were, and nothing ran again
+      const searches = api.state.sourceSearches.length;
+      await nadia.getByTestId('find-name').click();
+      await expect(page).toHaveURL(new RegExp(`people/${P4}$`));
+      await page.goBack();
+      await expect(page.getByTestId('find-query')).toHaveValue('investors');
+      await expect(rows).toHaveCount(5);
+      await expect(page.getByTestId('find-picked')).toContainText('3 picked');
+      // to Your network and back to Find people: still there
+      await page
+        .getByRole('tab', { name: 'Your network' })
+        .or(page.getByRole('button', { name: 'Your network' }))
+        .first()
+        .click();
+      await expect(rows).toHaveCount(0);
+      await page
+        .getByRole('tab', { name: 'Find people' })
+        .or(page.getByRole('button', { name: 'Find people' }))
+        .first()
+        .click();
+      await expect(rows).toHaveCount(5);
+      await expect(page.getByTestId('find-count')).toHaveText('5 matches');
+      expect(api.state.sourceSearches.length).toBe(searches);
+      await page.getByTestId('find-pick-clear').click();
       // Add one: the row then opens their page
       await rhea.getByTestId('find-add').click();
       await expect(rhea.getByRole('link', { name: /added, open/i })).toBeVisible();
@@ -664,7 +700,7 @@ test.describe('account mode (mocked orbit-api)', () => {
       await page.getByTestId('criterion-need-nice').click();
       await page.getByTestId('criteria-save').click();
       await expect(page.getByTestId('find-result')).toHaveCount(3);
-      await expect(page.getByTestId('find-criterion-head')).toContainText('(nice to have)');
+      await expect(page.getByTestId('find-criterion-head')).toContainText('Nice to have');
 
       // Filters: the place is there as read; add a title, a seniority and a company, change the place, save
       await page.getByTestId('find-filters').click();

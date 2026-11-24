@@ -362,11 +362,41 @@ describe('account mode, against a fake orbit-api', () => {
       ctx(),
     );
     expect(found.kind).toBe('list');
-    expect(found.summary).toMatch(
-      /Found 2 people\. None are in your People until you pick them\. Apollo is not set up yet/,
+    expect(found.summary).toBe(
+      'Found 2 people: 1 you know and 1 new. None of the new ones are in your People until you add them.',
     );
-    const items = (found.data as { ui: { items: { chip?: string }[] } }).ui.items;
-    expect(items[1]?.chip).toBe('You know them');
+    // the same search Discover's Find people runs, kept with the message so the card draws the same table
+    const data = found.data as {
+      ui: {
+        items: { id?: string; known?: string }[];
+        table: {
+          query: string;
+          result: {
+            rows: { name: string; personId?: string; recommendationId?: string; match: number }[];
+            form: { filters: { reach: string } };
+          };
+        };
+      };
+      forModel: {
+        results: { knownPersonId?: string; recommendationId?: string }[];
+        notes: string[];
+        howToAnswer: string;
+      };
+    };
+    expect(data.ui.table.query).toBe('seed investors in climate');
+    expect(data.ui.table.result.form.filters.reach).toBe('everyone');
+    const rows = data.ui.table.result.rows;
+    expect(rows.map((r) => r.name).sort()).toEqual(['Maya Chen', 'Sam Lee']);
+    // someone the student already has is their own person in the table; the new one can be added
+    expect(rows.find((r) => r.name === 'Sam Lee')).toMatchObject({ personId: P2 });
+    expect(rows.find((r) => r.name === 'Maya Chen')).toMatchObject({ recommendationId: 'rec_a' });
+    expect(data.ui.items.map((i) => i.id ?? i.known).sort()).toEqual([P2, 'rec_a'].sort());
+    // the model is told who is known and who is new, what was not searched, and not to list them again
+    expect(data.forModel.results.map((r) => r.knownPersonId ?? r.recommendationId).sort()).toEqual(
+      [P2, 'rec_a'].sort(),
+    );
+    expect(data.forModel.notes.join(' ')).toMatch(/Not searched yet: Apollo/);
+    expect(data.forModel.howToAnswer).toMatch(/do not list them again/);
     // the model never adds on its own: the Approve card names Maya, and nothing joins People until it is pressed
     const asked = await execute('add_sourced', { recommendationIds: ['rec_a'] }, { ...ctx(), caller: 'llm' });
     expect(asked.kind).toBe('needs_confirmation');

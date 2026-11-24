@@ -37,7 +37,8 @@ vi.mock('../../integrations/orbitApi', async (orig) => ({
 // a logo is a lookup of its own; the table only needs the name beside it
 vi.mock('../CompanyLogo', () => ({ CompanyLogo: () => null }));
 
-import { FindPeople } from './FindPeople';
+import { readPeopleTable } from '../../chat/ui/cards/shapes';
+import { carryFindPeople, FindPeople } from './FindPeople';
 
 const crit = newCriterion('Works at a venture capital firm', 'must');
 const FORM: SearchForm = {
@@ -320,6 +321,120 @@ describe('Find people: the search is still there after the page was away', () =>
     });
     expect(($('find-query') as HTMLInputElement).value).toBe('');
     expect($$('find-result')).toHaveLength(0);
+  });
+});
+
+describe('Find people inside a chat card: a search that already ran', () => {
+  const seed = { query: 'seed investors', result: result([own, fresh, other]) };
+  const mountCard = () =>
+    act(async () => {
+      root.render(
+        <MemoryRouter>
+          <FindPeople userId="u1" storeKey="chat-find:tool-1" seed={seed} embedded />
+        </MemoryRouter>,
+      );
+    });
+
+  it('shows the table as it came back, with no second search and no search box of its own', async () => {
+    await mountCard();
+    expect(search.runPeopleSearch).not.toHaveBeenCalled();
+    expect(search.interpretAsk).not.toHaveBeenCalled();
+    expect($$('find-result').map((r) => $('find-name', r)?.textContent)).toEqual([
+      'Ana Own',
+      'Maya Chen',
+      'Leo Grant',
+    ]);
+    expect($('find-count')?.textContent).toBe('3 matches');
+    // the sentence was said in the chat: the box is not shown, the filters and criteria still are
+    expect(($('find-query') as HTMLInputElement).closest('form')!.className).toContain('hidden');
+    expect($('find-filters')).not.toBeNull();
+    expect($('find-criteria')).not.toBeNull();
+  });
+
+  it('works like the one in Discover: add, pick, and a filter change searches again in place', async () => {
+    sourcing.addSourced.mockResolvedValue({ ok: true, people: [{ id: 'p77' }] });
+    search.runPeopleSearch.mockResolvedValue(result([own]));
+    await mountCard();
+    await click($('find-add', $$('find-result')[1]!));
+    expect($('find-open', $$('find-result')[1]!)?.getAttribute('href')).toBe('/people/p77');
+    await click($$('find-pick')[0]!);
+    expect($('find-picked')!.textContent).toContain('1 picked');
+    await click($('find-criteria'));
+    await click($('criteria-save'));
+    expect(search.runPeopleSearch).toHaveBeenCalledTimes(1);
+    expect($$('find-result')).toHaveLength(1);
+  });
+
+  it('two cards keep their own tables, and neither is Discover’s', async () => {
+    await mountCard();
+    act(() => root.unmount());
+    root = createRoot(host);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <FindPeople
+            userId="u1"
+            storeKey="chat-find:tool-2"
+            seed={{ query: 'designers', result: result([other]) }}
+            embedded
+          />
+          <FindPeople userId="u1" />
+        </MemoryRouter>,
+      );
+    });
+    expect($$('find-result').map((r) => $('find-name', r)?.textContent)).toEqual(['Leo Grant']);
+    expect($$('find-people')).toHaveLength(2);
+  });
+
+  it('"Discover" opens the same search there, picks and added people and all', async () => {
+    sourcing.addSourced.mockResolvedValue({ ok: true, people: [{ id: 'p77' }] });
+    await mountCard();
+    await click($('find-add', $$('find-result')[1]!));
+    await click($$('find-pick')[2]!);
+    carryFindPeople('chat-find:tool-1', 'u1', seed);
+    act(() => root.unmount());
+    root = createRoot(host);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <FindPeople userId="u1" />
+        </MemoryRouter>,
+      );
+    });
+    expect(($('find-query') as HTMLInputElement).value).toBe('seed investors');
+    expect(($('find-query') as HTMLInputElement).closest('form')!.className).not.toContain('hidden');
+    expect($$('find-result')).toHaveLength(3);
+    expect($('find-open', $$('find-result')[1]!)?.getAttribute('href')).toBe('/people/p77');
+    expect($('find-picked')!.textContent).toContain('1 picked');
+    expect(search.runPeopleSearch).not.toHaveBeenCalled();
+  });
+
+  it('a card never opened in this visit still carries its search to Discover from what the message kept', async () => {
+    carryFindPeople('chat-find:never-mounted', 'u1', seed);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <FindPeople userId="u1" />
+        </MemoryRouter>,
+      );
+    });
+    expect($$('find-result')).toHaveLength(3);
+  });
+
+  it('what the message keeps is read back as the table, and anything else is not one', () => {
+    const kept = JSON.parse(JSON.stringify({ ui: { items: [], table: seed }, forModel: {} }));
+    const back = readPeopleTable(kept)!;
+    expect(back.query).toBe('seed investors');
+    expect(back.result.rows.map((r) => r.name)).toEqual(['Ana Own', 'Maya Chen', 'Leo Grant']);
+    expect(back.result.form.criteria[0]!.text).toBe('Works at a venture capital firm');
+    expect(readPeopleTable({ ui: { items: [] }, forModel: {} })).toBeUndefined();
+    expect(
+      readPeopleTable({ ui: { table: { query: 'x', result: { rows: [], form: FORM } } } }),
+    ).toBeUndefined();
+    expect(
+      readPeopleTable({ ui: { table: { query: 'x', result: { rows: [{ nope: 1 }], form: FORM } } } }),
+    ).toBeUndefined();
+    expect(readPeopleTable(undefined)).toBeUndefined();
   });
 });
 

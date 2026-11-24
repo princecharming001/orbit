@@ -106,7 +106,7 @@ export function ResultsTable({
               <Th
                 key={c.id}
                 wrap
-                className="w-[260px] min-w-[220px] max-w-[280px]"
+                className="w-[220px] min-w-[180px] max-w-[260px]"
                 title={unchecked ? 'Not checked yet: Orbit could not read each person against this.' : c.text}
                 data-testid="find-criterion-head"
               >
@@ -275,7 +275,16 @@ export function ResultsTable({
                     </span>
                   </Td>
                 ))}
-                <Td className={cx('w-px', !isNew && !added[r.key] && 'text-right')}>
+                {/* a row with Add (or the link it becomes) keeps it in reach however many columns the search has: the
+                    cell rides the right edge. A row with neither has nothing to keep, and covers nothing. */}
+                <Td
+                  className={cx(
+                    'w-px',
+                    isNew || added[r.key]
+                      ? 'sticky right-0 bg-canvas group-hover/row:bg-canvas-2'
+                      : 'text-right',
+                  )}
+                >
                   {isNew ? (
                     <Button
                       size="sm"

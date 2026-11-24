@@ -5,6 +5,7 @@
  *   search_network_more   the next page of a result set, after the judge checks more people; or why one person is
  *                         (or is not) in it
  */
+
 import type { Person } from '@orbit/core';
 import { COMPANY_KINDS, type QuerySpec, SENIORITIES, STAGES, TITLE_FAMILIES } from '@orbit/core/search';
 import { db } from '../../db/schema';
@@ -18,6 +19,7 @@ import {
   type SearchOutcome,
 } from '../../engine/networkSearch';
 import { climbLadder, type Ladder } from '../../engine/networkSearch/ladder';
+import { tableOfSet } from '../../engine/peopleSearch';
 import { z } from '../../zod';
 import { clarifyResult } from '../clarify';
 import type { ResultEnvelope, ToolContext } from '../types';
@@ -657,7 +659,13 @@ async function runSearch(input: QuerySpec, ctx: ToolContext): Promise<ResultEnve
     ? undefined
     : await climbLadder(ctx.user, out.set, { now: ctx.now, signal: ctx.signal }).catch(() => undefined);
   const d = await tableData(out, ladder);
-  return ok('people_table', d, forModel(d), summaryOf(d));
+  // people who fit: also as the table Discover's Find people draws, which the card shows (the same rows, the path to
+  // each, the match, a column a criterion). The rungs of a search that found nobody keep their own card.
+  const table = found && !ladder ? tableOfSet(out.set) : undefined;
+  const ui = table?.rows.length
+    ? { ...d, table: { query: out.set.ask, result: { ...table, rows: table.rows.slice(0, 40) } } }
+    : d;
+  return ok('people_table', ui, forModel(d), summaryOf(d));
 }
 
 export const searchNetwork = defineTool({

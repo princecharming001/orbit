@@ -6,7 +6,9 @@
 import type { Person } from '@orbit/core';
 import { Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { carryFindPeople, FindPeople, type FindSeed } from '../../../components/account/FindPeople';
 import { PersonCompanyLogo } from '../../../components/CompanyLogo';
+import { useSession } from '../../../state/session';
 import { Avatar, cx, PickCircle } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
 import type { ToolBlock } from '../threadStore';
@@ -49,6 +51,42 @@ function Role({ text }: { text?: string }) {
       {batch && <BatchTag batch={batch} />}
       {words && <span className="truncate">{words}</span>}
     </>
+  );
+}
+
+/**
+ * People the chat found, as the table Discover's Find people draws: the same component over the same search, so the
+ * paths, the match, a column for each criterion, Add, the email lookup and picking a range all work here too, and
+ * the filters and criteria can be changed in place. "Discover" opens it there as it stands.
+ */
+export function FoundTableCard({
+  env,
+  block,
+  table,
+}: {
+  env: ResultEnvelope;
+  block: ToolBlock;
+  table: FindSeed;
+}) {
+  const { userId } = useSession();
+  if (!userId) return null;
+  const key = `chat-find:${block.toolUseId}`;
+  return (
+    <div
+      className="rounded-[14px] border border-line bg-canvas p-3 @container"
+      data-testid="result-people-table"
+    >
+      <div className="mb-1 flex items-center justify-between gap-3 px-1">
+        <span className="min-w-0 truncate text-[13px] text-ink-3" title={table.query}>
+          {table.query}
+        </span>
+        {/* the search goes with the student: Discover shows this table, picks and all, not an empty box */}
+        <span onClickCapture={() => carryFindPeople(key, userId, table)}>
+          <OpenInApp href={env.href ?? '/discover?tab=find'} label="Discover" className="shrink-0 -mr-1.5" />
+        </span>
+      </div>
+      <FindPeople userId={userId} storeKey={key} seed={table} embedded />
+    </div>
   );
 }
 

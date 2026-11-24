@@ -32,16 +32,15 @@ import {
 import { forget, listMemories, MEMORY_KINDS, remember, searchMemories } from '../../engine/memory';
 import { AUTONOMY_TEXT, type AutonomyLevel, pauseOutreach, setAutonomy } from '../../engine/outreach';
 import { askForIntro, cachedPath } from '../../engine/paths';
+import {
+  interpretAsk,
+  type PeopleSearchResult,
+  runPeopleSearch,
+  type SearchForm,
+} from '../../engine/peopleSearch';
 import { blockingQuestions, bookCall, draftReply, listReplies } from '../../engine/replies';
 import { dossierView, getDossier, localDossier } from '../../engine/research';
-import {
-  addSourced,
-  candidateLine,
-  emailNote,
-  providerNames,
-  searchPeople,
-  tierChip,
-} from '../../engine/sourcing';
+import { addSourced, candidateLine, emailNote, tierChip } from '../../engine/sourcing';
 import { mockSourcedPeople, mockSourcingFits, usesMockConnectors } from '../../integrations/connectorsMock';
 import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
@@ -709,36 +708,129 @@ export const findPeopleTool = defineTool({
         'This copy of Orbit has no people search of its own (that needs an Orbit account), so the next step is the web.',
       );
     }
-    const r = await searchPeople(ctx.user, {
+    // The same search Discover's Find people runs (engine/peopleSearch): the sentence read into filters and
+    // criteria, the student's own network and people outside it in one list, people only (a fund is not a person),
+    // each with a path, a match and an answer per criterion. The card is the same table.
+    const ask = sourcingAsk(input);
+    const read = await interpretAsk(ask);
+    const form = withNamed(read.form, input);
+    const res = await runPeopleSearch(ctx.user, form, {
+      signal: ctx.signal,
       purpose: input.purpose,
-      query: input.query,
       goalId: input.goalId,
-      filters: {
-        schools: input.school ? [input.school] : undefined,
-        organizations: input.organization ? [input.organization] : undefined,
-        keywords: input.topic ? [input.topic] : undefined,
-      },
     });
-    if (!r.ok) throw new Error(r.message);
-    const { results, unconfigured, relaxed, assumedPlace } = r.value;
     // plan 36: an account search that finds nobody goes on to the web, never ends empty
-    if (!results.length)
+    if (!res.rows.length)
       return webRung(input, 'The people search found no one for that, so the next step is the web.');
-    const dropped = relaxed.filter((x) => x !== 'place');
-    const quiet = [
-      assumedPlace ? `No school or company was named, so it looked at ${assumedPlace}.` : '',
-      relaxed.includes('place') ? 'No place was named, so it searched the web by topic alone.' : '',
-      dropped.length ? `To find more, the search left out ${dropped.join(', ')}.` : '',
-      unconfigured.length
-        ? `${providerNames(unconfigured)} ${unconfigured.length === 1 ? 'is' : 'are'} not set up yet.`
-        : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
-    return sourcedList(ctx, input.purpose, results, quiet);
+    return peopleTable(ctx, input.purpose, ask, res);
   },
   toModel,
 });
+
+const hasWord = (list: string[], word: string) =>
+  list.some((x) => x.trim().toLowerCase() === word.trim().toLowerCase());
+
+/** The sentence the search reads: the student's words, with what the model pulled out of them when they are short. */
+function sourcingAsk(input: FindInput): string {
+  const q = (input.query ?? '').replace(/\s+/g, ' ').trim();
+  const extra = [input.topic, input.organization, input.school]
+    .map((x) => x?.trim())
+    .filter((x): x is string => !!x && !q.toLowerCase().includes(x.toLowerCase()));
+  return [q || GOAL_KIND_LABELS[input.purpose].toLowerCase(), ...extra].join(' ').trim();
+}
+
+/** The school, company and topic the chat named go in as filters, unless the sentence already put them there. */
+function withNamed(form: SearchForm, input: FindInput): SearchForm {
+  const f = form.filters;
+  const school = input.school?.trim();
+  const org = input.organization?.trim();
+  const topic = input.topic?.trim();
+  return {
+    ...form,
+    filters: {
+      ...f,
+      reach: 'everyone',
+      schools: school && !hasWord(f.schools, school) ? [...f.schools, school] : f.schools,
+      companies:
+        org && !hasWord(f.companies, org) && !hasWord(f.currentCompanies, org)
+          ? [...f.companies, org]
+          : f.companies,
+      keywords: topic && !hasWord(f.keywords, topic) ? [...f.keywords, topic] : f.keywords,
+    },
+  };
+}
+
+/** The rows the card keeps: enough for the table, not every row the search could list. */
+const TABLE_ROWS = 40;
+
+/** A people search as the table card, and as lines the model can answer from. */
+function peopleTable(
+  ctx: ToolContext,
+  purpose: GoalKind,
+  ask: string,
+  res: PeopleSearchResult,
+): ResultEnvelope {
+  const rows = res.rows.slice(0, TABLE_ROWS);
+  const line = (r: (typeof rows)[number]) =>
+    [r.name, [r.title, r.company].filter(Boolean).join(' at ')].filter(Boolean).join(', ');
+  for (const r of rows) if (r.recommendationId) rememberSourced(r.recommendationId, line(r));
+  const top = rows.slice(0, 10);
+  const mine = rows.filter((r) => r.personId).length;
+  const fresh = rows.length - mine;
+  const said = [
+    `Found ${plural(rows.length, 'person', 'people')}`,
+    mine && fresh ? `: ${mine} you know and ${fresh} new` : '',
+    fresh ? '. None of the new ones are in your People until you add them' : '',
+    '.',
+  ].join('');
+  return ok(
+    'list',
+    {
+      title: `People for ${GOAL_KIND_LABELS[purpose].toLowerCase()}`,
+      // the rows as the older card reads them, for anything that still lists them
+      items: top.map((r) => ({
+        id: r.recommendationId,
+        known: r.personId,
+        text: line(r),
+        sub: [r.path?.label, r.evidence].filter(Boolean).join('. '),
+        href: r.personId ? `/people/${r.personId}` : r.url,
+        person: {
+          name: r.name,
+          role: [r.title, r.company].filter(Boolean).join(' at ') || undefined,
+          email: r.email,
+          emailConfidence: r.email ? (r.emailConfidence ?? 'page') : undefined,
+          why: r.evidence,
+          linkedinUrl: r.linkedinUrl,
+          url: r.url,
+          photo: r.photoUrl,
+        },
+      })),
+      table: { query: ask, result: { ...res, rows, setId: undefined } },
+    },
+    {
+      results: top.map((r) => ({
+        ...(r.personId ? { knownPersonId: r.personId } : { recommendationId: r.recommendationId }),
+        who: wrapped(ctx, 'sourced', line(r), 200),
+        location: r.location,
+        match: r.match,
+        path: r.path ? wrapped(ctx, 'sourced', r.path.note ?? r.path.label, 160) : undefined,
+        introVia:
+          r.path?.kind === 'intro' && r.path.personId
+            ? { personId: r.path.personId, name: r.path.label }
+            : undefined,
+        criteria: r.checks.map((c, i) => ({ asked: res.form.criteria[i]?.text, answer: c.answer })),
+        email: r.email ? wrapped(ctx, 'sourced', r.email, 120) : undefined,
+        emailConfidence: r.email ? (r.emailConfidence ?? 'page') : undefined,
+      })),
+      more: Math.max(0, res.rows.length - top.length),
+      notes: res.notes.slice(0, 3),
+      howToAnswer:
+        'The student sees these people in a table with the path to each, how well they match and an answer for each criterion, so do not list them again. Someone with a knownPersonId is someone the student knows; everyone else is new to them: say how many of each in one clause, then name the top two or three with their firm and why each fits. A criterion answered "likely" or "unknown" is not confirmed: never state it as fact.',
+    },
+    `${said}${res.outsideMessage ? ` ${res.outsideMessage}` : ''}`,
+    '/discover?tab=find',
+  );
+}
 
 type FindInput = {
   purpose: GoalKind;

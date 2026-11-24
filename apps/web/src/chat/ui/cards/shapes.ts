@@ -15,6 +15,7 @@ import type {
   PersonFact,
   Suggestion,
 } from '@orbit/core';
+import type { PeopleSearchResult } from '../../../engine/peopleSearch';
 import type { SetupStatus } from '../../setupStatus';
 import type { ChoiceOption, SetupWhat } from '../../types';
 
@@ -693,6 +694,32 @@ function readListPerson(x: unknown): ListPerson | undefined {
 }
 
 /** list: `{ title, items: { text, sub?, chip?, href?, links? }[] }` */
+/**
+ * A people search the chat ran through the same engine as Discover's Find people (find_people): the sentence, how it
+ * was read and every row, kept with the message so the card draws the same table after a reload.
+ */
+export function readPeopleTable(d: unknown): { query: string; result: PeopleSearchResult } | undefined {
+  const t = obj(obj(unpack(d)).table);
+  const result = obj(t.result);
+  const form = obj(result.form);
+  if (!Array.isArray(result.rows) || !Array.isArray(form.criteria) || !form.filters) return undefined;
+  const rows = result.rows.filter((r) => {
+    const o = obj(r);
+    return typeof o.key === 'string' && typeof o.name === 'string' && Array.isArray(o.checks);
+  });
+  if (!rows.length) return undefined;
+  return {
+    query: str(t.query) ?? str(form.ask) ?? '',
+    result: {
+      ...(result as unknown as PeopleSearchResult),
+      rows: rows as PeopleSearchResult['rows'],
+      notes: arr(result.notes).filter((n): n is string => typeof n === 'string'),
+      counts: { network: 0, outside: 0, ...obj(result.counts) } as PeopleSearchResult['counts'],
+      unchecked: result.unchecked === true,
+    },
+  };
+}
+
 export function readList(d: unknown): { title?: string; items: ListRow[] } {
   const o = obj(unpack(d));
   const items = arr(o.items)
