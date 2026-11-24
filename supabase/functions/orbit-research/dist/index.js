@@ -3025,6 +3025,8 @@ var TASKS = {
   role_profile: { model: "claude-haiku-5-5", effort: "low", maxTokens: 3e3 },
   role_requirements: { model: "claude-haiku-5-5", effort: "low", maxTokens: 6e3 },
   role_score: { model: "claude-haiku-5-5", effort: "low", maxTokens: 8e3 },
+  // the light model: one short comment about one post, read by the student before anything is posted
+  warmup_comment: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   classify: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
   extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
