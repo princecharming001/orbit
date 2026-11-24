@@ -14,8 +14,13 @@
  *                      on brings it back. Each student who has it on gets the switch job (sources/switch.ts
  *                      `queueOwnerSwitch`). Audit-logged. 409 when a source listed in ORBIT_EXTRA_SOURCES is turned
  *                      off (that list wins), or when one is launched before what it needs is set. Anyone else: 403.
+ *   GET /admin/features → `{ features: [{ feature, offered }] }`: each known feature (plan 44 §9.4) and whether it is
+ *                      offered now (ORBIT_FEATURES or its switch). Anyone else: 403.
+ *   PUT /admin/features/:feature {offered: boolean} → `{ ok: true }`: the feature's launch switch
+ *                      (orbit_private.feature_launch), in effect within a minute. Audit-logged. Anyone else: 403.
  */
 import { OPTIONAL_SOURCES, type OptionalSource } from '@orbit/core/sources';
+import { featuresOffered, forgetFeatures, isFeature, KNOWN_FEATURES } from '../../_shared/features.ts';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
 import { resolveSecret } from '../../_shared/secrets.ts';
@@ -160,14 +165,47 @@ async function sourcesPut(ctx: Ctx, raw: string): Promise<Response> {
   return json(200, { ok: true });
 }
 
+export interface AdminFeaturesResponse {
+  features: { feature: string; offered: boolean }[];
+}
+
+async function featuresList(ctx: Ctx): Promise<Response> {
+  owner(ctx);
+  forgetFeatures(ctx.db);
+  const on = await featuresOffered(ctx.db, ctx.env.features ?? []);
+  const out: AdminFeaturesResponse = {
+    features: KNOWN_FEATURES.map((feature) => ({ feature, offered: on.includes(feature) })),
+  };
+  return json(200, out);
+}
+
+async function featuresPut(ctx: Ctx, raw: string): Promise<Response> {
+  owner(ctx);
+  const feature = raw.toLowerCase();
+  if (!isFeature(feature)) throw new HttpError(404, 'not_found', 'no such feature');
+  const b = await body(ctx);
+  if (typeof b.offered !== 'boolean') throw badRequest('offered is true or false');
+  const [r] = await ctx.db.sql<{ was: boolean }>`
+    select public.orbit_feature_launch_set(${feature}, ${b.offered}, ${ctx.userId!}::uuid) as was`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${ctx.userId!}::uuid, 'user', ${b.offered ? 'feature.launch' : 'feature.unlaunch'}, 'feature_launch',
+            ${feature}, ${{ offered: b.offered, was: !!r?.was }}::jsonb)`;
+  forgetFeatures(ctx.db);
+  return json(200, { ok: true });
+}
+
 export const adminRoutes: Record<string, Route> = {
   '/admin/costs': { method: 'GET|POST', auth: true, run: costs },
   '/admin/sources': { method: 'GET', auth: true, run: sourcesList },
+  '/admin/features': { method: 'GET', auth: true, run: featuresList },
 };
 
-/** PUT /admin/sources/:source, matched by pattern. */
+/** PUT /admin/sources/:source and /admin/features/:feature, matched by pattern. */
 export function adminPatternRoute(path: string): Route | undefined {
   const m = /^\/admin\/sources\/([a-z]{1,20})$/i.exec(path);
-  if (!m) return undefined;
-  return { method: 'PUT', auth: true, run: (ctx) => sourcesPut(ctx, m[1]!) };
+  if (m) return { method: 'PUT', auth: true, run: (ctx) => sourcesPut(ctx, m[1]!) };
+  const f = /^\/admin\/features\/([a-z_]{1,40})$/i.exec(path);
+  if (f) return { method: 'PUT', auth: true, run: (ctx) => featuresPut(ctx, f[1]!) };
+  return undefined;
 }

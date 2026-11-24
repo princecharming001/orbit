@@ -25,6 +25,7 @@ import {
 } from '../_shared/http.ts';
 import { clientIp } from '../_shared/origins.ts';
 import { ipBuckets, memoryTake, sqlTake, type Take, userBuckets } from '../_shared/ratelimit.ts';
+import type { RoleSources } from '../_shared/roles/contracts.ts';
 import { type AgentConfig, makeServices, type Services } from '../_shared/services.ts';
 import { checkSession, type SessionConfig, sessionSecretUsable, verifyBearer } from '../_shared/session.ts';
 import type { XConfig } from '../_shared/social/x/config.ts';
@@ -47,6 +48,7 @@ import { memoryRoutes } from './routes/memory.ts';
 import { pathRoutes } from './routes/paths.ts';
 import { replyRoutes } from './routes/replies.ts';
 import { researchRoutes } from './routes/research.ts';
+import { rolesRoutes } from './routes/roles.ts';
 import { scoreRoutes } from './routes/scores.ts';
 import { searchRoutes } from './routes/search.ts';
 import { settingsRoutes } from './routes/settings.ts';
@@ -88,6 +90,8 @@ export interface ApiEnv {
   zoom?: ZoomEnv;
   /** ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers */
   extraSources?: OptionalSource[];
+  /** ORBIT_FEATURES (plan 44 §9.4), read once at cold start: features offered whatever the owner's switch says */
+  features?: string[];
 }
 
 export interface ApiLimits {
@@ -119,6 +123,8 @@ export interface ApiDeps {
    * when they were missing at cold start: one stored later is picked up without waiting for a new isolate
    */
   refreshProviderSecrets?: () => Promise<Pick<ApiEnv, 'unipileKey' | 'unipileBase'>>;
+  /** plan 44: where roles come from (tests pass fakes); the source side's by default */
+  roleSources?: RoleSources;
 }
 
 /** The values that are set: an undefined one never overwrites a value from somewhere else. */
@@ -147,6 +153,8 @@ export interface Ctx {
   services: () => Services;
   /** the optional sources the owner offers (ORBIT_EXTRA_SOURCES, plan 43 §3.1); empty by default */
   offered: OptionalSource[];
+  /** plan 44: where roles come from, when not the source side's own (tests) */
+  roleSources?: RoleSources;
 }
 
 type Handler = (ctx: Ctx) => Promise<Response>;
@@ -197,6 +205,8 @@ const ROUTES: Record<string, Route> = {
   // plan 43: the optional sources' switches (PUT /sources/:source is matched by pattern) and texts' day counts
   ...sourcesRoutes,
   ...textsRoutes,
+  // plan 44: Roles for you, behind the owner's feature switch
+  ...rolesRoutes,
 };
 
 /** The secrets a route needs that are not set. */
@@ -345,6 +355,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
         pullLagMs: deps.pullLagMs ?? 2000,
         services: () => (services ??= makeServices(agent, { db, now })),
         offered,
+        ...(deps.roleSources ? { roleSources: deps.roleSources } : {}),
       };
       if (r.auth) {
         // the token's signature is checked here, without the database; a bad one still counts against the IP

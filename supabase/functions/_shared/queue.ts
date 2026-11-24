@@ -43,6 +43,8 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   friend_shares_refresh: 'orbit_score',
   // plan 43: a source switched on, off or removed: rescore twice, the friend projection, the graph mark
   'sources.switch': 'orbit_score',
+  // plan 44: one student's nightly roles top-up
+  'roles.topup': 'orbit_score',
   'enrich.dossier': 'orbit_enrich',
   'source.search': 'orbit_enrich',
   hop_evidence: 'orbit_enrich',

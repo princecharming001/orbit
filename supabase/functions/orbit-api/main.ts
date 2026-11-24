@@ -3,6 +3,7 @@
  * scripts/build-functions.mjs; index.ts loads that bundle. Deploy with verify_jwt off (Orbit checks its own tokens).
  */
 import { connectDb } from '../_shared/db.ts';
+import { featuresFromEnv } from '../_shared/features.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { targetLimitsFrom } from '../_shared/linkedinTargets.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
@@ -65,6 +66,8 @@ Deno.serve(
         redirectUri: env('ZOOM_REDIRECT_URI'),
       },
       extraSources,
+      // plan 44 §9.4: features offered whatever the owner's switch says, read once; unset is none
+      features: featuresFromEnv(env('ORBIT_FEATURES')),
     },
     db,
     agent: { env: { ...agentEnv, extraSources } },

@@ -4,14 +4,16 @@
  *   GET  /auth/google/start?redirect=<app url>  → 302 to Google's consent screen (PKCE S256, phase-1 scopes)
  *   GET  /auth/google/callback?code&state       → user, self person, Vault refresh token, integration row,
  *                                                 login code → 302 <app>/auth/done#code=…  (errors: #error=…)
- *   POST /auth/session {code}                   → {accessToken, refreshToken, expiresAt, user, isOwner}
+ *   POST /auth/session {code}                   → {accessToken, refreshToken, expiresAt, user, isOwner, features}
  *   POST /auth/refresh {refreshToken}           → a rotated pair
  *   POST /auth/logout {refreshToken?}           → revokes this session
- *   GET  /auth/me                               → {user, isOwner}: isOwner when the user is ORBIT_OWNER_ID
+ *   GET  /auth/me                               → {user, isOwner, features}: isOwner when the user is ORBIT_OWNER_ID;
+ *                                                 features, the ones offered now (plan 44 §9.4)
  */
 import { normalizeEmail, parseName } from '@orbit/core/text/normalize';
 import { randomToken } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
+import { featuresOffered } from '../_shared/features.ts';
 import { authUrl, exchangeCode, PHASE1_SCOPES, pkcePair, verifyIdToken } from '../_shared/google.ts';
 import { badRequest, json, readJson, redirect, unauthorized } from '../_shared/http.ts';
 import { sqlQueue } from '../_shared/queue.ts';
@@ -222,6 +224,7 @@ export async function session(ctx: Ctx): Promise<Response> {
     expiresAt: t.expiresAt,
     user,
     isOwner: isOwner({ env: ctx.env, userId }),
+    features: await featuresOffered(ctx.db, ctx.env.features ?? []),
   });
 }
 
@@ -247,5 +250,9 @@ export async function logout(ctx: Ctx): Promise<Response> {
 export async function me(ctx: Ctx): Promise<Response> {
   const user = await loadUser(ctx.db, ctx.userId!);
   if (!user) throw unauthorized();
-  return json(200, { user, isOwner: isOwner(ctx) });
+  return json(200, {
+    user,
+    isOwner: isOwner(ctx),
+    features: await featuresOffered(ctx.db, ctx.env.features ?? []),
+  });
 }

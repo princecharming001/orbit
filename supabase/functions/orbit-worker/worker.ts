@@ -27,6 +27,7 @@ import { type HandlerDeps, JobSkipped } from './handlers/deps.ts';
 import { friendHandlers } from './handlers/friends.ts';
 import { gmailHandlers } from './handlers/gmail.ts';
 import { linkedinHandlers } from './handlers/linkedin.ts';
+import { rolesTopupHandlers } from './handlers/rolesTopup.ts';
 import { scoreHandlers } from './handlers/score.ts';
 import { searchHandlers } from './handlers/search.ts';
 import { socialHandlers } from './handlers/social.ts';
@@ -96,6 +97,8 @@ export function defaultHandlers(
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
     ...xHandlers(deps),
+    // plan 44: the nightly top-up of one student's roles
+    ...rolesTopupHandlers(agents),
   };
   for (const kind of PLACEHOLDER_KINDS)
     handlers[kind] = async () => {
@@ -159,6 +162,8 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'claude.batch.poll': 40_000,
   // deep research: the investigator loop (up to 55 s) and the brief's writer (about 40 s)
   'enrich.dossier': 100_000,
+  // plan 44: four close reads of five roles
+  'roles.topup': 40_000,
 };
 export const DEFAULT_RESERVE_MS = 8_000;
 
