@@ -13,7 +13,7 @@
 import { normalizeEmail, parseName } from '@orbit/core/text/normalize';
 import { randomToken } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
-import { featuresOffered } from '../_shared/features.ts';
+import { featuresShownTo } from '../_shared/features.ts';
 import { authUrl, exchangeCode, PHASE1_SCOPES, pkcePair, verifyIdToken } from '../_shared/google.ts';
 import { badRequest, json, readJson, redirect, unauthorized } from '../_shared/http.ts';
 import { sqlQueue } from '../_shared/queue.ts';
@@ -224,7 +224,7 @@ export async function session(ctx: Ctx): Promise<Response> {
     expiresAt: t.expiresAt,
     user,
     isOwner: isOwner({ env: ctx.env, userId }),
-    features: await featuresOffered(ctx.db, ctx.env.features ?? []),
+    features: await featuresShownTo(ctx.db, ctx.env.features ?? [], isOwner({ env: ctx.env, userId })),
   });
 }
 
@@ -253,6 +253,6 @@ export async function me(ctx: Ctx): Promise<Response> {
   return json(200, {
     user,
     isOwner: isOwner(ctx),
-    features: await featuresOffered(ctx.db, ctx.env.features ?? []),
+    features: await featuresShownTo(ctx.db, ctx.env.features ?? [], isOwner(ctx)),
   });
 }

@@ -24,6 +24,7 @@ import {
   readProfile,
   refreshMatches,
   resetRolesForTests,
+  rolesCall,
   rolesMode,
   runSearch,
   savedMatches,
@@ -139,6 +140,16 @@ describe('Roles in the browser, against the fake orbit-api', () => {
     expect(rolesMode(user.id)).toBe('off');
     expect(featureOn('roles', 'some-local-user')).toBe(false);
     expect(rolesMode('demo-user')).toBe('demo');
+    // the owner tries it before it is launched: on for their account while the public switch stays off
+    api.state.isOwner = true;
+    await refreshAccount();
+    expect(api.state.features).toEqual([]);
+    expect(featureOn('roles', user.id)).toBe(true);
+    expect(rolesMode(user.id)).toBe('server');
+    expect((await rolesCall(user.id, '/roles/list', {})).ok).toBe(true);
+    // anyone else is refused while it is not offered
+    api.state.isOwner = false;
+    expect(await rolesCall(user.id, '/roles/list', {})).toMatchObject({ ok: false, status: 404 });
   });
 
   it('sends the kept resume lines, never an unticked one, and LinkedIn job descriptions when asked', async () => {

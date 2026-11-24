@@ -224,6 +224,9 @@ const FEATURE_NAMES: Record<string, { name: string; line: string }> = {
  * The owner's switch for a feature (GET /admin/features, PUT /admin/features/:feature), as the source switches work:
  * on, students see it the next time Orbit asks; off, the tab, its chat tool and its card go. A server from before the
  * switch answers 404, and the group is left out.
+ *
+ * The switch is the public one. The owner's own account is shown every feature whatever it says (the server adds them
+ * to `features` on /auth/me for the owner), so the owner tries a tab before launching it, and the row says so.
  */
 function FeatureRows() {
   const toast = useToast();
@@ -250,7 +253,9 @@ function FeatureRows() {
       }
       const name = FEATURE_NAMES[feature]?.name ?? feature;
       toast.push({
-        text: offered ? `${name} is on for every student.` : `${name} is off. Students no longer see it.`,
+        text: offered
+          ? `${name} is on for every student.`
+          : `${name} is off. Students no longer see it. You still do, to try it.`,
         tone: offered ? 'good' : undefined,
       });
       await load();
@@ -275,10 +280,15 @@ function FeatureRows() {
             name={FEATURE_NAMES[f.feature]!.name}
             status={
               <RowStatus tone={f.offered ? 'good' : 'muted'} testId={`launch-feature-${f.feature}-state`}>
-                {f.offered ? 'On for every student' : 'Off'}
+                {f.offered ? 'On for every student' : 'Off for students'}
               </RowStatus>
             }
-            line={FEATURE_NAMES[f.feature]!.line}
+            line={
+              <span data-testid={`launch-feature-${f.feature}-line`}>
+                {FEATURE_NAMES[f.feature]!.line}
+                {f.offered ? '' : '. Only you see it for now, to try it first'}
+              </span>
+            }
             actions={
               <label className="flex items-center gap-2 text-[12.5px] text-ink-2">
                 Offered to students

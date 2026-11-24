@@ -3,7 +3,7 @@
  * offered when ORBIT_FEATURES names it (a comma list, read once by each function's entry and passed in) or its row in
  * orbit_private.feature_launch is on (20261211_orbit_roles.sql), read through public.orbit_features_offered() and kept
  * a minute per database handle, so the owner turns a tab on or off with no redeploy, everywhere within a minute.
- * Off by default everywhere.
+ * Off by default everywhere, except for the owner, who is shown every feature (`featuresShownTo`) to try it first.
  */
 import type { Db } from './db.ts';
 
@@ -52,6 +52,21 @@ export async function featuresOffered(
   const out = envList.filter(isFeature);
   for (const f of await launchedFeatures(db, clock)) if (!out.includes(f)) out.push(f);
   return out;
+}
+
+/**
+ * What one account is shown (`features` beside the user on /auth/session and /auth/me): what is offered to everyone,
+ * and for the owner every known feature besides, so the owner can try one before it is launched. The owner's Launch
+ * row reads the public switch itself (GET /admin/features), which this never changes.
+ */
+export async function featuresShownTo(
+  db: Db,
+  envList: readonly string[] = [],
+  owner = false,
+): Promise<Feature[]> {
+  const out = await featuresOffered(db, envList);
+  if (!owner) return out;
+  return [...out, ...KNOWN_FEATURES.filter((f) => !out.includes(f))];
 }
 
 export async function featureOffered(

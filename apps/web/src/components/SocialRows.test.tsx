@@ -11,8 +11,10 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
+import { featureOn } from '../engine/features';
 import { setSocialPollForTests } from '../engine/social';
 import { loadSources, setExtraSourcesForTests } from '../engine/sources';
+import { refreshAccount } from '../integrations/orbitApi';
 import { LaunchSection, readinessWords } from '../pages/settings/Launch';
 import { leaveFakeApi, signInToFakeApi } from '../test/account';
 import type { FakeOrbitApi } from '../test/fakeOrbitApi';
@@ -118,6 +120,37 @@ describe('the Launch section', () => {
     expect(q('launch-instagram-switch')?.getAttribute('aria-checked')).toBe('true');
     expect((q('launch-instagram-switch') as HTMLButtonElement).disabled).toBe(true);
     expect(text('launch-instagram-students')).toMatch(/Set on the server/);
+  });
+
+  it('a feature: the row shows the public switch, and the owner sees the tab before it is launched', async () => {
+    api.state.isOwner = true;
+    await refreshAccount();
+    // the public switch is off, and the owner's own account has Roles all the same
+    expect(api.state.features).toEqual([]);
+    expect(featureOn('roles', user.id)).toBe(true);
+    await mount(<LaunchSection />);
+    expect(text('launch-feature-roles-state')).toBe('Off for students');
+    expect(text('launch-feature-roles-line')).toMatch(/Only you see it for now, to try it first$/);
+    expect(q('launch-feature-roles-switch')?.getAttribute('aria-checked')).toBe('false');
+    // launching it: the public switch moves, the row follows
+    await click('launch-feature-roles-switch');
+    expect(bodies('/admin/features/roles')).toEqual([{ offered: true }]);
+    expect(api.state.features).toEqual(['roles']);
+    expect(text('launch-feature-roles-state')).toBe('On for every student');
+    expect(text('launch-feature-roles-line')).not.toMatch(/Only you/);
+    // and taking it away again leaves the owner with it
+    await click('launch-feature-roles-switch');
+    expect(api.state.features).toEqual([]);
+    expect(text('launch-feature-roles-state')).toBe('Off for students');
+    expect(featureOn('roles', user.id)).toBe(true);
+  });
+
+  it('a student who is not the owner has a feature only while it is offered', async () => {
+    await refreshAccount();
+    expect(featureOn('roles', user.id)).toBe(false);
+    api.state.features = ['roles'];
+    await refreshAccount();
+    expect(featureOn('roles', user.id)).toBe(true);
   });
 
   it('says readiness in plain words', () => {

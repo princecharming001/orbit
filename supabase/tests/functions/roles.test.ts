@@ -31,7 +31,7 @@ import { LINKEDIN_ONLY_NOTE } from '../../functions/_shared/roles/profile.ts';
 import { LIMIT_NOTE, NOT_READ_NOTE } from '../../functions/_shared/roles/score.ts';
 import { SEARCHES_USED_NOTE } from '../../functions/_shared/roles/search.ts';
 import type { AgentEnv } from '../../functions/_shared/services.ts';
-import { createSession } from '../../functions/_shared/session.ts';
+import { createLoginCode, createSession } from '../../functions/_shared/session.ts';
 import { makeApiHandler } from '../../functions/orbit-api/api.ts';
 import { rolesTopupHandlers } from '../../functions/orbit-worker/handlers/rolesTopup.ts';
 import type { JobContext, Job as WorkerJob } from '../../functions/orbit-worker/worker.ts';
@@ -416,6 +416,42 @@ describe('the feature switch', () => {
     const [audit] = await t.db.sql<{ action: string }>`
       select action from orbit.audit_log where target_table = 'feature_launch' order by created_at desc limit 1`;
     expect(audit!.action).toBe('feature.launch');
+  });
+
+  it('the owner is shown Roles before it is launched; everyone else only when it is offered', async () => {
+    const owner = await signedInUser(t);
+    const h = harness({ features: [], ownerId: owner.userId });
+    const u = await signedInUser(t);
+    type Me = { isOwner: boolean; features: string[] };
+    const me = (token: string) => h.call<Me>('/auth/me', token, undefined, 'GET');
+    // the public switch is off: the owner's own account still carries the feature, to try it
+    expect((await me(owner.token)).body).toMatchObject({ isOwner: true, features: ['roles'] });
+    expect((await me(u.token)).body).toMatchObject({ isOwner: false, features: [] });
+    // the same on sign-in
+    const signIn = async (userId: string) =>
+      (await h.call<Me>('/auth/session', '', { code: await createLoginCode(t.db, userId, now()) })).body;
+    expect(await signIn(owner.userId)).toMatchObject({ isOwner: true, features: ['roles'] });
+    expect(await signIn(u.userId)).toMatchObject({ isOwner: false, features: [] });
+    // the Launch row still reads the public switch, which the preview never moved
+    const listed = () =>
+      h.call<{ features: { feature: string; offered: boolean }[] }>(
+        '/admin/features',
+        owner.token,
+        undefined,
+        'GET',
+      );
+    expect((await listed()).body.features).toEqual([{ feature: 'roles', offered: false }]);
+    // launched: everyone has it, and the owner's list names it once
+    await h.call('/admin/features/roles', owner.token, { offered: true }, 'PUT');
+    expect((await me(owner.token)).body.features).toEqual(['roles']);
+    expect((await me(u.token)).body.features).toEqual(['roles']);
+    expect((await listed()).body.features).toEqual([{ feature: 'roles', offered: true }]);
+    // taken away again: back to the owner alone, and the routes follow
+    await h.call('/admin/features/roles', owner.token, { offered: false }, 'PUT');
+    expect((await me(owner.token)).body.features).toEqual(['roles']);
+    expect((await me(u.token)).body.features).toEqual([]);
+    expect((await h.call('/roles/list', owner.token, {})).status).toBe(200);
+    expect((await h.call('/roles/list', u.token, {})).status).toBe(404);
   });
 
   it('ORBIT_FEATURES offers it whatever the switch says', async () => {
