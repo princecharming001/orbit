@@ -386,9 +386,15 @@ describe('look-alike employers never auto-merge on name evidence alone (prev-6)'
       { displayName: 'Jose Nunez', email: 'jose.nunez@gmail.com', companyRaw: 'Bain Capital' },
       { displayName: 'Jose Nunez', email: 'jose.nunez@baincapital.com' },
       { displayName: 'Jose Nunez', companyRaw: 'Bain Capital' },
-      { displayName: 'Jose Nunez', email: 'jose.nunez@gmail.com' },
     ])
       expect({ inc, kind: resolve(inc).kind }).toEqual({ inc, kind: 'suggest' });
+  });
+  it('with nothing naming another firm, the only Jose Nunez the student has is that Jose Nunez', () => {
+    // his own mailbox, his full name, nobody else by it: decided, not asked
+    expect(resolve({ displayName: 'Jose Nunez', email: 'jose.nunez@gmail.com' })).toMatchObject({
+      kind: 'probable',
+      personId: 'j',
+    });
   });
   it('still merges an address at the stored employer', () => {
     expect(resolve({ displayName: 'Jose Nunez', email: 'jnunez@bain.com' })).toMatchObject({

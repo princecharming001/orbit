@@ -16,6 +16,7 @@
  * first created instead of creating them again.
  */
 import {
+  assumeSamePair,
   doNotMergeKey,
   type IncomingIdentity,
   isPersonalEmailDomain,
@@ -727,4 +728,92 @@ async function moveSocialRows(tx: Db, p: string[]): Promise<void> {
     `delete from orbit.text_days where user_id = $1::uuid and person_id = $2::uuid`,
     p.slice(0, 2),
   );
+}
+
+/** How many of a user's waiting questions one run settles: a run is one short job. */
+const SETTLE_PER_RUN = 200;
+
+/**
+ * What Orbit can decide about who is who without asking, for the people a user already has:
+ *
+ *   1. two people on one LinkedIn member id are one person. LinkedIn gives a person one id; the two rows came from
+ *      two ingests arriving at the same moment (34 pairs on 2026-11-24, before resolvePeople took a lock);
+ *   2. a "same person?" question that is the only-one-by-that-name pair (core `assumeSamePair`): the same full
+ *      name, nobody else by it, nothing against it. A student answered eighty of these and said yes to every one.
+ *
+ * Everything else stays a question. Each pair is folded with `mergePeople`, so a pair the student said is not one
+ * person, or one that owns an Instagram or X account, is left alone. Returns who was kept, for a rescore.
+ */
+export async function settleSamePeople(
+  db: Db,
+  userId: string,
+): Promise<{ sameProfile: number; assumed: number; survivors: string[] }> {
+  const survivors = new Set<string>();
+  const fold = async (survivor: string, loser: string): Promise<boolean> => {
+    try {
+      const merged = await mergePeople(db, userId, survivor, loser);
+      if (merged) survivors.add(survivor);
+      return merged;
+    } catch (e) {
+      if (e instanceof SocialMergeRefused) return false;
+      throw e;
+    }
+  };
+
+  // 1. one LinkedIn profile, two rows: the one that owns the identity stays, else the older
+  const doubles = await db.sql<{ ids: string[]; owner: string | null }>`
+    select array_agg(p.id order by p.created_at, p.id) as ids,
+           (select pi.person_id from orbit.person_identities pi
+             where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member'
+               and pi.value_norm = p.linkedin_member_id limit 1) as owner
+      from orbit.people p
+     where p.user_id = ${userId}::uuid and p.linkedin_member_id is not null and p.deleted_at is null
+       and p.merged_into is null and not p.is_self
+     group by p.linkedin_member_id having count(*) > 1
+     limit ${SETTLE_PER_RUN}`;
+  let sameProfile = 0;
+  for (const d of doubles) {
+    const keep = d.owner && d.ids.includes(d.owner) ? d.owner : d.ids[0]!;
+    for (const id of d.ids) if (id !== keep && (await fold(keep, id))) sameProfile++;
+  }
+
+  // 2. the questions already waiting
+  const open = await db.sql<{ person_a: string; person_b: string }>`
+    select person_a, person_b from orbit.merge_suggestions
+     where user_id = ${userId}::uuid and status = 'open' order by score desc limit ${SETTLE_PER_RUN}`;
+  if (!open.length) return { sameProfile, assumed: 0, survivors: [...survivors] };
+  const rows = await db.query<Record<string, unknown>>(
+    `select ${PERSON_COLUMNS} from orbit.people p
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self`,
+    [userId],
+  );
+  const asked = [...new Set(open.flatMap((o) => [o.person_a, o.person_b]))];
+  const idRows = await db.sql<{ person_id: string; kind: string; value_norm: string }>`
+    select person_id, kind, value_norm from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = any(${asked}::uuid[])`;
+  const idsBy = new Map<string, { kind: string; value_norm: string }[]>();
+  for (const r of idRows) idsBy.set(r.person_id, [...(idsBy.get(r.person_id) ?? []), r]);
+  let people = rows.map((r) => toPerson(r, idsBy.get(r.id as string)));
+  const dnm = await db.sql<{ person_a: string; person_b: string }>`
+    select person_a, person_b from orbit.do_not_merge where user_id = ${userId}::uuid`;
+  const orgs = await db.sql<{ id: string; domains: string[] }>`
+    select id, domains from orbit.organizations where user_id = ${userId}::uuid and cardinality(domains) > 0`;
+  const doNotMerge = new Set(dnm.map((d) => doNotMergeKey(d.person_a, d.person_b)));
+  const orgDomains = new Map(orgs.map((o) => [o.id, o.domains]));
+  let assumed = 0;
+  for (const o of open) {
+    const a = people.find((p) => p.id === o.person_a);
+    const b = people.find((p) => p.id === o.person_b);
+    if (!a || !b) continue;
+    if (!assumeSamePair(a, b, { people, doNotMerge, orgDomains })) continue;
+    // the LinkedIn record stays (it is the one a sync keeps up to date), else the older one
+    const linked = (p: Person) => !!(p.linkedinMemberId || p.linkedinSlug);
+    const keep = linked(a) === linked(b) ? (a.createdAt <= b.createdAt ? a : b) : linked(a) ? a : b;
+    const lose = keep === a ? b : a;
+    if (!(await fold(keep.id, lose.id))) continue;
+    assumed++;
+    // the one folded away is nobody's namesake any more
+    people = people.filter((p) => p.id !== lose.id);
+  }
+  return { sameProfile, assumed, survivors: [...survivors] };
 }

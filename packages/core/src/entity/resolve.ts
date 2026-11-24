@@ -22,6 +22,7 @@ import {
   nameBlockKeys,
 } from './names';
 import { nameVariants } from './nicknames';
+import { isRareName } from './social';
 import { transliterate } from './translit';
 
 export interface IncomingIdentity {
@@ -592,6 +593,91 @@ export function scorePair(
   return { score, features: f };
 }
 
+const hasLinkedIn = (x: { linkedinUrl?: string; linkedinSlug?: string; linkedinMemberId?: string }) =>
+  !!(x.linkedinMemberId || x.linkedinSlug || linkedInSlug(x.linkedinUrl));
+const addressesOf = (p: Person) => [p.primaryEmail, ...p.emails].filter((e): e is string => !!e);
+const sameFolded = (a: FoldedName, b: FoldedName) =>
+  a.given === b.given && a.surnames.join(' ') === b.surnames.join(' ');
+
+/**
+ * "The only one by that name": the case Orbit decides for the student instead of asking.
+ *
+ * Nearly every question Orbit asked was the same one: two records under exactly the same first and last name (most
+ * often someone's mail on one and their LinkedIn on the other), with nobody else by that name among the student's
+ * people. A student answered eighty of these and said yes to every one; asking was a chore, not a safeguard. So
+ * that pair is one person, without a question, when all of this holds:
+ *   - the names are the same name in full (not an initial, a nickname or a spelling that only sounds alike), with
+ *     a first and a last name;
+ *   - the surname is not one of the very common ones (Chen, Kim, Smith, Patel): two John Smiths are easily two
+ *     people, and that stays a question unless a work address already settled it;
+ *   - nobody else the student has carries that name: with two Priya Raghavans, which one this is stays a question;
+ *   - they are not two LinkedIn profiles (LinkedIn gives each person one), and nothing speaks against it: no
+ *     numbered address (mraghavan2@), and no work address at one employer, spelled nothing like the name, for
+ *     someone LinkedIn puts at another.
+ * An address with no name on it is assumed only when it spells the name in full at the employer the record names.
+ * The student can still part two people who were joined; a pair they said is not one person is never joined.
+ */
+export function assumeSamePerson(
+  inc: IncomingIdentity,
+  cand: Person,
+  f: ResolveFeatures,
+  ctx: ResolveContext,
+): boolean {
+  if (!cand.isHuman) return false;
+  const email = inc.email ? normalizeEmail(inc.email) : undefined;
+  if (hasLinkedIn(inc) && hasLinkedIn(cand)) return false;
+  const addresses = [...addressesOf(cand), ...(email ? [email] : [])];
+  if (addresses.some(numberedAddress)) return false;
+  const incName = incomingName(inc);
+  if (!incName.full || isPlaceholderName(cand)) {
+    // a bare address: its own letters have to say the name, at the employer the record names
+    return f.email_name_sim >= 0.95 && f.domain_org_match > 0;
+  }
+  const names = namesOf(inc, cand);
+  if (names.given !== 'same' || names.surname !== 'same' || names.swapped) return false;
+  const mine = foldName(incName);
+  if (!mine.given || !mine.surnames.length) return false;
+  if (!mine.surnames.every((x) => isRareName(x))) return false;
+  // nobody else by that name
+  const others = ctx.people.filter(
+    (p) => p.id !== cand.id && p.id !== inc.personId && p.isHuman && !isPlaceholderName(p),
+  );
+  if (others.some((p) => sameFolded(foldName(p.displayName), mine))) return false;
+  // the two records name different employers, or one that only looks like the other (Bain Capital, Bain & Company)
+  if (f.org_match < 0 || employerConflict(inc, cand, ctx, f)) return false;
+  // a work address somewhere else, spelled nothing like the name, is evidence against
+  if (f.domain_org_match === 0 && f.email_name_sim < 0.3) {
+    const work = addresses.some((e) => !isPersonalEmailDomain(emailDomain(e)));
+    const employer = normalizeCompany(inc.companyRaw) || normalizeCompany(cand.currentOrganizationRaw);
+    if (work && employer) return false;
+  }
+  return true;
+}
+
+/**
+ * Two records the student has, as one question: are they the only-one-by-that-name pair `assumeSamePerson`
+ * decides? Used to settle questions that were already waiting when the rule came in. Read both ways round, since
+ * either record could have been the one that came in second.
+ */
+export function assumeSamePair(a: Person, b: Person, ctx: ResolveContext): boolean {
+  if (rejected(ctx, a.id, b.id) || differentLinkedInProfiles(a, b)) return false;
+  const as = (p: Person): IncomingIdentity => ({
+    email: addressesOf(p)[0],
+    displayName: p.displayName,
+    linkedinUrl: p.linkedinUrl,
+    linkedinMemberId: p.linkedinMemberId,
+    companyRaw: p.currentOrganizationRaw,
+    title: p.currentTitle,
+    source: 'gmail',
+    personId: p.id,
+  });
+  const one = (x: Person, y: Person) => {
+    const inc = as(x);
+    return assumeSamePerson(inc, y, computeFeatures(inc, y, ctx), ctx);
+  };
+  return one(a, b) || one(b, a);
+}
+
 /**
  * Two different LinkedIn profiles are two people, whatever their names and employers say: namesakes are common, and
  * LinkedIn gives each person one profile. Matching by name is only for joining someone's mail to their LinkedIn.
@@ -716,13 +802,17 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
   const tied = (scored[1]?.score ?? 0) >= AUTO_MERGE_THRESHOLD;
   if (best.score >= AUTO_MERGE_THRESHOLD && !tied)
     return { kind: 'probable', personId: best.p.id, score: best.score, features: best.features };
-  if (best.score >= SUGGEST_THRESHOLD)
+  if (best.score >= SUGGEST_THRESHOLD) {
+    // the only one by that name, mail on one record and LinkedIn on the other: decided, not asked
+    if (!tied && assumeSamePerson(inc, best.p, best.features, { ...ctx, people }))
+      return { kind: 'probable', personId: best.p.id, score: best.score, features: best.features };
     return {
       kind: 'suggest',
       personId: best.p.id,
       score: Math.min(best.score, AUTO_MERGE_THRESHOLD - 0.01),
       features: best.features,
     };
+  }
   return { kind: 'new' };
 }
 

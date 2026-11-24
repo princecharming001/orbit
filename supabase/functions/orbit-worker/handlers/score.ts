@@ -17,6 +17,7 @@
 
 import { isUuid } from '../../_shared/crypto.ts';
 import { hasActiveFriend, shareRefreshKey } from '../../_shared/friends/shares.ts';
+import { settleSamePeople } from '../../_shared/ingest/people.ts';
 import { changedPeople, fullRescoreDue, readCalibration, scorePeople } from '../../_shared/ingest/score.ts';
 import { refreshTies, TIE_GROUPS } from '../../_shared/ingest/ties.ts';
 import { chunks } from '../../_shared/ingest/util.ts';
@@ -56,6 +57,12 @@ export function scoreHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       if (!job.userId) throw new JobSkipped('no_user');
       await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
       const now = ctx.now();
+      // before anyone is scored: who is who. Two rows for one LinkedIn profile, and the "same person?" questions
+      // Orbit can answer itself, are folded together, so the scores below are of people and not of halves of them.
+      // A failure here is not a reason to skip the scores.
+      await settleSamePeople(ctx.db, job.userId).catch((e) =>
+        console.warn('[orbit score.user] settle people', e instanceof Error ? e.message : e),
+      );
       const labelled = (
         await ctx.db.sql<{ person_id: string }>`
           select person_id from orbit.tie_labels where user_id = ${job.userId}::uuid`
