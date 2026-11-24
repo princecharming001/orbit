@@ -2,8 +2,8 @@
  * Plan 44: the source side's seam for the search side (contracts.ts `RoleSources`).
  *
  * - `keep`: intake and store listings, and return the roles shown for them.
- * - `text`: a stored role's posting text, read from where the role lives when it is not kept yet or is older than
- *   7 days: Greenhouse's job, Lever's posting (description, lists, closing), Ashby's job page, Workday's detail,
+ * - `text`: a stored role's posting text (Workday's details one at a time, spaced), read from where the role lives
+ *   when it is not kept yet or is older than 7 days: Greenhouse's job, Lever's posting (description, lists, closing), Ashby's job page, Workday's detail,
  *   SmartRecruiters', Workable's and Recruitee's own, LinkedIn's job through the student's account, and for a
  *   SimplifyJobs entry or a pasted posting, the link it names. Stored cleaned and capped, with its hash. A board that
  *   answers that the role is gone closes it.
@@ -15,22 +15,71 @@ import type { JobListing, JobPay, Remote } from '../../../../packages/core/src/r
 import type { Db } from '../db.ts';
 import { decodeEntities, embeddedJobLink, pageText, postingUrlProblem } from '../postings.ts';
 import { nameFromToken } from './boards.ts';
-import type { LinkedinJobAccess, RoleNet, RoleSources } from './contracts.ts';
+import { type LinkedinJobAccess, type RoleNet, type RoleSources, TextLater } from './contracts.ts';
 import { cleanText, countriesOf, keep, payFromText, sha256, splitPlaces } from './intake.ts';
 import { boardOfUrl } from './readers/boardUrls.ts';
 import { readGreenhouseJob } from './readers/greenhouse.ts';
-import { askText, type Got, isoOf, num, type Obj, obj, type ReaderNet, str } from './readers/http.ts';
+import {
+  askText,
+  fail,
+  type Got,
+  isoOf,
+  num,
+  type Obj,
+  obj,
+  type ReaderNet,
+  sleepFor,
+  str,
+} from './readers/http.ts';
 import { readLeverJob } from './readers/lever.ts';
 import { linkedinJob, linkedinJobSearch } from './readers/linkedin.ts';
 import { readRecruiteeJob } from './readers/recruitee.ts';
 import { readSmartRecruitersJob } from './readers/smartrecruiters.ts';
 import { readWorkableJob } from './readers/workable.ts';
-import { readWorkdayJob } from './readers/workday.ts';
+import { readWorkdayJob, type WorkdayJob } from './readers/workday.ts';
 import { count } from './usage.ts';
 
 /** A kept text older than this is read again when asked for. */
 export const TEXT_FRESH_MS = 7 * 86_400_000;
 const PAGE_MAX_BYTES = 1_500_000;
+
+// ---- Workday's role details, spaced ----------------------------------------------------------------------------------
+//
+// Workday answers 429 to a reader that asks quickly, whichever sites it asks (50 of 60 sites on 2026-11-24). A search
+// reads the text of ten roles side by side, and several can be Workday's: those reads go one at a time, a gap apart,
+// and after a 429 none is asked for a while. A role whose text was not read stays to be read later (score.ts), so a
+// search never scores a Workday role on its title alone because Workday was busy.
+
+/** The gap between two Workday detail reads. */
+export const WORKDAY_TEXT_GAP_MS = 800;
+/** After a 429 on a detail read, no Workday detail is asked for this long. */
+export const WORKDAY_TEXT_PAUSE_MS = 120_000;
+
+let workdayLine: Promise<unknown> = Promise.resolve();
+let workdayPausedUntil = 0;
+
+/** Test hook: forget the line and the pause. */
+export function resetWorkdayPacing(): void {
+  workdayLine = Promise.resolve();
+  workdayPausedUntil = 0;
+}
+
+const WORKDAY_BUSY = () => fail('rate_limited', 'Workday asked to slow down', 429);
+
+/** One Workday role's detail, in line behind the others and never while Workday has asked to slow down. */
+export function workdayDetail(net: ReaderNet, token: string, path: string): Promise<Got<WorkdayJob>> {
+  if (net.now().getTime() < workdayPausedUntil) return Promise.resolve(WORKDAY_BUSY());
+  const mine = workdayLine.then(async (): Promise<Got<WorkdayJob>> => {
+    if (net.now().getTime() < workdayPausedUntil) return WORKDAY_BUSY();
+    const got = await readWorkdayJob(net, token, path, { retries: 0 });
+    if (!got.ok && got.reason === 'rate_limited')
+      workdayPausedUntil = net.now().getTime() + WORKDAY_TEXT_PAUSE_MS;
+    else await sleepFor(net)(WORKDAY_TEXT_GAP_MS);
+    return got;
+  });
+  workdayLine = mine.catch(() => undefined);
+  return mine;
+}
 
 // ---- a posting page's JobPosting block, text included ------------------------------------------------------------------
 
@@ -206,7 +255,7 @@ async function readUrlWith(
       }
       case 'workday': {
         if (!board.path) break;
-        const got = await readWorkdayJob(net, board.token, board.path);
+        const got = await workdayDetail(net, board.token, board.path);
         if (got.ok)
           return {
             source: 'workday',
@@ -221,6 +270,10 @@ async function readUrlWith(
             meta: { path: board.path, timeType: got.value.timeType },
           };
         if (got.reason === 'not_found') return { problem: 'That posting is no longer listed.' };
+        if (got.reason === 'rate_limited')
+          return {
+            problem: "Workday is busy just now. Try again in a few minutes, or paste the posting's text.",
+          };
         break;
       }
       case 'smartrecruiters': {
@@ -330,7 +383,7 @@ async function readText(
     case 'workday': {
       const path = typeof j.meta?.path === 'string' ? j.meta.path : fromUrl?.path;
       if (!token || !path) break;
-      const got = await readWorkdayJob(net, token, path);
+      const got = await workdayDetail(net, token, path);
       return got.ok
         ? { ...got, value: { text: got.value.text, places: got.value.places, remote: got.value.remote } }
         : got;
@@ -400,6 +453,9 @@ export async function text(
     // the source says the role is gone: it leaves the open roles (saved matches keep it as "No longer listed")
     if (got.reason === 'not_found')
       await db.sql`update orbit_private.jobs set closed_at = coalesce(closed_at, ${now}::timestamptz) where id = ${j.id}::uuid`;
+    // busy or unreachable just now, and nothing kept from before: the role is read later, not scored without text
+    if (!j.text && (got.reason === 'rate_limited' || got.reason === 'network' || got.reason === 'server'))
+      throw new TextLater(got.reason);
     return j.text ?? undefined;
   }
   const cleaned = cleanText(got.value.text);

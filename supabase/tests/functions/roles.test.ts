@@ -22,10 +22,11 @@ import { normalizeCompany } from '../../../packages/core/src/text/normalize.ts';
 import { sha256Hex } from '../../functions/_shared/crypto.ts';
 import { forgetFeatures } from '../../functions/_shared/features.ts';
 import { memoryTake } from '../../functions/_shared/ratelimit.ts';
-import type {
-  LinkedinJobAccess,
-  LinkedinJobQuery,
-  RoleSources,
+import {
+  type LinkedinJobAccess,
+  type LinkedinJobQuery,
+  type RoleSources,
+  TextLater,
 } from '../../functions/_shared/roles/contracts.ts';
 import { LINKEDIN_ONLY_NOTE } from '../../functions/_shared/roles/profile.ts';
 import { LIMIT_NOTE, NOT_READ_NOTE } from '../../functions/_shared/roles/score.ts';
@@ -111,6 +112,8 @@ async function addJob(j: JobSeed): Promise<string> {
 
 function fakeSources() {
   const linkedinCalls: { access: LinkedinJobAccess; q: LinkedinJobQuery }[] = [];
+  /** roles whose source is busy just now: their text read says to come back later */
+  const later = new Set<string>();
   const sources: RoleSources = {
     async keep(db, listings) {
       const out = [];
@@ -140,6 +143,7 @@ function fakeSources() {
       return out;
     },
     async text(db, _net, jobId) {
+      if (later.has(jobId)) throw new TextLater('rate_limited');
       const [r] = await db.sql<{
         text: string | null;
       }>`select text from orbit_private.jobs where id = ${jobId}::uuid`;
@@ -175,7 +179,7 @@ function fakeSources() {
       };
     },
   };
-  return { sources, linkedinCalls };
+  return { sources, linkedinCalls, later };
 }
 
 // ---- the API ---------------------------------------------------------------------------------------------------------------
@@ -751,6 +755,56 @@ describe('/roles/search and /roles/more', () => {
 });
 
 // ---- reading closely ----------------------------------------------------------------------------------------------------------------
+
+describe('a role whose text cannot be read just now', () => {
+  it('is left to be read later with its rough parts, never scored on its title; a role with no text at all is thin', async () => {
+    const h = harness();
+    const u = await student(h);
+    const busy = await addJob({ title: 'Software Engineer Intern', company: 'Busy Co', source: 'workday' });
+    const none = await addJob({ title: 'Platform Engineer Intern', company: 'Quiet Co', text: null });
+    const fine = await addJob({ title: 'Backend Engineer Intern', company: 'Fine Co' });
+    h.src.later.add(busy);
+    const r = await h.call<RolesSearchResponse>('/roles/search', u.token, {});
+    const m = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
+    const by = (id: string) => m.body.matches.find((x) => x.job.id === id)!;
+    // the source that was busy: not read, no number, still to be read, and the answer says so
+    expect(by(busy)).toMatchObject({ state: 'to_read', status: 'new' });
+    expect(by(busy).fit).toBeUndefined();
+    expect(by(busy).roughFit).toMatchObject({ level: true });
+    expect(m.body.note).toBe(NOT_READ_NOTE);
+    expect(m.body).toMatchObject({ listed: 3, read: 2, done: true });
+    // a source with no text to give: scored on what the listing says, and held at 7
+    expect(by(none).fit!.caps.map((c) => c.kind)).toEqual(['thin']);
+    expect(by(none).fit!.score).toBeLessThanOrEqual(7);
+    expect(by(fine).fit!.caps).toEqual([]);
+    const [row] = await t.db.sql<{ state: string; read_at: Date | null; fit: number | null }>`
+      select state, read_at, fit from orbit.role_matches where job_id = ${busy}::uuid`;
+    expect(row).toEqual({ state: 'to_read', read_at: null, fit: null });
+    // when the source answers again the same search reads it, with no new search
+    h.src.later.clear();
+    const again = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
+    expect(again.body).toMatchObject({ read: 3, done: true });
+    expect(again.body.matches.find((x) => x.job.id === busy)!.fit!.score).toBeGreaterThan(1);
+  });
+
+  it('a role taken down while it waited is not read and does not keep the search open', async () => {
+    const h = harness();
+    const u = await student(h);
+    const gone = await addJob({ title: 'Software Engineer Intern', company: 'Gone Co' });
+    await addJob({ title: 'Backend Engineer Intern', company: 'Here Co' });
+    const r = await h.call<RolesSearchResponse>('/roles/search', u.token, {});
+    expect(r.body.listed).toBe(2);
+    await t.db.sql`update orbit_private.jobs set closed_at = ${now()}::timestamptz where id = ${gone}::uuid`;
+    const before = h.count('score');
+    const m = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
+    expect(m.body).toMatchObject({ read: 1, done: true });
+    expect(m.body.matches.map((x) => x.job.companyName)).toEqual(['Here Co']);
+    expect(h.count('score') - before).toBe(1);
+    const [row] = await t.db.sql<{ state: string }>`
+      select state from orbit.role_matches where job_id = ${gone}::uuid`;
+    expect(row!.state).toBe('to_read');
+  });
+});
 
 describe('reading closely', () => {
   it('reads requirements once per posting text, shared, counted against the daily limit', async () => {

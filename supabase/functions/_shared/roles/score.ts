@@ -1,8 +1,9 @@
 /**
  * Plan 44 §6: reading roles closely and scoring them out of 10.
  *
- *   1. The posting's text, from the source side (`RoleSources.text`). A role whose text cannot be read is scored on what
- *      its listing says, and is thin: fewer than three requirements, capped at 7.
+ *   1. The posting's text, from the source side (`RoleSources.text`). A role whose source has no text to give is
+ *      scored on what its listing says, and is thin: fewer than three requirements, capped at 7. A role whose text
+ *      could not be read just now (the source is busy, the read timed out) is not scored: it stays to be read.
  *   2. Its requirements (task `role_requirements`, light model, five postings a call), read once per text hash and
  *      shared by every student, counted against Orbit's own daily limit (`orbit_roles_take('requirements', 2000)`)
  *      because the per-student budget is skipped for a call with no student behind it. A requirement whose quote is
@@ -41,7 +42,7 @@ import type { Db } from '../db.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { type JobRow, jobOf, jobsById, linkedinAccess, netOf, searchLevels } from './candidates.ts';
-import type { RoleSources } from './contracts.ts';
+import { type RoleSources, TextLater } from './contracts.ts';
 import { type Evidence, evidenceOf, plain, type StoredProfile } from './profile.ts';
 
 export const READ_BATCH = 2;
@@ -456,8 +457,17 @@ interface Item {
   reqs?: JobRequirement[];
 }
 
-const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | undefined> =>
-  Promise.race([p.catch(() => undefined), new Promise<undefined>((r) => setTimeout(() => r(undefined), ms))]);
+const LATER = Symbol('read later');
+
+/**
+ * The text when it comes in time; `LATER` when the read timed out or the source said to come back (`TextLater`);
+ * undefined when the source has none to give.
+ */
+const textNow = (p: Promise<string | undefined>, ms: number): Promise<string | undefined | typeof LATER> =>
+  Promise.race([
+    p.catch((e) => (e instanceof TextLater ? LATER : undefined)),
+    new Promise<typeof LATER>((r) => setTimeout(() => r(LATER), ms)),
+  ]);
 
 /** What a listing says when its text cannot be read: scored on this, and thin. */
 function listingText(j: Job): string {
@@ -500,12 +510,19 @@ export async function readRows(
   const access = await linkedinAccess(s, userId).catch(() => undefined);
   const net = netOf(s);
   const items: Item[] = [];
+  const notes = new Set<string>();
   await Promise.all(
     rows.map(async (row) => {
       const jr = jobs.get(row.job_id);
       if (!jr) return;
       const job = jobOf(jr);
-      const text = await withTimeout(deps.sources.text(s.db, net, job.id, access), timeouts.text);
+      const text = await textNow(deps.sources.text(s.db, net, job.id, access), timeouts.text);
+      if (text === LATER) {
+        // not read just now: left to be read later with its rough parts, never scored as if it had no text
+        notes.add(NOT_READ_NOTE);
+        out.unread.push(await release(s.db, { row, job, posting: '', thin: true }, stored));
+        return;
+      }
       const body = text?.trim();
       const posting = body
         ? `${job.title}${job.team ? `\nTeam: ${job.team}` : ''}\n${body}`.slice(0, POSTING_CHARS)
@@ -517,7 +534,6 @@ export async function readRows(
   const ev = evidenceOf(profile);
   const batches: Item[][] = [];
   for (let i = 0; i < items.length; i += READ_BATCH) batches.push(items.slice(i, i + READ_BATCH));
-  const notes = new Set<string>();
   await Promise.all(
     batches.map(async (b) => {
       const reqNote = await requirementsFor(s, b, timeouts);
@@ -714,6 +730,8 @@ export async function claimRows(
      where m.id in (
        select x.id from orbit.role_matches x
         where x.user_id = ${userId}::uuid and x.state = 'to_read' and x.status <> 'dismissed'
+          -- a role taken down since it was listed is not read: it has left the table
+          and not exists (select 1 from orbit_private.jobs j where j.id = x.job_id and j.closed_at is not null)
           and (${o.searchId ?? null}::uuid is null or x.search_id = ${o.searchId ?? null}::uuid)
           and (${o.ids ? 1 : 0}::int = 0 or x.id = any(${o.ids ?? []}::uuid[]))
           and (x.read_at is null or x.read_at < ${stale}::timestamptz)

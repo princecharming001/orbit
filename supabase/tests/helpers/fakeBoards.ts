@@ -13,7 +13,7 @@ export function fixture<T = unknown>(name: string): T {
   return JSON.parse(readFileSync(join(FIXTURES, name), 'utf8')) as T;
 }
 
-export type Route = (url: URL, init: RequestInit) => Response | Promise<Response> | undefined;
+export type Route = (url: URL, init: RequestInit) => Response | undefined | Promise<Response | undefined>;
 
 export interface FakeBoards {
   fetch: typeof fetch;

@@ -31,13 +31,25 @@ export interface LinkedinJobQuery {
   limit?: number;
 }
 
+/**
+ * What `text` rejects with when the posting could not be read just now (its source is busy or unreachable): the
+ * role is left to be read later, never scored on its title alone as if it had no text.
+ */
+export class TextLater extends Error {
+  constructor(reason = 'later') {
+    super(reason);
+    this.name = 'TextLater';
+  }
+}
+
 /** What the search side needs from the source side. */
 export interface RoleSources {
   /** Store listings (intake: level, family, places, term, dedupe) and return the stored roles, in order. */
   keep(db: Db, listings: JobListing[], o?: { boardId?: string }): Promise<Job[]>;
   /**
    * The posting's text for a stored role, read from its source when not kept yet (or when older than 7 days), cleaned
-   * and capped at 8,000 characters, and stored with its hash. Undefined when the source cannot give it.
+   * and capped at 8,000 characters, and stored with its hash. Undefined when the source cannot give it (a page
+   * Orbit cannot read, a role that is gone). Rejects with `TextLater` when it could not be read just now.
    */
   text(db: Db, net: RoleNet, jobId: string, linkedin?: LinkedinJobAccess): Promise<string | undefined>;
   /** One LinkedIn job search through the student's own account. Results are listings, not yet kept. */

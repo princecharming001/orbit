@@ -9,6 +9,8 @@ import { FAILURES_TO_STOP } from './boards.ts';
 export interface RolesDigest {
   boardsRead: number;
   boardsFailed: number;
+  /** times a board answered 429 (it is asked again later the same day, then daily) */
+  boardsRateLimited: number;
   boardsTooLarge: number;
   boardsHarvested: number;
   rolesAdded: number;
@@ -53,6 +55,7 @@ export async function rolesDigest(db: Db, day: string): Promise<RolesDigest | nu
   return {
     boardsRead: n('boards_read'),
     boardsFailed: n('boards_failed'),
+    boardsRateLimited: n('boards_rate_limited'),
     boardsTooLarge: n('boards_too_large'),
     boardsHarvested: n('boards_harvested'),
     rolesAdded: n('roles_added'),
@@ -92,7 +95,7 @@ export function rolesDigestLines(r: RolesDigest): string[] {
   const lines = [
     '',
     'Roles:',
-    `- Boards read: ${r.boardsRead}, failed: ${r.boardsFailed}, too large for the worker: ${r.boardsTooLarge}. New boards from SimplifyJobs links: ${r.boardsHarvested}.`,
+    `- Boards read: ${r.boardsRead}, failed: ${r.boardsFailed}, asked to slow down: ${r.boardsRateLimited}, too large for the worker: ${r.boardsTooLarge}. New boards from SimplifyJobs links: ${r.boardsHarvested}.`,
     `- Roles added: ${r.rolesAdded}, closed: ${r.rolesClosed}, deleted after 60 days: ${r.rolesDeleted}. Texts read: ${r.textsRead}. Open roles now: ${r.openRoles}.`,
     `- Discovery: ${r.discovery.companies} companies, ${r.discovery.requests} requests, ${r.discovery.refused} refused, ${r.discovery.found} boards found.`,
     `- SimplifyJobs: internships ${r.simplify.intern ? 'read' : 'not read'}, new grad ${r.simplify.newgrad ? 'read' : 'not read'} (${r.simplify.listings} listings).`,

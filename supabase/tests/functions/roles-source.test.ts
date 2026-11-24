@@ -9,18 +9,40 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { JobListing } from '../../../packages/core/src/roles/types.ts';
 import { KIND_QUEUE, sqlQueue } from '../../functions/_shared/queue.ts';
 import {
+  BOARD_BYTES_PER_TICK,
+  BOARD_COLUMNS,
   type BoardRow,
   claimBoard,
+  LARGE_BOARD_BYTES,
   nextReadAt,
+  RATE_LIMIT_DAYS_TO_STOP,
+  RATE_LIMIT_RETRY_MS,
   readBoard,
   readDueBoards,
+  readMsOf,
   upsertBoard,
+  WORKDAY_PAUSE_MIN,
+  workdayPaused,
 } from '../../functions/_shared/roles/boards.ts';
+import { TextLater } from '../../functions/_shared/roles/contracts.ts';
 import { rolesDigest, rolesDigestLines } from '../../functions/_shared/roles/digest.ts';
 import { companiesToFind, discoverCompany, discoverSome } from '../../functions/_shared/roles/discover.ts';
 import { keepListings } from '../../functions/_shared/roles/intake.ts';
-import { roleSources, text } from '../../functions/_shared/roles/sources.ts';
-import { queueTopups, readSimplifyPart, runRolesTick, upkeep } from '../../functions/_shared/roles/tick.ts';
+import { ASHBY_MAX_BYTES } from '../../functions/_shared/roles/readers/ashby.ts';
+import {
+  resetWorkdayPacing,
+  roleSources,
+  text,
+  WORKDAY_TEXT_GAP_MS,
+  WORKDAY_TEXT_PAUSE_MS,
+} from '../../functions/_shared/roles/sources.ts';
+import {
+  queueTopups,
+  readSimplifyPart,
+  runRolesTick,
+  TICK_MAX_BYTES,
+  upkeep,
+} from '../../functions/_shared/roles/tick.ts';
 import { setMark } from '../../functions/_shared/roles/usage.ts';
 import { defaultHandlers } from '../../functions/orbit-worker/worker.ts';
 import { fakeBoards, fixture, html, json, redirect } from '../helpers/fakeBoards.ts';
@@ -37,6 +59,7 @@ beforeEach(async () => {
   await t.pg.exec(`delete from orbit_private.jobs; delete from orbit_private.job_board_lookups;
     delete from orbit_private.job_boards; delete from orbit_private.roles_usage; delete from orbit_private.company_facts;
     delete from orbit.users; delete from orbit.job_runs; delete from pgmq.q_orbit_score;`);
+  resetWorkdayPacing();
 });
 
 const DAY1 = new Date('2026-11-24T09:30:00Z');
@@ -59,10 +82,29 @@ async function board(service: BoardRow['service'], token: string, name?: string)
   await t.db
     .sql`update orbit_private.job_boards set next_read_at = ${new Date(DAY1.getTime() - 3_600_000)}::timestamptz
     where id = ${b.id}::uuid`;
-  const [row] = await t.db.sql<BoardRow>`
-    select id, service, token, company_key, company_name, company_domain, status, failures
-      from orbit_private.job_boards where id = ${b.id}::uuid`;
+  return boardRow(b.id);
+}
+
+/** A board as the daily read takes it (every column a read needs), as it stands now. */
+async function boardRow(id: string): Promise<BoardRow> {
+  const [row] = await t.db.query<BoardRow>(
+    `select ${BOARD_COLUMNS} from orbit_private.job_boards where id = $1::uuid`,
+    [id],
+  );
   return row!;
+}
+
+/** An Ashby board's answer of about `mb` megabytes: the fixture's role, many times over. */
+function ashbyOfSize(mb: number): { jobs: object[] } {
+  const role = fixture<{ jobs: Record<string, unknown>[] }>('ashby-board.json').jobs[1]!;
+  const each = JSON.stringify(role).length + 40;
+  return {
+    jobs: Array.from({ length: Math.ceil((mb * 1_000_000) / each) }, (_, i) => ({
+      ...role,
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      title: `Software Engineer, Team ${i}`,
+    })),
+  };
 }
 
 async function jobs(where = 'true') {
@@ -269,37 +311,338 @@ describe('the daily read of a board', () => {
       deadline: busy.clock() + 600_000,
     });
     expect(s).toMatchObject({ read: 0, failed: 1 });
+    // the one that was asked is not marked as failing: it is asked again later today
+    const rows = await t.db.sql<{ failures: number; rate_limited_days: number }>`
+      select failures, rate_limited_days from orbit_private.job_boards where rate_limited_at is not null`;
+    expect(rows).toEqual([{ failures: 0, rate_limited_days: 0 }]);
   });
 
-  it('three 404s in three days make a board gone; an Ashby board too large is skipped with its size', async () => {
+  it('three 404s in three days make a board gone', async () => {
     const gone = await board('lever', 'vanished', 'Vanished');
-    const big = await board('ashby', 'quarry', 'Quarry');
-    const huge = {
-      jobs: Array.from({ length: 900 }, (_, i) => ({
-        ...fixture<{ jobs: object[] }>('ashby-board.json').jobs[1],
-        id: `id-${i}`,
-      })),
-    };
-    const f = fakeBoards([(u) => (u.hostname === 'api.ashbyhq.com' ? json(huge) : undefined)]);
+    const f = fakeBoards([]);
     for (let d = 0; d < 3; d++) {
       const now = new Date(DAY1.getTime() + d * 86_400_000);
-      const [row] = await t.db
-        .sql<BoardRow>`select id, service, token, company_key, company_name, company_domain, status, failures
-        from orbit_private.job_boards where id = ${gone.id}::uuid`;
-      await readBoard(t.db, net(f, now), row!, now);
+      await readBoard(t.db, net(f, now), await boardRow(gone.id), now);
     }
     const [g] = await t.db.sql<{
       status: string;
       failures: number;
     }>`select status, failures from orbit_private.job_boards where id = ${gone.id}::uuid`;
     expect(g).toEqual({ status: 'gone', failures: 3 });
+  });
+
+  it('an Ashby board of several megabytes is read whole; one over 12 MB is skipped with its size, for a week', async () => {
+    expect(ASHBY_MAX_BYTES).toBe(12_000_000);
+    const big = await board('ashby', 'quarry', 'Quarry');
+    // 4.6 MB: over the old 2 MB limit, where 22% of Ashby boards are
+    const large = ashbyOfSize(4.6);
+    let body: unknown = large;
+    const f = fakeBoards([(u) => (u.hostname === 'api.ashbyhq.com' ? json(body) : undefined)]);
     const o = await readBoard(t.db, net(f, DAY1), big, DAY1);
-    expect(o).toMatchObject({ ok: false, error: 'too_large' });
-    const [a] = await t.db.sql<{ last_error: string; last_size_bytes: number; failures: number }>`
-      select last_error, last_size_bytes, failures from orbit_private.job_boards where id = ${big.id}::uuid`;
+    expect(o).toMatchObject({ ok: true, added: large.jobs.length, roles: large.jobs.length });
+    expect(o.bytes).toBeGreaterThan(4_000_000);
+    const after = await boardRow(big.id);
+    expect(after).toMatchObject({ status: 'active', failures: 0 });
+    expect(Number(after.last_size_bytes)).toBe(o.bytes);
+    // its text came with the board: nothing is fetched to read a role of it closely
+    const [role] = await jobs(`title = 'Software Engineer, Team 7'`);
+    expect(role!.text).toMatch(/Quarry/);
+    // the next day it has grown past 12 MB: not read, its size kept, tried again in a week, not a failure
+    body = ashbyOfSize(12.4);
+    const too = await readBoard(t.db, net(f, DAY2), await boardRow(big.id), DAY2);
+    expect(too).toMatchObject({ ok: false, error: 'too_large' });
+    const [a] = await t.db.sql<{
+      last_error: string;
+      last_size_bytes: number;
+      failures: number;
+      next_read_at: Date;
+    }>`
+      select last_error, last_size_bytes, failures, next_read_at from orbit_private.job_boards
+       where id = ${big.id}::uuid`;
     expect(a!.last_error).toMatch(/^too_large/);
-    expect(a!.last_size_bytes).toBeGreaterThan(2_000_000);
+    expect(a!.last_size_bytes).toBeGreaterThan(ASHBY_MAX_BYTES);
     expect(a!.failures).toBe(0);
+    expect(new Date(a!.next_read_at).toISOString()).toBe(nextReadAt(big.id, DAY2, 7).toISOString());
+    // nothing it listed before is closed by a read that did not happen
+    expect((await jobs(`closed_at is not null`)).length).toBe(0);
+  }, 60_000);
+
+  it("a large board is a tick's whole share: it waits for a tick of its own, and nothing is read after it", async () => {
+    expect(TICK_MAX_BYTES).toBe(BOARD_BYTES_PER_TICK);
+    expect(BOARD_BYTES_PER_TICK).toBe(ASHBY_MAX_BYTES);
+    const small = await board('greenhouse', 'nimbuspay');
+    const big = await board('ashby', 'quarry', 'Quarry');
+    const other = await board('greenhouse', 'second', 'Second');
+    // the large board is known to be large from its last read, and is due first
+    await t.db.sql`update orbit_private.job_boards set last_size_bytes = 9000000 where id = ${big.id}::uuid`;
+    await t.db
+      .sql`update orbit_private.job_boards set next_read_at = ${new Date(DAY1.getTime() - 7_200_000)}::timestamptz
+      where id = ${small.id}::uuid`;
+    const large = ashbyOfSize(3);
+    const f = fakeBoards([
+      (u) => (u.hostname === 'api.ashbyhq.com' ? json(large) : undefined),
+      (u) => (u.hostname === 'boards-api.greenhouse.io' ? json(ghList()) : undefined),
+    ]);
+    const run = { clock: f.clock, deadline: f.clock() + 600_000, maxBytes: BOARD_BYTES_PER_TICK };
+    // a tick that has already read a board leaves the large one for a tick of its own
+    const one = await readDueBoards(t.db, net(f, DAY1), DAY1, run);
+    expect(one.outcomes.map((o) => o.token).sort()).toEqual(['nimbuspay', 'second']);
+    expect(one.waiting).toBe(1);
+    expect((await boardRow(big.id)).last_size_bytes).toBe(9000000);
+    // the next tick starts with it (it is the oldest due), and reads nothing after it
+    await board('greenhouse', 'third', 'Third');
+    const later = new Date(DAY1.getTime() + 600_000);
+    const two = await readDueBoards(t.db, net(f, later), later, { ...run, deadline: f.clock() + 600_000 });
+    expect(two.outcomes.map((o) => o.token)).toEqual(['quarry']);
+    expect(two).toMatchObject({ read: 1, stoppedBy: 'bytes' });
+    expect(two.bytes).toBeGreaterThan(LARGE_BOARD_BYTES);
+    // the board after it is read by the tick after that
+    const three = await readDueBoards(t.db, net(f, later), later, { ...run, deadline: f.clock() + 600_000 });
+    expect(three.outcomes.map((o) => o.token)).toEqual(['third']);
+    void other;
+  }, 60_000);
+
+  it('a tick that also read a SimplifyJobs list has half the share: a board larger than that waits', async () => {
+    const big = await board('ashby', 'quarry', 'Quarry');
+    await t.db.sql`update orbit_private.job_boards set last_size_bytes = 9000000 where id = ${big.id}::uuid`;
+    const f = fakeBoards([(u) => (u.hostname === 'api.ashbyhq.com' ? json(ashbyOfSize(2.2)) : undefined)]);
+    const half = await readDueBoards(t.db, net(f, DAY1), DAY1, {
+      clock: f.clock,
+      deadline: f.clock() + 600_000,
+      maxBytes: BOARD_BYTES_PER_TICK / 2,
+    });
+    expect(half).toMatchObject({ read: 0, waiting: 1 });
+    expect(f.calls).toHaveLength(0);
+    // a board never read has no size: it is read when its turn comes, and when it turns out large the tick ends
+    await t.db.sql`update orbit_private.job_boards set last_size_bytes = null where id = ${big.id}::uuid`;
+    await board('greenhouse', 'nimbuspay');
+    const first = await readDueBoards(t.db, net(f, DAY1), DAY1, {
+      clock: f.clock,
+      deadline: f.clock() + 600_000,
+      maxBytes: BOARD_BYTES_PER_TICK,
+    });
+    expect(first.outcomes.map((o) => o.token)).toEqual(['quarry']);
+    expect(first.stoppedBy).toBe('bytes');
+    // a large board is given the time it needs before it is started
+    expect(readMsOf({ service: 'ashby', last_size_bytes: 9_000_000 })).toBe(13_000);
+    expect(readMsOf({ service: 'ashby', last_size_bytes: null })).toBe(4_000);
+  }, 60_000);
+});
+
+describe('a board that answers 429', () => {
+  const busy = () => fakeBoards([() => new Response('<html>429</html>', { status: 429 })]);
+  const state = async (id: string) => {
+    const [r] = await t.db.sql<{
+      status: string;
+      failures: number;
+      rate_limited_days: number;
+      rate_limited_at: Date | null;
+      next_read_at: Date;
+      last_error: string | null;
+    }>`
+      select status, failures, rate_limited_days, rate_limited_at, next_read_at, last_error
+        from orbit_private.job_boards where id = ${id}::uuid`;
+    return { ...r!, next: new Date(r!.next_read_at).toISOString() };
+  };
+
+  it('is asked once more later the same day, then daily, and neither counts as a failure of the board', async () => {
+    const b = await board('workday', 'busy.wd1.myworkdayjobs.com/busy/Site', 'Busy');
+    const f = busy();
+    const run = () => ({ clock: f.clock, deadline: f.clock() + 600_000, maxBytes: BOARD_BYTES_PER_TICK });
+    // 09:30: asked to slow down
+    const one = await readDueBoards(t.db, net(f, DAY1), DAY1, run());
+    expect(one).toMatchObject({ read: 0, failed: 1 });
+    expect(one.outcomes[0]).toMatchObject({ ok: false, error: 'rate_limited' });
+    let s = await state(b.id);
+    expect(s).toMatchObject({ status: 'active', failures: 0, rate_limited_days: 0 });
+    expect(s.last_error).toMatch(/^rate_limited/);
+    // due again later the same day, three hours on
+    expect(s.next).toBe(new Date(DAY1.getTime() + RATE_LIMIT_RETRY_MS).toISOString());
+    expect(s.next.slice(0, 10)).toBe('2026-11-24');
+    // not before then
+    const soon = new Date(DAY1.getTime() + 3_600_000);
+    expect((await readDueBoards(t.db, net(f, soon), soon, run())).outcomes).toHaveLength(0);
+    // 12:30: asked once more; still busy, so that is the day: tomorrow at its own minute, one day counted
+    const retry = new Date(DAY1.getTime() + RATE_LIMIT_RETRY_MS);
+    const calls = f.calls.length;
+    const two = await readDueBoards(t.db, net(f, retry), retry, run());
+    expect(two.outcomes).toHaveLength(1);
+    expect(f.calls.length).toBeGreaterThan(calls);
+    s = await state(b.id);
+    expect(s).toMatchObject({ status: 'active', failures: 0, rate_limited_days: 1 });
+    expect(s.next).toBe(nextReadAt(b.id, retry).toISOString());
+    // and not a third time today, whatever its next read says
+    await t.db
+      .sql`update orbit_private.job_boards set next_read_at = ${retry}::timestamptz where id = ${b.id}::uuid`;
+    const evening = new Date(DAY1.getTime() + 9 * 3_600_000);
+    expect((await readDueBoards(t.db, net(f, evening), evening, run())).outcomes).toHaveLength(0);
+    expect(await claimBoard(t.db, b.id, evening)).toBe(false);
+    // the digest says how often boards asked Orbit to slow down, apart from failures
+    const d = (await rolesDigest(t.db, '2026-11-24'))!;
+    expect(d).toMatchObject({ boardsRateLimited: 2, boardsFailed: 1 });
+    expect(rolesDigestLines(d).join('\n')).toMatch(/failed: 1, asked to slow down: 2/);
+  });
+
+  it('a 429 late in the day has no later that day: it waits for tomorrow', async () => {
+    const b = await board('lever', 'slow', 'Slow');
+    const late = new Date('2026-11-24T22:15:00Z');
+    const f = busy();
+    await readBoard(t.db, net(f, late), await boardRow(b.id), late);
+    const s = await state(b.id);
+    expect(s).toMatchObject({ failures: 0, rate_limited_days: 1, status: 'active' });
+    expect(s.next).toBe(nextReadAt(b.id, late).toISOString());
+  });
+
+  it('is set aside only after days in a row of it, a read that works starts the count again, and a 404 streak is its own', async () => {
+    expect(RATE_LIMIT_DAYS_TO_STOP).toBeGreaterThan(3);
+    const b = await board('workday', 'busy.wd1.myworkdayjobs.com/busy/Site', 'Busy');
+    const f = busy();
+    const day = (d: number, hour = 22) => new Date(Date.UTC(2026, 10, 24 + d, hour, 15));
+    // three days of 429, where three failures of another kind would have set it aside: still active
+    for (let d = 0; d < 3; d++) await readBoard(t.db, net(f, day(d)), await boardRow(b.id), day(d));
+    expect(await state(b.id)).toMatchObject({ status: 'active', failures: 0, rate_limited_days: 3 });
+    // a day it answers: the count starts again
+    const page = fixture('workday-page.json');
+    const ok = fakeBoards([(_u, init) => (init.method === 'POST' ? json(page) : undefined)]);
+    await readBoard(t.db, net(ok, day(3)), await boardRow(b.id), day(3));
+    expect(await state(b.id)).toMatchObject({
+      status: 'active',
+      rate_limited_days: 0,
+      rate_limited_at: null,
+    });
+    // then every day for RATE_LIMIT_DAYS_TO_STOP days: set aside for a month
+    for (let d = 4; d < 4 + RATE_LIMIT_DAYS_TO_STOP; d++)
+      await readBoard(t.db, net(f, day(d)), await boardRow(b.id), day(d));
+    const last = day(3 + RATE_LIMIT_DAYS_TO_STOP);
+    const s = await state(b.id);
+    expect(s).toMatchObject({ status: 'refused', failures: 0, rate_limited_days: RATE_LIMIT_DAYS_TO_STOP });
+    expect(s.next).toBe(nextReadAt(b.id, last, 30).toISOString());
+    // when its month is over it is tried again, one more day of 429 from being set aside again
+    const month = new Date(last.getTime() + 31 * 86_400_000);
+    await readDueBoards(t.db, net(ok, month), month, {
+      clock: ok.clock,
+      deadline: ok.clock() + 600_000,
+      maxBytes: BOARD_BYTES_PER_TICK,
+    });
+    expect(await state(b.id)).toMatchObject({ status: 'active', rate_limited_days: 0 });
+  });
+
+  it('after one Workday site says to slow down, no Workday site is asked for an hour; other boards are read', async () => {
+    for (let i = 0; i < 3; i++) await board('workday', `t${i}.wd1.myworkdayjobs.com/t${i}/Site`, `T${i}`);
+    await board('greenhouse', 'nimbuspay');
+    const f = fakeBoards([
+      (u) => (u.hostname === 'boards-api.greenhouse.io' ? json(ghList()) : undefined),
+      () => new Response('', { status: 429 }),
+    ]);
+    const run = () => ({ clock: f.clock, deadline: f.clock() + 600_000, maxBytes: BOARD_BYTES_PER_TICK });
+    const one = await readDueBoards(t.db, net(f, DAY1), DAY1, run());
+    // one Workday site asked, the other two left alone; the Greenhouse board read
+    expect(one.outcomes.filter((o) => o.service === 'workday')).toHaveLength(1);
+    expect(one).toMatchObject({ read: 1, failed: 1 });
+    expect(await workdayPaused(t.db, DAY1)).toBe(true);
+    // the next tick, ten minutes on: no Workday site is asked at all
+    const ten = new Date(DAY1.getTime() + 600_000);
+    const before = f.calls.length;
+    const two = await readDueBoards(t.db, net(f, ten), ten, run());
+    expect(two.outcomes).toHaveLength(0);
+    expect(f.calls.length).toBe(before);
+    // after the hour the two that were left alone are asked
+    const hour = new Date(DAY1.getTime() + (WORKDAY_PAUSE_MIN + 1) * 60_000);
+    expect(await workdayPaused(t.db, hour)).toBe(false);
+    const page = fixture('workday-page.json');
+    const ok = fakeBoards([(_u, init) => (init.method === 'POST' ? json(page) : undefined)]);
+    const three = await readDueBoards(t.db, net(ok, hour), hour, {
+      clock: ok.clock,
+      deadline: ok.clock() + 600_000,
+      maxBytes: BOARD_BYTES_PER_TICK,
+    });
+    expect(three.read).toBe(2);
+  });
+});
+
+describe('Workday role details', () => {
+  const SITE = 'lumen.wd5.myworkdayjobs.com/lumen/LumenExternalCareerSite';
+  /** Five Workday roles of one site, kept as its list read keeps them (no text). */
+  async function workdayRoles() {
+    const b = await board('workday', SITE, 'Lumen');
+    const f = fakeBoards([
+      (_u, init) => (init.method === 'POST' ? json(fixture('workday-page.json')) : undefined),
+    ]);
+    await readBoard(t.db, net(f, DAY1), b, DAY1);
+    return jobs(`source = 'workday'`);
+  }
+
+  it('are read one at a time, a gap apart, however many are asked for at once', async () => {
+    const roles = await workdayRoles();
+    expect(roles).toHaveLength(5);
+    let open = 0;
+    let most = 0;
+    const at: number[] = [];
+    const f = fakeBoards([
+      async (u) => {
+        if (!u.pathname.includes('/job/')) return undefined;
+        at.push(f.clock());
+        most = Math.max(most, ++open);
+        await new Promise((r) => setTimeout(r, 5));
+        open--;
+        return json(fixture('workday-job.json'));
+      },
+    ]);
+    // a search reads its ten roles side by side
+    const texts = await Promise.all(roles.map((r) => text(t.db, net(f, DAY1), r.id)));
+    expect(texts.every((x) => /Kubernetes/.test(x ?? ''))).toBe(true);
+    expect(most).toBe(1);
+    expect(at).toHaveLength(5);
+    for (let i = 1; i < at.length; i++)
+      expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(WORKDAY_TEXT_GAP_MS);
+  });
+
+  it('after a 429 none is asked for a while, and a role not read is read later, never scored without its text', async () => {
+    const roles = await workdayRoles();
+    let now = DAY1;
+    const f = fakeBoards([
+      (u) => (u.pathname.includes('/job/') ? new Response('', { status: 429 }) : undefined),
+    ]);
+    const n = { fetch: f.fetch, now: () => now, sleep: f.sleep };
+    const settled = await Promise.allSettled(roles.map((r) => text(t.db, n, r.id)));
+    // one request found Workday busy; the others were not sent
+    expect(f.calls).toHaveLength(1);
+    expect(settled.every((s) => s.status === 'rejected' && s.reason instanceof TextLater)).toBe(true);
+    // nothing was closed or kept as read
+    expect((await jobs(`source = 'workday'`)).every((j) => !j.closed_at && !j.text && !j.text_read_at)).toBe(
+      true,
+    );
+    // still paused a minute on, with no request
+    now = new Date(DAY1.getTime() + 60_000);
+    await expect(text(t.db, n, roles[0]!.id)).rejects.toBeInstanceOf(TextLater);
+    expect(f.calls).toHaveLength(1);
+    // after the pause Workday is asked again
+    now = new Date(DAY1.getTime() + WORKDAY_TEXT_PAUSE_MS + 1_000);
+    const ok = fakeBoards([
+      (u) => (u.pathname.includes('/job/') ? json(fixture('workday-job.json')) : undefined),
+    ]);
+    const again = { fetch: ok.fetch, now: () => now, sleep: ok.sleep };
+    expect(await text(t.db, again, roles[0]!.id)).toMatch(/Kubernetes/);
+    // a posting scored by its Workday link while Workday is busy: a line to show, and no page fetched instead
+    resetWorkdayPacing();
+    const link = `https://lumen.wd5.myworkdayjobs.com/LumenExternalCareerSite/job/Israel-Tel-Aviv/Senior-SRE-Engineer_JR2029097`;
+    const busy = fakeBoards([() => new Response('', { status: 429 })]);
+    expect(await roleSources.readUrl(net(busy, DAY1), link)).toEqual({
+      problem: "Workday is busy just now. Try again in a few minutes, or paste the posting's text.",
+    });
+    expect(busy.calls).toHaveLength(1);
+  });
+
+  it('a role whose board says it is gone is closed, and one whose site cannot be reached is read later', async () => {
+    const b = await board('greenhouse', 'nimbuspay');
+    await readBoard(t.db, net(fakeBoards([greenhouseRoute(ghList)]), DAY1), b, DAY1);
+    const [role] = await jobs(`external_id = '8172510'`);
+    const down = fakeBoards([() => new Response('', { status: 503 })]);
+    await expect(text(t.db, net(down, DAY1), role!.id)).rejects.toBeInstanceOf(TextLater);
+    expect((await jobs(`external_id = '8172510'`))[0]!.closed_at).toBeNull();
+    const gone = fakeBoards([() => new Response('', { status: 404 })]);
+    expect(await text(t.db, net(gone, DAY1), role!.id)).toBeUndefined();
+    expect((await jobs(`external_id = '8172510'`))[0]!.closed_at).not.toBeNull();
   });
 });
 
