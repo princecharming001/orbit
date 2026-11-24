@@ -472,8 +472,20 @@ describe('drafting against the demo data', () => {
       expect(contextText(ctx)).toContain(line.slice(0, 30));
     }
     // someone the student has never written to: nothing
-    const stranger = (await people((p) => p.isHuman && !p.interactionCount))[0]!;
+    const stranger: Person = {
+      ...chloe,
+      id: newId('p'),
+      displayName: 'Noor Haddad',
+      firstName: 'Noor',
+      lastName: 'Haddad',
+      nameNormalized: 'noor haddad',
+      emails: ['noor.haddad@example.com'],
+      primaryEmail: 'noor.haddad@example.com',
+      interactionCount: 0,
+    };
+    await db.people.put(stranger);
     expect((await buildDraftContext(user, stranger, 'outreach', 'gmail')).conversation).toBeUndefined();
+    await db.people.delete(stranger.id);
   });
 
   it('a reply asking for the resume and the teams gets both before any times (EG-03)', async () => {
