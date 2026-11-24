@@ -126,7 +126,7 @@ describe('find_people never refuses', () => {
     const m = (modelResult('find_people', env) as { data: { results: { knownPersonId?: string }[] } }).data;
     expect(m.results.every((r) => !r.knownPersonId)).toBe(true);
     expect(m.results).toHaveLength(10);
-    // picked people can be added like LinkedIn finds, saved to contact
+    // picked people can be saved to People like LinkedIn finds
     const ctx = makeCtx(user, { caller: 'ui' });
     const ask = await execute('add_sourced', { recommendationIds: [items[0]!.id] }, ctx);
     const added = await execute(
@@ -134,7 +134,8 @@ describe('find_people never refuses', () => {
       { recommendationIds: [items[0]!.id] },
       { ...ctx, confirmation: ask.confirmationId, toolUseId: nextToolUseId() },
     );
-    expect(added.summary).toMatch(/saved to contact/);
+    expect(added.summary).toMatch(/^Saved .+ to People/);
+    expect(added.summary).not.toMatch(/to contact/);
   }, 60_000);
 
   it('a copy with no account and no demo goes to the web instead of refusing', async () => {

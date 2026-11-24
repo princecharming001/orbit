@@ -5,8 +5,10 @@
  * that says only what the server knows. Flat sections on white space: no cards, no rules between them.
  */
 import type { Friend, FriendInvite } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Link2, Mail } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { db } from '../../db/schema';
 import { Avatar, Button, cx, Skeleton, useToast } from '../../ui';
 import { NameLink } from './Discover';
 import { friendStatus } from './FriendRow';
@@ -82,18 +84,14 @@ function PersonRow({
   /** someone known only by an address: a quiet mail tile, and the address with its domain set back */
   address?: boolean;
 }) {
-  const picture = address ? (
-    <span
-      data-shape="square"
-      className="flex shrink-0 items-center justify-center rounded-[12px] border border-line-2 bg-canvas-2 text-ink-3"
-      style={{ width: PHOTO, height: PHOTO }}
-      aria-hidden
-    >
-      <Mail className="h-5 w-5" strokeWidth={1.5} />
-    </span>
-  ) : (
-    <Avatar name={name} src={photo ?? undefined} id={seed} size={PHOTO} shape="square" />
-  );
+  const picture =
+    address && photo ? (
+      <AddressPhoto src={photo} name={name} />
+    ) : address ? (
+      <MailTile />
+    ) : (
+      <Avatar name={name} src={photo ?? undefined} id={seed} size={PHOTO} shape="square" />
+    );
   const at = address ? name.indexOf('@') : -1;
   return (
     <li className="flex items-center gap-3.5 min-w-0" data-testid={testId}>
@@ -372,6 +370,69 @@ export function RequestsSection({
   );
 }
 
+/** The quiet tile for an address with no photo. */
+function MailTile() {
+  return (
+    <span
+      data-shape="square"
+      className="flex shrink-0 items-center justify-center rounded-[12px] border border-line-2 bg-canvas-2 text-ink-3"
+      style={{ width: PHOTO, height: PHOTO }}
+      aria-hidden
+    >
+      <Mail className="h-5 w-5" strokeWidth={1.5} />
+    </span>
+  );
+}
+
+/** A photo found for an address; the mail tile when it does not load (no Gravatar, a broken link). */
+function AddressPhoto({ src, name }: { src: string; name: string }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) return <MailTile />;
+  return (
+    <img
+      data-shape="square"
+      src={src}
+      alt={name}
+      width={PHOTO}
+      height={PHOTO}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setBroken(true)}
+      className="shrink-0 rounded-[12px] object-cover"
+      style={{ width: PHOTO, height: PHOTO }}
+    />
+  );
+}
+
+/** The Gravatar photo for an address (SHA-256 of the trimmed, lowercased address); none answers 404, not a default. */
+export async function gravatarUrl(email: string, size = PHOTO * 2): Promise<string | undefined> {
+  const key = email.trim().toLowerCase();
+  if (!key.includes('@') || !globalThis.crypto?.subtle) return undefined;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `https://gravatar.com/avatar/${hex}?d=404&s=${size}`;
+}
+
+/**
+ * A photo for each address invited: the one Orbit already has for that person (their LinkedIn or Google photo), else
+ * their Gravatar, the public photo tied to an email address.
+ */
+function useAddressPhotos(emails: string[]): Record<string, string> {
+  const key = emails.join('|');
+  return (
+    useLiveQuery(async () => {
+      const out: Record<string, string> = {};
+      for (const e of emails) {
+        const lower = e.trim().toLowerCase();
+        const known = await db.people.where('emails').equals(lower).first();
+        const photo = known?.photoUrl ?? (await gravatarUrl(lower));
+        if (photo) out[lower] = photo;
+      }
+      return out;
+    }, [key]) ?? {}
+  );
+}
+
 /** What waits on the other side: a request to someone on Orbit, or an invite by email to someone who is not. */
 export function requestedLine(i: FriendInvite): string {
   if (i.name) return 'Request sent';
@@ -391,6 +452,9 @@ export function requestedTone(i: FriendInvite): 'wait' | 'ok' | 'idle' {
 export function RequestedSection({ pending }: { pending: FriendInvite[] }) {
   const [open, setOpen] = useState(false);
   const sent = pending.filter((p) => p.direction === 'out' && p.status === 'pending');
+  const photos = useAddressPhotos(
+    sent.filter((i) => !i.name && !i.avatarUrl && i.email).map((i) => i.email!),
+  );
   if (!sent.length) return null;
   const shown = open ? sent : sent.slice(0, RAIL_FOLDED);
   return (
@@ -412,7 +476,7 @@ export function RequestedSection({ pending }: { pending: FriendInvite[] }) {
           <PersonRow
             key={i.id}
             name={i.name ?? i.email ?? 'Someone'}
-            photo={i.avatarUrl}
+            photo={i.avatarUrl ?? (i.email ? photos[i.email.trim().toLowerCase()] : undefined)}
             seed={i.id}
             to={i.personId ? `/people/${i.personId}` : undefined}
             href={i.linkedinUrl}

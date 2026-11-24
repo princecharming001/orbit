@@ -89,6 +89,11 @@ async function featuresOffered(db2, envList3 = [], clock) {
   for (const f2 of await launchedFeatures(db2, clock)) if (!out.includes(f2)) out.push(f2);
   return out;
 }
+async function featuresShownTo(db2, envList3 = [], owner2 = false) {
+  const out = await featuresOffered(db2, envList3);
+  if (!owner2) return out;
+  return [...out, ...KNOWN_FEATURES.filter((f2) => !out.includes(f2))];
+}
 async function featureOffered(db2, feature, envList3 = []) {
   return (await featuresOffered(db2, envList3)).includes(feature);
 }
@@ -4018,7 +4023,7 @@ async function session(ctx) {
     expiresAt: t.expiresAt,
     user,
     isOwner: isOwner2({ env: ctx.env, userId }),
-    features: await featuresOffered(ctx.db, ctx.env.features ?? [])
+    features: await featuresShownTo(ctx.db, ctx.env.features ?? [], isOwner2({ env: ctx.env, userId }))
   });
 }
 async function refresh(ctx) {
@@ -4043,7 +4048,7 @@ async function me(ctx) {
   return json(200, {
     user,
     isOwner: isOwner2(ctx),
-    features: await featuresOffered(ctx.db, ctx.env.features ?? [])
+    features: await featuresShownTo(ctx.db, ctx.env.features ?? [], isOwner2(ctx))
   });
 }
 
@@ -17659,7 +17664,7 @@ async function attachAccount(db2, userId, a) {
         return { status: "conflict", accountPersonId: o.id, personId: a.personId };
   }
   return db2.begin(async (tx) => {
-    let folded;
+    let folded2;
     for (const o of own) {
       await moveStamped(tx, userId, a.platform, a.accountId, o.id, a.personId, {
         facts: "move",
@@ -17673,7 +17678,7 @@ async function attachAccount(db2, userId, a) {
                              and x.account_id = orbit.social_match_asks.account_id and x.person_id = ${a.personId}::uuid)`;
       if (leave) continue;
       await tx.sql`delete from orbit.people where id = ${o.id}::uuid and user_id = ${userId}::uuid`;
-      folded = o.id;
+      folded2 = o.id;
     }
     const [row] = await tx.sql`
       insert into orbit.social_links (user_id, platform, account_id, person_id, via, proof, score)
@@ -17739,10 +17744,10 @@ async function attachAccount(db2, userId, a) {
       personId: a.personId,
       via: a.via,
       ...a.proof ? { proof: a.proof } : {},
-      ...folded ? { folded } : {}
+      ...folded2 ? { folded: folded2 } : {}
     });
     await rescore(tx, userId, [a.personId], `attach:${row.id}`);
-    return { status: "attached", linkId: row.id, ...folded ? { folded } : {} };
+    return { status: "attached", linkId: row.id, ...folded2 ? { folded: folded2 } : {} };
   });
 }
 async function detachLink(db2, userId, linkId, now) {
@@ -20923,6 +20928,83 @@ async function linkedinSend(s, p) {
     invited: true,
     memberId: member
   };
+}
+var FIRST_DEGREE = /^(first_degree|distance_1|1)$/i;
+function inviteRefusal(status4, body2) {
+  const o = body2 && typeof body2 === "object" ? body2 : {};
+  const said = [o.type, o.title, o.detail, o.message].filter((x) => typeof x === "string").join(" ").toLowerCase();
+  if (/already[_ ]invited|already (sent|pending)|invitation (is )?(already|pending)/.test(said))
+    return "linkedin_already_invited";
+  if (/already[_ ]connected|is_relationship|already a (connection|relation)/.test(said))
+    return "linkedin_already_connected";
+  if (status4 === 429 || /cannot_resend|limit[_ ](exceeded|reached)|too[_ ]many|quota/.test(said))
+    return "linkedin_invite_limit";
+  if (status4 === 404 || /not_found|not found|invalid_recipient/.test(said)) return "no_linkedin_member";
+  return `unipile_${status4}`;
+}
+async function linkedinInvite(s, p) {
+  const base2 = (s.env.unipileBase ?? "").replace(/\/+$/, "");
+  if (!s.env.unipileKey || !base2) return { ok: false, retry: false, error: "unipile_unconfigured" };
+  const headers2 = { "X-API-KEY": s.env.unipileKey, accept: "application/json" };
+  const note2 = p.note?.trim() ?? "";
+  if (note2.length > LINKEDIN_NOTE_MAX2) return { ok: false, retry: false, error: "linkedin_note_too_long" };
+  let member = p.memberId ?? void 0;
+  if (!member && p.slug) {
+    if (s.targetTake && !(await s.targetTake(p.accountId, p.slug, "connect")).allowed)
+      return { ok: false, retry: true, error: "linkedin_busy" };
+    let res2;
+    try {
+      res2 = await s.fetch(
+        `${base2}/api/v1/users/${encodeURIComponent(p.slug)}?account_id=${encodeURIComponent(p.accountId)}&notify=false`,
+        { method: "GET", headers: headers2, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }
+      );
+    } catch {
+      return { ok: false, retry: true, error: "network" };
+    }
+    if (res2.status === 429 || res2.status >= 500) {
+      await res2.body?.cancel();
+      return { ok: false, retry: true, error: `unipile_${res2.status}` };
+    }
+    if (res2.ok) {
+      const j = await res2.json().catch(() => ({}));
+      member = j.provider_id || void 0;
+      if (member && (j.is_relationship === true || FIRST_DEGREE.test(String(j.network_distance ?? ""))))
+        return { ok: false, retry: false, error: "linkedin_already_connected", memberId: member };
+      if (member && String(j.invitation?.type ?? "").toUpperCase() === "SENT" && String(j.invitation?.status ?? "").toUpperCase() === "PENDING")
+        return { ok: false, retry: false, error: "linkedin_already_invited", memberId: member };
+    } else await res2.body?.cancel();
+  }
+  if (!member) return { ok: false, retry: false, error: "no_linkedin_member" };
+  const stop = await p.beforeInvite?.();
+  if (stop) return { ok: false, retry: false, error: stop, memberId: member };
+  let res;
+  try {
+    res = await s.fetch(`${base2}/api/v1/users/invite`, {
+      method: "POST",
+      headers: { ...headers2, "content-type": "application/json" },
+      body: JSON.stringify({
+        account_id: p.accountId,
+        provider_id: member,
+        ...note2 ? { message: note2 } : {}
+      }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+    });
+  } catch {
+    return { ok: false, retry: true, error: "network", ambiguous: true, memberId: member };
+  }
+  if (res.status >= 500) {
+    await res.body?.cancel();
+    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: true, memberId: member };
+  }
+  if (!res.ok)
+    return {
+      ok: false,
+      retry: false,
+      error: inviteRefusal(res.status, await res.json().catch(() => ({}))),
+      memberId: member
+    };
+  const b = await res.json().catch(() => ({}));
+  return { ok: true, invitationId: b.invitation_id ?? null, memberId: member };
 }
 
 // supabase/functions/_shared/sending/send.ts
@@ -25654,6 +25736,8 @@ function yearMonth(raw) {
   if (m) return `${m[1]}-${m[2].padStart(2, "0")}`;
   m = /^(\d{1,2})\/(\d{4})$/.exec(s);
   if (m) return `${m[2]}-${m[1].padStart(2, "0")}`;
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  if (m && Number(m[1]) >= 1 && Number(m[1]) <= 12) return `${m[3]}-${m[1].padStart(2, "0")}`;
   const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
   m = /^([a-z]{3})[a-z]*\.?\s+(\d{4})$/i.exec(s);
   if (m) {
@@ -25802,6 +25886,8 @@ var TABLE = {
   tableau: ["Tableau"],
   "power bi": ["Power BI", "PowerBI"],
   excel: ["Excel", "Microsoft Excel", "MS Excel"],
+  "google sheets": ["Google Sheets", "Sheets"],
+  powerpoint: ["PowerPoint", "Microsoft PowerPoint", "MS PowerPoint"],
   kubernetes: ["Kubernetes", "k8s"],
   docker: ["Docker"],
   terraform: ["Terraform"],
@@ -25854,6 +25940,18 @@ function canonicalSkill(name) {
   const f2 = fold2(name).replace(/[.,;:]+$/, "");
   return ALIAS.get(f2) ?? ALIAS.get(f2.replace(/\.js$/, "")) ?? f2;
 }
+function knownSkill(name) {
+  return Object.hasOwn(TABLE, canonicalSkill(name));
+}
+function splitSkillList(text4) {
+  const kept = [];
+  const held2 = text4.replace(WHOLE_TERMS, (m) => {
+    kept.push(m);
+    return `orbitwholeterm${kept.length - 1}x`;
+  });
+  return held2.split(/[,;|•·/]|\s+and\s+|\s+or\s+/i).map((p) => p.replace(/orbitwholeterm(\d+)x/g, (_m, i) => kept[Number(i)]).trim()).filter(Boolean);
+}
+var WHOLE_TERMS = /\b(?:A\/B|CI\/CD|UI\/UX|UX\/UI|TCP\/IP|I\/O|R&D|P&L|PL\/SQL|AR\/VR|AI\/ML|ML\/AI)\b/gi;
 function skillName(name) {
   const key2 = canonicalSkill(name);
   return TABLE[key2]?.[0] ?? name.trim();
@@ -25931,7 +26029,10 @@ var IMPLIES = [
   [["Tableau", "Power BI", "Looker"], ["Data visualization"]],
   [["AWS", "GCP", "Azure"], ["Cloud"]],
   [["Kubernetes", "Docker"], ["Containers"]],
-  [["Figma", "Sketch", "Adobe XD"], ["Prototyping"]]
+  [["Figma", "Sketch", "Adobe XD"], ["Prototyping"]],
+  [["Excel", "Google Sheets"], ["Spreadsheets"]],
+  [["PowerPoint", "Google Slides", "Keynote"], ["Presentations"]],
+  [["Stata", "SAS", "SPSS", "MATLAB"], ["Statistical software"]]
 ];
 var IMPLIED = /* @__PURE__ */ new Map();
 for (const [from, to] of IMPLIES)
@@ -26005,9 +26106,8 @@ var DEGREE_RANK = {
 function splitSkills(raw) {
   const out = [];
   for (const line of raw)
-    for (const part2 of line.replace(/^[^:]{1,30}:\s*/, "").split(/[,;|•·/]|\s+and\s+/)) {
-      const s = part2.replace(/\([^)]*\)/g, "").trim();
-      if (s && s.length <= 40) out.push(s);
+    for (const part2 of splitSkillList(line.replace(/^[^:]{1,30}:\s*/, "").replace(/\([^)]*\)/g, " "))) {
+      if (part2.length <= 40) out.push(part2);
     }
   return out;
 }
@@ -26307,7 +26407,7 @@ async function storeProposed(db2, userId, proposed) {
 }
 async function loadProfile(db2, userId) {
   const [r] = await db2.sql`
-    select profile, proposed, evidence_hash, wants_hash, updated_at from orbit.role_profiles
+    select profile, proposed, evidence_hash, wants_hash, updated_at, confirmed_at from orbit.role_profiles
      where user_id = ${userId}::uuid`;
   if (!r) return void 0;
   return {
@@ -26315,8 +26415,13 @@ async function loadProfile(db2, userId) {
     ...r.proposed ? { proposed: r.proposed } : {},
     evidenceHash: r.evidence_hash,
     wantsHash: r.wants_hash,
-    updatedAt: new Date(r.updated_at).toISOString()
+    updatedAt: new Date(r.updated_at).toISOString(),
+    confirmed: r.confirmed_at !== null
   };
+}
+async function confirmedProfile(db2, userId) {
+  const p = await loadProfile(db2, userId);
+  return p?.confirmed ? p : void 0;
 }
 var str3 = (v, max) => typeof v === "string" && v.trim() ? v.trim().slice(0, max) : void 0;
 var strs = (v, max, n) => Array.isArray(v) ? v.map((x) => str3(x, max)).filter((x) => !!x).slice(0, n) : [];
@@ -26416,10 +26521,11 @@ async function saveProfile2(db2, userId, raw, now) {
   const profile3 = cleanProfile(raw, now, await namesOf2(db2, userId));
   const h = await hashesOf(profile3);
   await db2.sql`
-    insert into orbit.role_profiles (user_id, profile, evidence_hash, wants_hash)
-    values (${userId}::uuid, ${profile3}::jsonb, ${h.evidenceHash}, ${h.wantsHash})
+    insert into orbit.role_profiles (user_id, profile, evidence_hash, wants_hash, confirmed_at)
+    values (${userId}::uuid, ${profile3}::jsonb, ${h.evidenceHash}, ${h.wantsHash}, ${now}::timestamptz)
     on conflict (user_id) do update set profile = excluded.profile, evidence_hash = excluded.evidence_hash,
-      wants_hash = excluded.wants_hash`;
+      wants_hash = excluded.wants_hash,
+      confirmed_at = coalesce(orbit.role_profiles.confirmed_at, excluded.confirmed_at)`;
   return await loadProfile(db2, userId);
 }
 
@@ -26761,7 +26867,9 @@ var FIT_WEIGHTS = {
     citizenship_no: 2,
     citizenship_ask: 5,
     place: 5,
-    thin: 7
+    // §6.4 drafted this at 7. A posting that says little cannot be called a good fit on paper, because there is
+    // little paper: at 7 it was the one cap under which a role still showed as a good fit (§6.7: none may)
+    thin: 6
   },
   /** fewer requirements than this and the posting "says little" */
   thinBelow: 3
@@ -26879,6 +26987,8 @@ function capsFor(reqs, profile3, job) {
       }
     }
   }
+  if (job?.level === "intern" && !studying)
+    add4({ kind: "graduation", label: "An internship, for current students" });
   if (job?.sponsorship === "none" && profile3.eligibility.needsSponsorship === true)
     add4({ kind: "sponsorship", label: "Does not sponsor visas" });
   if (job && job.remote !== "remote" && placeHits(job.places, profile3.wants.notPlaces))
@@ -26887,21 +26997,34 @@ function capsFor(reqs, profile3, job) {
   return caps;
 }
 
+// supabase/functions/_shared/roles/contracts.ts
+var TextLater = class extends Error {
+  constructor(reason2 = "later") {
+    super(reason2);
+    this.name = "TextLater";
+  }
+};
+
 // supabase/functions/_shared/roles/score.ts
 var READ_BATCH2 = 2;
 var REQUIREMENTS_PER_DAY = 2e3;
 var READS_PER_DAY = 200;
 var MAX_REQUIREMENTS = 12;
+var THIN_BELOW = 3;
+var FULL_POSTING_CHARS = 1500;
 var POSTING_CHARS = 8e3;
-var NOT_READ_NOTE = "Not read closely yet";
-var LIMIT_NOTE = "Not read closely yet. Today's limit is reached, so these are ranked by what Orbit can read without the model.";
+var NOT_READ_NOTE = "Orbit could not read some of these roles closely just now. They are ranked by what it can read without that.";
+var LIMIT_NOTE = "Today's limit for close reads is reached, so the rest are ranked by what Orbit can read without one. More are read tomorrow.";
 var ROLE_TIMEOUTS = { text: 6e3, requirements: 9e3, score: 12e3 };
 var BACKGROUND_TIMEOUTS = { text: 1e4, requirements: 45e3, score: 55e3 };
-var REQUIREMENTS_SYSTEM = `You read job postings for Orbit and list what each one asks of a candidate. For each posting (J1, J2, ...) list at most twelve requirements, the most important first:
+var REQUIREMENTS_SYSTEM = `You read job postings for Orbit and list what each one asks of a candidate. For each posting (J1, J2, ...) list at most twelve requirements, the most important first. Take them from the part of the posting that says what it asks for (requirements, qualifications, minimum, preferred, what you bring, who you are, what we look for). What the person will do in the role is not a requirement: use it only when the posting has no such part. One line of the posting is one requirement: a line that gives examples of one thing ("experimentation: A/B testing, concept sprints, iterating on data") is that one thing, not three. List every line that asks for something a resume can show, the work done before as well as the tools: "proven experience designing consumer mobile apps" is an experience requirement, and a full posting usually has five to ten.
 - kind: skill (a tool, language, framework, method or body of knowledge a resume can show: Python, SQL, Figma, user research, financial modeling, A/B testing), experience (work done before, years in a field), education (a degree or field of study), eligibility (citizenship, a security clearance, work authorization, no visa sponsorship, a graduation window).
-- Leave out traits and soft skills entirely (communication, collaboration, teamwork, learning quickly, curiosity, ownership, attention to detail, working with a mentor, interpersonal skills, passion). Leave out general use of AI tools unless the posting names a specific tool as a requirement.
+- Leave out traits and soft skills entirely (communication, collaboration, teamwork, learning quickly, curiosity, ownership, attention to detail, working with a mentor, interpersonal skills, passion). Leave out general use of AI tools ("proficiency with AI tools", "uses AI coding agents") unless the posting names a specific tool as a requirement. What a candidate sends with an application (a cover letter, a transcript) is not a requirement; a portfolio is how a skill is shown, so name the skill it must show ("a portfolio that shows visual craft" is "visual design").
+- An internship or a programme for students or new graduates asks for people who are studying: when it gives graduation dates ("graduating December 2027 or spring 2028", "2027 graduates", in the title too), that is an eligibility requirement, graduation_window, with gradFrom and gradTo.
 - need: must when the posting says required, minimum, must, or lists it as a qualification; nice when it says preferred, bonus, plus, nice to have.
 - name: a short name, the thing itself ("Python", "Figma", "2+ years in data analysis", "BS in Computer Science", "US citizenship"). When the posting accepts alternatives, join them with " or " ("Python or R", "Figma or Sketch"). Never a sentence ("Experience using design programs (Figma)" is "Figma").
+  When the posting gives examples of tools or languages ("a programming language such as Python, Java or C++", "tools like Cursor or Claude Code"), the requirement is those names joined with " or " ("Python or Java or C++"), never the category ("programming languages").
+- named: for a skill, true when it is one specific tool, language, framework or product by name (Python, SQL, Figma, Kafka, Excel, Kubernetes), false when it is a kind of work, a method or a category (spreadsheets, user research, financial modeling, distributed systems, data pipelines, statistical programs). False for every other kind.
 - quote: the posting's exact words for it, at most 20, copied character for character.
 - years: for experience, the years asked for; otherwise 0.
 - degree: for education, the lowest degree asked (high_school, associate, bachelor, master, phd, mba, jd, md); otherwise none.
@@ -26918,6 +27041,7 @@ var reqSchema = z9.object({
           need: z9.enum(["must", "nice"]),
           name: z9.string(),
           quote: z9.string(),
+          named: z9.boolean(),
           years: z9.number(),
           degree: z9.enum([
             "high_school",
@@ -26948,14 +27072,19 @@ var reqSchema = z9.object({
 var YM = /^\d{4}-\d{2}$/;
 var SOFT = /\b(communicat\w*|collaborat\w*|teamwork|team player|interpersonal|curious|curiosity|ownership|self[- ]starter|detail[- ]oriented|attention to detail|fast learner|learn(ing)? (quickly|new)|ability to learn|passion\w*|growth mindset|work(ing)? with (a )?mentor|problem[- ]solving|critical thinking|adaptab\w*|proactive|motivated|work ethic)\b/i;
 var isSoftSkill = (name) => SOFT.test(name);
+var AI_PRODUCT = /\b(cursor|copilot|claude|chatgpt|gpt|gemini|openai|v0|lovable|midjourney|langchain|hugging ?face|llama|bedrock|vertex)\b/i;
+var GENERAL_AI = /\bAI[- ]?(?:powered |assisted |coding |productivity )?(?:tools?|tooling|assistants?|agents?|workflows?)\b|\bleverag\w+ AI\b|\buse of AI\b/i;
+var SENT_WITH = /\b(cover letter|transcript|writing sample|references)\b/i;
+var isNotASkill = (name) => GENERAL_AI.test(name) && !AI_PRODUCT.test(name) || SENT_WITH.test(name);
 function settleRequirements(text4, raw) {
   const out = [];
   for (const r of raw) {
     const quote = verifyQuote(text4, r.quote);
     const name = plain2(r.name, 80);
     if (!quote || !name) continue;
-    if (r.kind === "skill" && isSoftSkill(name)) continue;
+    if (r.kind === "skill" && (isSoftSkill(name) || isNotASkill(name))) continue;
     const req = { kind: r.kind, need: r.need, name, quote };
+    if (r.kind === "skill") req.named = r.named === true;
     if (r.kind === "experience" && r.years > 0 && r.years < 40) req.years = Math.round(r.years);
     if (r.kind === "education" && r.degree !== "none") req.degree = r.degree;
     if (r.kind === "eligibility" && r.eligibility !== "none") req.eligibility = r.eligibility;
@@ -26975,10 +27104,12 @@ skills: for every requirement listed under the posting (R1, R2, ...), how the st
 - project: a project or course line uses it
 - listed: it is only named in their skills list or education
 - none: nothing in the student's lines shows it
-When a requirement accepts alternatives ("Figma or Sketch"), any one of them counts. Quote the student's words that name the skill itself.
+When a requirement accepts alternatives ("Figma or Sketch"), any one of them counts. For a tool or language by name (Python, Figma, Kafka), quote the student's words that name it: a line that does not name it does not show it. For a kind of work or a method (spreadsheets, user research, data pipelines), quote the line where they did it, whatever words it uses: a model built in Excel shows spreadsheets.
 experience: has the student done this kind of work? same (the same kind of role), related (a related kind), projects (only in projects or courses), none.
 education: does their degree, field and year fit what the posting asks? fits, close (a related field, or a year off), no, unsaid (the posting does not say).
-level: is the role at the student's level? at, below (below them), stretch (one step up), far (well above). The listing's own level, when it gives one, is shown as a hint.
+level: is the role at the student's level? at, below (below them), stretch (one step up), far (well above). The listing's own level, when it gives one, is shown as a hint. A minimum the person passes is at their level: a role that asks for "2+ years" is at the level of someone with five. Below is for a role plainly meant for people earlier on than they are (an internship or a new graduate programme for someone with years of full-time work, a junior role for a senior person).
+
+Quote the strongest line: when a job line shows the skill, quote the job line, not the skills list.
 
 Every answer other than none and unsaid needs two quotes: you, the exact words (at most 15) copied character for character from the student's lines, and posting, the exact words (at most 15) copied from that posting. An answer whose quote is not really in the text counts as the weakest answer, so leave a quote empty rather than invent one.
 
@@ -27012,8 +27143,13 @@ var lower = (a, b) => SKILL_ORDER.indexOf(a) < SKILL_ORDER.indexOf(b) ? a : b;
 function skillAlternatives(name) {
   const inner = /\(([^)]*)\)/.exec(name)?.[1];
   const outer = name.replace(/\([^)]*\)/g, " ");
-  const parts = [outer, ...inner ? [inner] : []].flatMap((p) => p.split(/\s+or\s+|\/|,|;|\s+and\s+/i));
-  return [...new Set(parts.map((p) => p.trim()).filter((p) => p.length > 0))];
+  const parts = [outer, ...inner ? [inner] : []].flatMap(splitSkillList);
+  return [...new Set(parts)];
+}
+function mustBeNamed(r) {
+  const alts = skillAlternatives(r.name);
+  if (alts.some(knownSkill)) return true;
+  return r.named === true;
 }
 function quoteNames(quote, name) {
   const q = quote.toLowerCase();
@@ -27031,6 +27167,16 @@ function wholeSentences(text4, max) {
   if (end2 > max * 0.25) return cut.slice(0, end2 + 1).replace(/;$/, ".");
   return "";
 }
+function namedEvidence(ev, name) {
+  const alts = skillAlternatives(name);
+  const find2 = (text4) => text4.split("\n").find((l) => !l.startsWith("Job: ") && alts.some((a) => skillShownIn(l, a)));
+  const clip2 = (l) => (l.length > 240 ? `${l.slice(0, 237).trimEnd()}...` : l).trim();
+  const work = find2(ev.work);
+  if (work) return { answer: "work", line: clip2(work) };
+  const project = find2(ev.project);
+  if (project) return { answer: "project", line: clip2(project) };
+  return find2(ev.listed) ? { answer: "listed" } : { answer: "none" };
+}
 function whereSkill(ev, you) {
   if (verifyQuote(ev.work, you)) return "work";
   if (verifyQuote(ev.project, you)) return "project";
@@ -27041,6 +27187,31 @@ var label = (s, prefix) => {
   const m = new RegExp(`^\\s*${prefix}\\s*(\\d+)`, "i").exec(s);
   return m ? Number(m[1]) : void 0;
 };
+var folded = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function answersFor(roles, titles) {
+  const out = titles.map(() => void 0);
+  const used = /* @__PURE__ */ new Set();
+  for (const role of roles) {
+    const n = label(role.posting, "J");
+    if (n !== void 0 && n >= 1 && n <= titles.length && !out[n - 1]) {
+      out[n - 1] = role;
+      used.add(role);
+    }
+  }
+  for (const [i, title] of titles.entries()) {
+    if (out[i]) continue;
+    const want = folded(title);
+    const hit = want ? roles.find((r) => !used.has(r) && folded(r.posting).includes(want)) : void 0;
+    if (hit) {
+      out[i] = hit;
+      used.add(hit);
+    }
+  }
+  const left = roles.filter((r) => !used.has(r));
+  const open = out.flatMap((x, i) => x ? [] : [i]);
+  if (left.length === 1 && open.length === 1) out[open[0]] = left[0];
+  return out;
+}
 function settleAnswers(m, reqs, profile3, ev, posting, job) {
   const skillReqs = reqs.filter((r) => r.kind === "skill");
   const byLabel = /* @__PURE__ */ new Map();
@@ -27055,9 +27226,16 @@ function settleAnswers(m, reqs, profile3, ev, posting, job) {
     let you;
     if (a && a.answer !== "none") {
       const q = verifyQuote(ev.all, a.you);
-      if (q && quoteNames(q, r.name)) {
+      if (q && (!mustBeNamed(r) || quoteNames(q, r.name))) {
         answer3 = lower(a.answer, whereSkill(ev, q));
         if (answer3 !== "none") you = q;
+      }
+    }
+    if (mustBeNamed(r)) {
+      const best = namedEvidence(ev, r.name);
+      if (SKILL_ORDER.indexOf(best.answer) > SKILL_ORDER.indexOf(answer3)) {
+        answer3 = best.answer;
+        you = best.line;
       }
     }
     if (answer3 === "none" && profile3.skills.some((s) => skillAlternatives(r.name).some((alt) => showsSkill(s.name, alt))))
@@ -27150,7 +27328,11 @@ function matchOf(r, job, current) {
   } else if (current?.profile) match.roughFit = roughFitOf(job, current.profile);
   return match;
 }
-var withTimeout = (p, ms) => Promise.race([p.catch(() => void 0), new Promise((r) => setTimeout(() => r(void 0), ms))]);
+var LATER = Symbol("read later");
+var textNow = (p, ms) => Promise.race([
+  p.catch((e) => e instanceof TextLater ? LATER : void 0),
+  new Promise((r) => setTimeout(() => r(LATER), ms))
+]);
 function listingText(j) {
   return [
     j.title,
@@ -27174,12 +27356,18 @@ async function readRows(s, deps2, userId, stored2, rows, timeouts = ROLE_TIMEOUT
   const access = await linkedinAccess(s, userId).catch(() => void 0);
   const net = netOf(s);
   const items = [];
+  const notes2 = /* @__PURE__ */ new Set();
   await Promise.all(
     rows.map(async (row) => {
       const jr = jobs.get(row.job_id);
       if (!jr) return;
       const job = jobOf(jr);
-      const text4 = await withTimeout(deps2.sources.text(s.db, net, job.id, access), timeouts.text);
+      const text4 = await textNow(deps2.sources.text(s.db, net, job.id, access), timeouts.text);
+      if (text4 === LATER) {
+        notes2.add(NOT_READ_NOTE);
+        out.unread.push(await release(s.db, { row, job, posting: "", thin: true }, stored2));
+        return;
+      }
       const body2 = text4?.trim();
       const posting = body2 ? `${job.title}${job.team ? `
 Team: ${job.team}` : ""}
@@ -27191,7 +27379,6 @@ ${body2}`.slice(0, POSTING_CHARS) : listingText(job);
   const ev = evidenceOf(profile3);
   const batches = [];
   for (let i = 0; i < items.length; i += READ_BATCH2) batches.push(items.slice(i, i + READ_BATCH2));
-  const notes2 = /* @__PURE__ */ new Set();
   await Promise.all(
     batches.map(async (b) => {
       const reqNote = await requirementsFor(s, b, timeouts);
@@ -27214,14 +27401,13 @@ ${body2}`.slice(0, POSTING_CHARS) : listingText(job);
         for (const it of ready) out.unread.push(await release(s.db, it, stored2));
         return;
       }
-      const byLabel = /* @__PURE__ */ new Map();
-      for (const role of r.data.roles) {
-        const n = label(role.posting, "J");
-        if (n !== void 0 && !byLabel.has(n)) byLabel.set(n, role);
-      }
+      const matched = answersFor(
+        r.data.roles,
+        ready.map((it) => it.job.title)
+      );
       for (const [i, it] of ready.entries()) {
-        let answered = byLabel.get(i + 1);
-        if (!answered && ready.length > 1) {
+        let answered = matched[i];
+        if (!answered) {
           const again = await s.claude.structured({
             task: "role_score",
             system: SCORE_SYSTEM,
@@ -27230,7 +27416,7 @@ ${body2}`.slice(0, POSTING_CHARS) : listingText(job);
             userId,
             timeoutMs: timeouts.score
           });
-          if (again.ok) answered = again.data.roles[0];
+          if (again.ok) answered = answersFor(again.data.roles, [it.job.title])[0];
         }
         if (!answered) {
           out.failed++;
@@ -27329,7 +27515,24 @@ ${fence.wrap("posting", it.posting)}`,
       if (!r.ok) return "budgetExceeded" in r || "unconfigured" in r ? LIMIT_NOTE : NOT_READ_NOTE;
       const got = r.data.postings.find((p) => label(p.posting, "J") === 1) ?? r.data.postings[0];
       if (!got) return NOT_READ_NOTE;
-      const reqs = settleRequirements(it.posting, got.requirements);
+      let reqs = settleRequirements(it.posting, got.requirements);
+      if (reqs.length < THIN_BELOW && it.posting.length >= FULL_POSTING_CHARS) {
+        const second = makeFence();
+        const again = await s.claude.structured({
+          task: "role_requirements",
+          system: REQUIREMENTS_SYSTEM,
+          user: `${second.rule}
+
+J1: ${it.job.title} at ${it.job.companyName}
+${second.wrap("posting", it.posting)}`,
+          schema: reqSchema,
+          userId: null,
+          timeoutMs: timeouts.requirements
+        });
+        const more2 = again.ok ? again.data.postings.find((p) => label(p.posting, "J") === 1) ?? again.data.postings[0] : void 0;
+        const fuller = more2 ? settleRequirements(it.posting, more2.requirements) : [];
+        if (fuller.length > reqs.length) reqs = fuller;
+      }
       await s.db.sql`
         update orbit_private.jobs set requirements = ${JSON.stringify(reqs)}::jsonb, requirements_hash = ${it.hash}
          where id = ${it.job.id}::uuid`;
@@ -27355,6 +27558,8 @@ async function claimRows(db2, userId, o) {
      where m.id in (
        select x.id from orbit.role_matches x
         where x.user_id = ${userId}::uuid and x.state = 'to_read' and x.status <> 'dismissed'
+          -- a role taken down since it was listed is not read: it has left the table
+          and not exists (select 1 from orbit_private.jobs j where j.id = x.job_id and j.closed_at is not null)
           and (${o.searchId ?? null}::uuid is null or x.search_id = ${o.searchId ?? null}::uuid)
           and (${o.ids ? 1 : 0}::int = 0 or x.id = any(${o.ids ?? []}::uuid[]))
           and (x.read_at is null or x.read_at < ${stale}::timestamptz)
@@ -27390,11 +27595,11 @@ async function refit(db2, userId, stored2) {
 var SEARCHES_PER_DAY = 3;
 var MORE_SIZE = 10;
 var SEARCHES_USED_NOTE = "You have run three searches today. These are your latest results, and more are read tonight.";
-var PROFILE_CHANGED_NOTE = "Your profile changed. Run the search again to read roles against it.";
+var SEARCH_REPLACED = "That search was replaced by a newer one.";
 var NO_PROFILE = "Read your resume or LinkedIn profile first, so Orbit has something to match.";
 var dayStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 async function needProfile(db2, userId) {
-  const p = await loadProfile(db2, userId);
+  const p = await confirmedProfile(db2, userId);
   if (!p) throw new HttpError(409, "no_profile", NO_PROFILE);
   return p;
 }
@@ -27448,12 +27653,28 @@ async function withJobs(db2, rows, current) {
     return job ? [matchOf(row, job, current)] : [];
   });
 }
+async function restOf(db2, userId, searchId, stored2) {
+  const rows = (await matchesWhere(db2, userId, { searchId, open: true })).filter(
+    (r) => r.row.state === "to_read" || r.row.state === "failed"
+  );
+  if (!rows.length) return [];
+  const texts = new Map(
+    (await db2.sql`
+        select id::text as id, text from orbit_private.jobs
+         where id = any(${rows.map((r) => r.row.job_id)}::uuid[])`).map((r) => [r.id, r.text])
+  );
+  const matches = await withJobs(db2, rows, { evidenceHash: stored2.evidenceHash, profile: stored2.profile });
+  return matches.map(
+    (m) => m.fit ? m : { ...m, roughFit: roughFitOf(m.job, stored2.profile, texts.get(m.job.id) ?? void 0) }
+  );
+}
 async function counts(db2, searchId, evidenceHash) {
   const [c] = await db2.sql`
     select count(*)::int as listed,
-           count(*) filter (where state = 'read' and evidence_hash = ${evidenceHash})::int as read,
-           count(*) filter (where state = 'to_read' and status <> 'dismissed')::int as left
-      from orbit.role_matches where search_id = ${searchId}::uuid`;
+           count(*) filter (where m.state = 'read' and m.evidence_hash = ${evidenceHash})::int as read,
+           count(*) filter (where m.state = 'to_read' and m.status <> 'dismissed')::int as left
+      from orbit.role_matches m join orbit_private.jobs j on j.id = m.job_id
+     where m.search_id = ${searchId}::uuid and j.closed_at is null`;
   return c ?? { listed: 0, read: 0, left: 0 };
 }
 async function respond2(s, userId, search5, stored2, extra = {}) {
@@ -27476,16 +27697,10 @@ async function respond2(s, userId, search5, stored2, extra = {}) {
       }),
       { evidenceHash: stored2.evidenceHash }
     );
-    if (!s.claude.configured && !done2) {
-      const rough = await withJobs(
-        s.db,
-        (await matchesWhere(s.db, userId, { searchId: search5.id, open: true })).filter(
-          (r) => r.row.state === "to_read"
-        ),
-        { evidenceHash: stored2.evidenceHash, profile: stored2.profile }
-      );
+    if (done2 || !s.claude.configured || extra.over) {
+      const rough = await restOf(s.db, userId, search5.id, stored2);
       matches = [...matches, ...rough];
-      note2 ??= NOT_READ_NOTE;
+      if (rough.length && (!s.claude.configured || extra.over)) note2 ??= NOT_READ_NOTE;
     }
   }
   return {
@@ -27493,7 +27708,7 @@ async function respond2(s, userId, search5, stored2, extra = {}) {
     matches,
     listed: c.listed,
     read: c.read,
-    done: done2 || !s.claude.configured,
+    done: done2 || !s.claude.configured || !!extra.over,
     coverage: await coverageOf(s.db, !!search5.sources?.linkedin),
     ...note2 ? { note: note2 } : {}
   };
@@ -27512,7 +27727,12 @@ async function startSearch(s, deps2, userId, req = {}) {
        where user_id = ${userId}::uuid and created_at >= ${dayStart(now)}::timestamptz
          and coalesce((sources->>'full')::boolean, false)`;
     if ((c?.n ?? 0) >= SEARCHES_PER_DAY && latest)
-      return respond2(s, userId, latest, stored2, { note: SEARCHES_USED_NOTE });
+      return respond2(s, userId, latest, stored2, {
+        note: SEARCHES_USED_NOTE,
+        // the latest search is for other evidence (the profile changed after today's third): nothing of it can be
+        // read against this profile, so the browser is told to stop and not to ask for more
+        ...latest.evidence_hash !== stored2.evidenceHash || latest.status === "dropped" ? { over: true } : {}
+      });
   } else await refit(s.db, userId, stored2);
   const profile3 = stored2.profile;
   const linkedin = await linkedinRoles(s, deps2.sources, userId, profile3).catch(() => ({
@@ -27538,25 +27758,13 @@ async function more(s, deps2, userId, searchId) {
       from orbit.role_searches where id = ${searchId}::uuid and user_id = ${userId}::uuid`;
   if (!search5) throw new HttpError(404, "not_found", "no such search");
   const stored2 = await needProfile(s.db, userId);
-  const coverage = await coverageOf(s.db, !!search5.sources?.linkedin);
   if (search5.status === "dropped" || search5.evidence_hash !== stored2.evidenceHash)
-    return {
-      searchId,
-      matches: [],
-      listed: search5.listed,
-      read: 0,
-      done: true,
-      coverage,
-      note: PROFILE_CHANGED_NOTE
-    };
+    throw new HttpError(404, "search_replaced", SEARCH_REPLACED);
+  const coverage = await coverageOf(s.db, !!search5.sources?.linkedin);
   const now = s.now();
   const used = await readsToday2(s.db, userId, now);
   if (used >= READS_PER_DAY || !s.claude.configured) {
-    const rough = await withJobs(
-      s.db,
-      (await matchesWhere(s.db, userId, { searchId, open: true })).filter((r) => r.row.state === "to_read"),
-      { evidenceHash: stored2.evidenceHash, profile: stored2.profile }
-    );
+    const rough = await restOf(s.db, userId, searchId, stored2);
     const c = await counts(s.db, searchId, stored2.evidenceHash);
     return {
       searchId,
@@ -27573,10 +27781,8 @@ async function more(s, deps2, userId, searchId) {
     const [busy] = await s.db.sql`
       select count(*)::int as n from orbit.role_matches
        where search_id = ${searchId}::uuid and state = 'to_read' and read_at > ${new Date(now.getTime() - CLAIM_MS)}::timestamptz`;
-    if (search5.error && !busy?.n) {
-      const res2 = await respond2(s, userId, search5, stored2, { note: NOT_READ_NOTE });
-      return { ...res2, done: true };
-    }
+    if (search5.error && !busy?.n)
+      return respond2(s, userId, search5, stored2, { note: search5.error, over: true });
     if (!busy?.n) {
       const rows2 = await claimRows(s.db, userId, { searchId, n, now });
       if (rows2.length)
@@ -27598,8 +27804,8 @@ async function more(s, deps2, userId, searchId) {
   });
   return out.unread.length ? { ...res, done: true } : res;
 }
-async function list7(s, userId, view2 = "matches") {
-  const stored2 = await loadProfile(s.db, userId);
+async function list7(s, userId, view2 = "matches", o = {}) {
+  const stored2 = await confirmedProfile(s.db, userId);
   const latest = await latestSearch(s.db, userId);
   const coverage = latest ? await coverageOf(s.db, !!latest.sources?.linkedin) : void 0;
   if (!stored2) return { matches: [], ...latest ? { searchId: latest.id } : {} };
@@ -27612,15 +27818,21 @@ async function list7(s, userId, view2 = "matches") {
       open: true
     })
   );
+  const matches = await withJobs(s.db, rows, { evidenceHash: stored2.evidenceHash, profile: stored2.profile });
+  if (view2 === "matches" && o.rest && latest && latest.status !== "dropped" && latest.evidence_hash === stored2.evidenceHash) {
+    const have = new Set(matches.map((m) => m.id));
+    for (const m of await restOf(s.db, userId, latest.id, stored2)) if (!have.has(m.id)) matches.push(m);
+  }
   return {
-    matches: await withJobs(s.db, rows, { evidenceHash: stored2.evidenceHash, profile: stored2.profile }),
+    matches,
     ...latest ? { searchId: latest.id } : {},
     ...coverage ? { coverage } : {},
     profileAt: stored2.updatedAt
   };
 }
 async function scoreOne(s, deps2, userId, req) {
-  const stored2 = await needProfile(s.db, userId);
+  const stored2 = await confirmedProfile(s.db, userId);
+  if (!stored2) return { problem: NO_PROFILE };
   let listing;
   const pasted = req.text?.trim();
   if (pasted) {
@@ -27689,9 +27901,15 @@ async function act(s, userId, b) {
     [id, userId, status4, reason2, s.now()]
   );
   if (!row) throw new HttpError(404, "not_found", "no such role");
-  const stored2 = await loadProfile(s.db, userId);
+  const stored2 = await confirmedProfile(s.db, userId);
   const [job] = await jobsById(s.db, [row.job_id]);
-  return { match: matchOf(row, jobOf(job), stored2 ? { evidenceHash: stored2.evidenceHash } : void 0) };
+  return {
+    match: matchOf(
+      row,
+      jobOf(job),
+      stored2 ? { evidenceHash: stored2.evidenceHash, profile: stored2.profile } : void 0
+    )
+  };
 }
 
 // packages/core/src/roles/level.ts
@@ -35845,7 +36063,8 @@ async function sha256(text4) {
 var metaStr = (m, k) => typeof m?.[k] === "string" ? m[k] : void 0;
 async function intake(l, o) {
   const title = l.title?.trim().replace(/\s+/g, " ");
-  if (!title || !l.url || !l.externalId || !l.companyName?.trim()) return void 0;
+  if (!title || !l.url && l.source !== "posting" || !l.externalId || !l.companyName?.trim())
+    return void 0;
   const text4 = cleanText(l.text);
   const lang = (l.language ?? "").toLowerCase().slice(0, 2);
   if (lang && lang !== "en") return void 0;
@@ -36017,7 +36236,7 @@ async function keepListings(db2, listings, o = {}) {
     const byExt = new Map(existing.map((e) => [`${e.source}:${e.external_id}`, e]));
     const groups = /* @__PURE__ */ new Map();
     for (const r of boardRows) {
-      const k = `${r.board_id ?? r.source}|${keyOf2(r)}`;
+      const k = `${r.board_id ?? `${r.source}:${r.company_key}`}|${keyOf2(r)}`;
       const g = groups.get(k);
       if (g) g.push(r);
       else groups.set(k, [r]);
@@ -36209,7 +36428,8 @@ async function readCapped(res, maxBytes) {
     const bytes = new TextEncoder().encode(text4).length;
     return bytes > maxBytes ? bytes : { text: text4, bytes };
   }
-  const chunks3 = [];
+  const decoder = new TextDecoder();
+  const parts = [];
   let size = 0;
   for (; ; ) {
     const { done: done2, value } = await reader.read();
@@ -36219,15 +36439,10 @@ async function readCapped(res, maxBytes) {
       await reader.cancel().catch(() => void 0);
       return size;
     }
-    chunks3.push(value);
+    parts.push(decoder.decode(value, { stream: true }));
   }
-  const all = new Uint8Array(size);
-  let at = 0;
-  for (const c of chunks3) {
-    all.set(c, at);
-    at += c.length;
-  }
-  return { text: new TextDecoder().decode(all), bytes: size };
+  parts.push(decoder.decode());
+  return { text: parts.join(""), bytes: size };
 }
 async function askText(net, url, o = {}) {
   const retries = o.retries ?? 2;
@@ -36705,11 +36920,12 @@ function workdayPosted(postedOn, now) {
   const n = /(\d+)\+?\s*days?/.exec(t);
   return n ? day3(Number(n[1])) : void 0;
 }
-async function readWorkdayJob(net, token2, path) {
+async function readWorkdayJob(net, token2, path, o = {}) {
   const w = workdayParts(token2);
   if (!w) return fail("bad_shape", "not a Workday token");
   const got = await askJson(net, `https://${w.host}/wday/cxs/${w.tenant}/${w.site}${path}`, {
-    maxBytes: 2e6
+    maxBytes: 2e6,
+    ...o.retries !== void 0 ? { retries: o.retries } : {}
   });
   if (!got.ok) return got;
   const info = obj2(obj2(got.value)?.jobPostingInfo);
@@ -36744,6 +36960,7 @@ async function count(db2, now, kind, n = 1) {
 
 // supabase/functions/_shared/roles/boards.ts
 var DAY13 = 864e5;
+var RATE_LIMIT_RETRY_MS = 3 * 36e5;
 var UNSEEN_CLOSE_MS = 7 * DAY13;
 var READ_MS = {
   greenhouse: 4e3,
@@ -36846,6 +37063,24 @@ async function linkedinJob(net, access, id) {
 // supabase/functions/_shared/roles/sources.ts
 var TEXT_FRESH_MS = 7 * 864e5;
 var PAGE_MAX_BYTES = 15e5;
+var WORKDAY_TEXT_GAP_MS = 800;
+var WORKDAY_TEXT_PAUSE_MS = 12e4;
+var workdayLine = Promise.resolve();
+var workdayPausedUntil = 0;
+var WORKDAY_BUSY = () => fail("rate_limited", "Workday asked to slow down", 429);
+function workdayDetail(net, token2, path) {
+  if (net.now().getTime() < workdayPausedUntil) return Promise.resolve(WORKDAY_BUSY());
+  const mine = workdayLine.then(async () => {
+    if (net.now().getTime() < workdayPausedUntil) return WORKDAY_BUSY();
+    const got = await readWorkdayJob(net, token2, path, { retries: 0 });
+    if (!got.ok && got.reason === "rate_limited")
+      workdayPausedUntil = net.now().getTime() + WORKDAY_TEXT_PAUSE_MS;
+    else await sleepFor(net)(WORKDAY_TEXT_GAP_MS);
+    return got;
+  });
+  workdayLine = mine.catch(() => void 0);
+  return mine;
+}
 function jobLdOf(html) {
   for (const b of html.matchAll(
     /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
@@ -36979,7 +37214,7 @@ async function readUrlWith(net, url, linkedin, depth) {
       }
       case "workday": {
         if (!board.path) break;
-        const got = await readWorkdayJob(net, board.token, board.path);
+        const got = await workdayDetail(net, board.token, board.path);
         if (got.ok)
           return {
             source: "workday",
@@ -36994,6 +37229,10 @@ async function readUrlWith(net, url, linkedin, depth) {
             meta: { path: board.path, timeType: got.value.timeType }
           };
         if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
+        if (got.reason === "rate_limited")
+          return {
+            problem: "Workday is busy just now. Try again in a few minutes, or paste the posting's text."
+          };
         break;
       }
       case "smartrecruiters": {
@@ -37061,7 +37300,7 @@ async function readText(net, j, linkedin) {
     case "workday": {
       const path = typeof j.meta?.path === "string" ? j.meta.path : fromUrl?.path;
       if (!token2 || !path) break;
-      const got = await readWorkdayJob(net, token2, path);
+      const got = await workdayDetail(net, token2, path);
       return got.ok ? { ...got, value: { text: got.value.text, places: got.value.places, remote: got.value.remote } } : got;
     }
     case "smartrecruiters": {
@@ -37120,6 +37359,8 @@ async function text3(db2, net, jobId, linkedin) {
   if (!got.ok) {
     if (got.reason === "not_found")
       await db2.sql`update orbit_private.jobs set closed_at = coalesce(closed_at, ${now}::timestamptz) where id = ${j.id}::uuid`;
+    if (!j.text && (got.reason === "rate_limited" || got.reason === "network" || got.reason === "server"))
+      throw new TextLater(got.reason);
     return j.text ?? void 0;
   }
   const cleaned = cleanText(got.value.text);
@@ -37206,7 +37447,10 @@ async function profile(ctx) {
   }
   if (b.get === true) {
     const stored2 = await loadProfile(ctx.db, ctx.userId);
-    const out = stored2 ? { profile: stored2.profile, ...stored2.proposed ? { proposed: stored2.proposed } : {} } : {};
+    const out = stored2 ? {
+      ...stored2.confirmed ? { profile: stored2.profile } : {},
+      ...stored2.proposed ? { proposed: stored2.proposed } : {}
+    } : {};
     return json(200, out);
   }
   throw badRequest("read, save or get is required");
@@ -37222,7 +37466,7 @@ async function moreRoute(ctx) {
 async function listRoute(ctx) {
   const b = await body(ctx, true);
   const view2 = b.view === "saved" ? "saved" : "matches";
-  return json(200, await list7(ctx.services(), ctx.userId, view2));
+  return json(200, await list7(ctx.services(), ctx.userId, view2, { rest: b.rest === true }));
 }
 async function score(ctx) {
   const b = await body(ctx);
@@ -38920,6 +39164,19 @@ async function mergePeople(db2, userId, survivor, loser, o = {}) {
       p
     );
     await tx.query(
+      `update orbit.merge_suggestions m
+          set person_a = case when m.person_a = $2::uuid then $3::uuid else m.person_a end,
+              person_b = case when m.person_b = $2::uuid then $3::uuid else m.person_b end
+        where m.user_id = $1::uuid and m.status = 'open'
+          and (m.person_a = $2::uuid or m.person_b = $2::uuid)
+          and not exists (
+            select 1 from orbit.merge_suggestions o
+             where o.user_id = m.user_id and o.status = 'open' and o.id <> m.id
+               and $3::uuid in (o.person_a, o.person_b)
+               and (case when m.person_a = $2::uuid then m.person_b else m.person_a end) in (o.person_a, o.person_b))`,
+      p.slice(0, 3)
+    );
+    await tx.query(
       `delete from orbit.merge_suggestions where user_id = $1::uuid and status = 'open'
           and (person_a = $2::uuid or person_b = $2::uuid)`,
       p.slice(0, 2)
@@ -39460,6 +39717,24 @@ function socialPatternRoute(path) {
   if (lookup2) return { method: "GET", auth: true, run: (ctx) => lookupGet(ctx, lookup2[1].toLowerCase()) };
   return void 0;
 }
+
+// packages/core/src/server/api.ts
+var SOURCE_CONNECT_REASONS = {
+  already_requested: "You already sent them a connection request. Saved to People.",
+  already_connected: "You are already connected on LinkedIn. Saved to People.",
+  no_profile: "Orbit has no LinkedIn profile for them. Saved to People instead.",
+  profile_not_found: "LinkedIn could not find their profile. Saved to People instead.",
+  linkedin_not_active: "LinkedIn is not connected. Saved to People instead.",
+  daily_limit: "Today's limit on connection requests is reached. Saved to People instead.",
+  weekly_limit: "LinkedIn's weekly limit on connection requests is reached. Saved to People instead.",
+  linkedin_limit: "LinkedIn says you have reached its limit on connection requests. Saved to People instead.",
+  do_not_contact: "They asked not to be contacted, so no request was sent. Saved to People.",
+  minor: "Their profile reads as someone under 18, so no request was sent. Saved to People.",
+  busy: "LinkedIn is busy just now, so no request was sent. Saved to People instead.",
+  unconfirmed: "LinkedIn did not confirm the request. Saved to People. Check their profile on LinkedIn before trying again.",
+  refused: "LinkedIn would not take the request. Saved to People instead.",
+  unavailable: "Orbit cannot send connection requests right now. Saved to People instead."
+};
 
 // supabase/functions/_shared/sourcing/run.ts
 import Anthropic2 from "npm:@anthropic-ai/sdk@0.133.0";
@@ -41875,6 +42150,189 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
   return { student, warm, known, orgDomains, connections };
 }
 
+// supabase/functions/_shared/sourcing/connect.ts
+var NOT_ACTIVE = {
+  parked: "LinkedIn is paused because you were away. Saved to People instead.",
+  needs_reauth: "LinkedIn signed Orbit out. Saved to People instead.",
+  connecting: "LinkedIn is still connecting. Saved to People instead.",
+  error: "LinkedIn stopped working with Orbit. Saved to People instead."
+};
+function codeOf(error) {
+  switch (error) {
+    case "linkedin_invite_daily_cap":
+      return "daily_limit";
+    case "linkedin_invite_weekly_cap":
+      return "weekly_limit";
+    case "linkedin_invite_limit":
+      return "linkedin_limit";
+    case "linkedin_already_invited":
+      return "already_requested";
+    case "linkedin_already_connected":
+      return "already_connected";
+    case "no_linkedin_member":
+      return "profile_not_found";
+    case "linkedin_busy":
+    case "network":
+      return "busy";
+    case "unipile_unconfigured":
+      return "unavailable";
+    default:
+      return /^unipile_(429|5\d\d)$/.test(error) ? "busy" : "refused";
+  }
+}
+async function connectSourced(s, userId, who) {
+  const db2 = s.db;
+  const now = s.now();
+  if (!who.recommendationId === !who.personId)
+    throw new HttpError(400, "bad_request", "send one of recommendationId or personId");
+  let person2;
+  let found = {};
+  if (who.recommendationId) {
+    const { people } = await addSourced(s, userId, [who.recommendationId]);
+    person2 = people[0];
+    const [rec] = await db2.sql`
+      select candidate from orbit.recommendations
+       where id = ${who.recommendationId}::uuid and user_id = ${userId}::uuid`;
+    found = { memberId: rec?.candidate?.memberId, degree: rec?.candidate?.networkDistance };
+  } else {
+    const [p2] = await db2.sql`
+      select q.id, q.display_name
+        from orbit.people p join orbit.people q on q.id = coalesce(p.merged_into, p.id)
+       where p.id = ${who.personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null
+         and q.deleted_at is null and not q.is_self`;
+    if (!p2)
+      throw new HttpError(404, "person_not_found", "Orbit does not have this person on your account yet");
+    const [open] = await db2.sql`
+      select id from orbit.chats
+       where user_id = ${userId}::uuid and person_id = ${p2.id}::uuid and archived_at is null
+       order by created_at desc limit 1`;
+    person2 = {
+      id: p2.id,
+      displayName: p2.display_name,
+      chatId: open?.id ?? await ensureChat(db2, userId, p2.id, null, now)
+    };
+  }
+  const saved = (code, reason2 = SOURCE_CONNECT_REASONS[code]) => ({
+    person: person2,
+    sent: false,
+    code,
+    reason: reason2
+  });
+  const [p] = await db2.sql`
+    select id, display_name, title, headline, do_not_contact, linkedin_member_id, linkedin_slug, linkedin_connected_on
+      from orbit.people where id = ${person2.id}::uuid and user_id = ${userId}::uuid`;
+  if (!p) throw new HttpError(404, "person_not_found", "Orbit does not have this person on your account yet");
+  if (p.do_not_contact) return saved("do_not_contact");
+  if (looksLikeMinor({ title: p.title ?? void 0, headline: p.headline ?? void 0 }))
+    return saved("minor");
+  const memberId = p.linkedin_member_id ?? found.memberId ?? null;
+  if (!memberId && !p.linkedin_slug) return saved("no_profile");
+  if (p.linkedin_connected_on || found.degree === 1) return saved("already_connected");
+  const targets = [
+    ...p.linkedin_slug ? [`in:${p.linkedin_slug.trim().toLowerCase()}`] : [],
+    ...memberId ? [`id:${memberId}`] : []
+  ];
+  const target = targets[0];
+  const [had] = await db2.sql`
+    select status, created_at from orbit.linkedin_connects
+     where user_id = ${userId}::uuid and (person_id = ${p.id}::uuid or target = any(${targets}::text[]))
+     order by (status = 'sent') desc limit 1`;
+  if (had) {
+    const stuck = had.status === "sending" && now.getTime() - new Date(had.created_at).getTime() > STUCK_SENDING_MS;
+    return saved(had.status === "unconfirmed" || stuck ? "unconfirmed" : "already_requested");
+  }
+  const [acct] = await db2.sql`
+    select external_account_id, status from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (acct?.status !== "active" || !acct.external_account_id)
+    return saved("linkedin_not_active", acct && NOT_ACTIVE[acct.status] || void 0);
+  const cap = await inviteCapReached(db2, userId, now);
+  if (cap) return saved(codeOf(cap));
+  const [claim] = await db2.sql`
+    insert into orbit.linkedin_connects (user_id, target, person_id, status, created_at)
+    values (${userId}::uuid, ${target}, ${p.id}::uuid, 'sending', ${now}::timestamptz)
+    on conflict (user_id, target) do nothing
+    returning target`;
+  if (!claim) return saved("already_requested");
+  const mark = (status4, invitationId = null) => db2.sql`
+      update orbit.linkedin_connects
+         set status = ${status4}, invitation_id = ${invitationId},
+             sent_at = ${status4 === "sent" ? now : null}::timestamptz
+       where user_id = ${userId}::uuid and target = ${target}`;
+  const release2 = () => db2.sql`
+      delete from orbit.linkedin_connects
+       where user_id = ${userId}::uuid and target = ${target} and status = 'sending'`;
+  let out;
+  try {
+    out = await linkedinInvite(s, {
+      accountId: acct.external_account_id,
+      memberId,
+      slug: p.linkedin_slug,
+      // asked again just before the request goes, as for a draft sent as a request
+      beforeInvite: () => inviteCapReached(db2, userId, now)
+    });
+  } catch (e) {
+    await release2().catch(() => void 0);
+    throw e;
+  }
+  if (out.memberId && !p.linkedin_member_id)
+    await db2.sql`
+      update orbit.people set linkedin_member_id = ${out.memberId}
+       where id = ${p.id}::uuid and linkedin_member_id is null`.catch(() => void 0);
+  if (!out.ok) {
+    if (out.ambiguous) {
+      await mark("unconfirmed");
+      await audit3(s, userId, "linkedin.invite_unconfirmed", p.id, {
+        error: out.error,
+        chatId: person2.chatId
+      });
+      return saved("unconfirmed");
+    }
+    const code = codeOf(out.error);
+    if (code === "already_requested") await mark("sent");
+    else await release2();
+    await audit3(s, userId, "linkedin.invite_refused", p.id, {
+      error: out.error,
+      code,
+      chatId: person2.chatId
+    });
+    return saved(
+      code,
+      code === "already_requested" ? "LinkedIn says you already have a connection request out to them. Saved to People." : void 0
+    );
+  }
+  await mark("sent", out.invitationId);
+  await audit3(s, userId, "linkedin.invite", p.id, {
+    at: iso(now),
+    via: "source.connect",
+    note: false,
+    chatId: person2.chatId,
+    ...who.recommendationId ? { recommendationId: who.recommendationId } : {},
+    ...out.invitationId ? { invitationId: out.invitationId } : {}
+  });
+  await afterRequest(s, userId, person2.chatId, now);
+  return { person: person2, sent: true };
+}
+async function audit3(s, userId, action, personId, details) {
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', ${action}, 'people', ${personId}, ${details}::jsonb)`;
+}
+async function afterRequest(s, userId, chatId, now) {
+  const db2 = s.db;
+  const [c] = await db2.sql`
+    select stage, data from orbit.chats where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
+  if (!c) return;
+  const early = ["identified", "warming"].includes(c.stage);
+  const data = {
+    ...c.data ?? {},
+    connectionRequestedAt: now.toISOString(),
+    ...early || !c.data?.outreachChannel ? { outreachChannel: "linkedin" } : {}
+  };
+  await db2.sql`update orbit.chats set data = ${data}::jsonb where id = ${chatId}::uuid`;
+  if (early) await moveChat(db2, userId, chatId, "outreach_sent", "connection request sent", now, "user");
+}
+
 // supabase/functions/orbit-api/routes/source.ts
 var list9 = (v, key2) => {
   if (v === void 0) return void 0;
@@ -41943,6 +42401,13 @@ async function add3(ctx) {
   const b = await body(ctx);
   return json(200, await addSourced(ctx.services(), ctx.userId, b.recommendationIds));
 }
+async function connect(ctx) {
+  const b = await body(ctx);
+  const recommendationId = optUuid(b, "recommendationId");
+  const personId = optUuid(b, "personId");
+  if (!recommendationId === !personId) throw badRequest("send one of recommendationId or personId");
+  return json(200, await connectSourced(ctx.services(), ctx.userId, { recommendationId, personId }));
+}
 async function email(ctx) {
   const b = await body(ctx);
   const recommendationId = optUuid(b, "recommendationId");
@@ -41959,6 +42424,7 @@ async function email(ctx) {
 var sourceRoutes = {
   "/source/search": { method: "POST", auth: true, run: search4 },
   "/source/add": { method: "POST", auth: true, run: add3 },
+  "/source/connect": { method: "POST", auth: true, run: connect },
   "/source/email": { method: "POST", auth: true, run: email }
 };
 
@@ -42859,7 +43325,7 @@ var shape = (table, row) => {
   const t = PULL_BY_NAME.get(table);
   return row && t ? shapeRow(t, row) : row;
 };
-async function audit3(db2, userId, action, table, id, fields = []) {
+async function audit4(db2, userId, action, table, id, fields = []) {
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', ${action}, ${table}, ${id}, ${{ fields }}::jsonb)`;
@@ -42924,7 +43390,7 @@ async function write(db2, userId, spec, id, row) {
       [id, userId, ...params]
     );
     if (!r2) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
-    await audit3(
+    await audit4(
       db2,
       userId,
       "sync.update",
@@ -42943,7 +43409,7 @@ async function write(db2, userId, spec, id, row) {
     [id, userId, ...params]
   );
   await spec.afterInsert?.(db2, userId, id, values);
-  await audit3(
+  await audit4(
     db2,
     userId,
     "sync.insert",
@@ -42958,7 +43424,7 @@ async function remove(db2, userId, spec, id) {
   const sql = spec.del === "soft" ? `update orbit.${spec.table} set deleted_at = now() where ${spec.key} = $1::uuid and user_id = $2::uuid and deleted_at is null returning 1` : `delete from orbit.${spec.table} where ${spec.key} = $1::uuid and user_id = $2::uuid returning 1`;
   const rows = await db2.query(sql, [id, userId]);
   if (!rows.length) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
-  await audit3(db2, userId, "sync.delete", spec.table, id);
+  await audit4(db2, userId, "sync.delete", spec.table, id);
   return void 0;
 }
 var DraftPatchS = z10.object({
@@ -42997,7 +43463,7 @@ async function pushDraft(db2, userId, id, row) {
     throw new ChangeError("conflict", `the draft is already ${cur.status}`);
   }
   const changed = ["status", "subject", "body", "channel"].filter((k) => k in row);
-  await audit3(db2, userId, "sync.update", "drafts", id, changed);
+  await audit4(db2, userId, "sync.update", "drafts", id, changed);
   if (body2 !== void 0)
     await recordDraftEdit(db2, r.row);
   return shape("drafts", r.row);
@@ -43016,7 +43482,7 @@ async function pushEdit(db2, userId, id, row) {
   if (!p.success) throw new ChangeError("invalid", p.error.issues[0]?.message ?? "invalid edit");
   const r = await pushDraftEdit(db2, userId, id, p.data);
   if (!r) throw new ChangeError("not_found", `draft_edits ${id} was not found`);
-  await audit3(db2, userId, "sync.insert", "draft_edits", id, ["before", "after"]);
+  await audit4(db2, userId, "sync.insert", "draft_edits", id, ["before", "after"]);
   return r;
 }
 

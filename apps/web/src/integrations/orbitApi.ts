@@ -125,6 +125,8 @@ import type {
   SlotsResponse,
   SourceAddRequest,
   SourceAddResponse,
+  SourceConnectRequest,
+  SourceConnectResponse,
   SourceEmailRequest,
   SourceEmailResponse,
   SourceSearchRequest,
@@ -411,6 +413,7 @@ export interface ApiRoutes {
   '/research/choose': [ResearchChooseRequest, ResearchPersonResponse];
   '/source/search': [SourceSearchRequest, SourceSearchResponse];
   '/source/add': [SourceAddRequest, SourceAddResponse];
+  '/source/connect': [SourceConnectRequest, SourceConnectResponse];
   '/source/email': [SourceEmailRequest, SourceEmailResponse];
   '/paths/find': [PathsFindRequest, PathsFindResponse];
   '/intros/ask': [IntroAskRequest, IntroAskResponse];
@@ -687,6 +690,8 @@ const SLOW_ROUTES: Record<string, number> = {
   '/source/search': 75_000,
   // reads the person's posts on LinkedIn and drafts the comment before it answers
   '/warmups/preview': 60_000,
+  // saves the person (an address lookup of up to 12 seconds), then asks LinkedIn, which may be slow to answer
+  '/source/connect': 70_000,
 };
 /** refresh this long before the access token expires */
 export const REFRESH_BEFORE_MS = 5 * 60_000;

@@ -5,7 +5,14 @@
  * ones to search), places and places not, remote, the levels to look at, and sponsorship and citizenship, asked once
  * and never guessed. "Find roles" saves it and runs the search.
  */
-import type { JobLevel, ProfileLevel, RoleKind, RoleProfile, User } from '@orbit/core';
+import {
+  type JobLevel,
+  levelsFor,
+  type ProfileLevel,
+  type RoleKind,
+  type RoleProfile,
+  type User,
+} from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, FileText, Upload } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
@@ -19,8 +26,7 @@ import {
   saveProfile,
   whereTheyAre,
 } from '../../engine/roles';
-import { levelsFor } from '../../engine/rolesSim';
-import { forgetViews, readView, useViewState } from '../../state/viewState';
+import { forgetViews, readView, useViewState, writeView } from '../../state/viewState';
 import { Button, cx, Input, PickCircle, Select, Switch, useToast, Working } from '../../ui';
 import { ChipsField } from '../../ui/ChipsField';
 
@@ -32,6 +38,23 @@ interface Draft {
   note?: string;
 }
 const DRAFT_KEY = (userId: string) => `roles:draft:${userId}`;
+
+/**
+ * Open the review step on a profile Orbit already read (the server kept the proposal of a student who left before
+ * "Find roles"). Nothing happens when the screen already holds something.
+ */
+export function openProfileReview(userId: string, proposed: RoleProfile): void {
+  if (readView<Draft>(DRAFT_KEY(userId))) return;
+  writeView<Draft | undefined>(
+    DRAFT_KEY(userId),
+    {
+      step: 'review',
+      use: { resume: proposed.sources.includes('resume'), linkedin: proposed.sources.includes('linkedin') },
+      profile: proposed,
+    },
+    undefined,
+  );
+}
 
 /** Forget what the screen was holding (after Find roles, or Cancel). */
 export function clearProfileDraft(userId: string): void {

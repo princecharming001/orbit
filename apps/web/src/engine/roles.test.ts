@@ -5,7 +5,7 @@
  * what the student does with a role reaches the server; "Find a way in" plans for the role without overwriting a
  * target's own; the feature switch decides whether any of it exists.
  */
-import type { FitAnswers, RoleProfile, User } from '@orbit/core';
+import { type FitAnswers, fitOf, type RoleProfile, type RolesSearchResponse, type User } from '@orbit/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { refreshAccount, setOrbitApiFetchForTests } from '../integrations/orbitApi';
@@ -19,23 +19,36 @@ import {
   filterMatches,
   findWayIn,
   keptMatches,
+  keptProfile,
   keptSearch,
   profileLines,
   readProfile,
   refreshMatches,
   resetRolesForTests,
+  rolesCall,
   rolesMode,
+  rolesRun,
   runSearch,
+  STALLED_NOTE,
   savedMatches,
   saveProfile,
   scorePosting,
+  searchRunning,
   setRolesPauseForTests,
+  setRolesStallForTests,
   sortMatches,
   tableMatches,
 } from './roles';
-import { createRolesSim, fitOf } from './rolesSim';
+import { createRolesSim, NOT_READ_NOTE } from './rolesSim';
 
 const T0 = '2026-11-24T12:00:00.000Z';
+
+/**
+ * The year the made-up student graduates: two years from now, so they are a student (graduating more than a year
+ * away) whenever the suite runs. The level comes from dates by the server's own rule (core `profileLevelOf`): a
+ * graduation within a year is a new grad, who is shown entry roles and not internships.
+ */
+const GRAD = new Date().getFullYear() + 2;
 
 async function seedResume(userId: string) {
   await db.resumes.put({
@@ -75,7 +88,7 @@ async function seedResume(userId: string) {
       kind: 'education',
       title: 'BS Computer Science',
       organizationName: 'Cornell University',
-      endDate: '2027-05-31',
+      endDate: `${GRAD}-05-31`,
       text: 'BS Computer Science. Courses: distributed systems, databases.',
       keywords: [],
       confirmed: true,
@@ -139,6 +152,16 @@ describe('Roles in the browser, against the fake orbit-api', () => {
     expect(rolesMode(user.id)).toBe('off');
     expect(featureOn('roles', 'some-local-user')).toBe(false);
     expect(rolesMode('demo-user')).toBe('demo');
+    // the owner tries it before it is launched: on for their account while the public switch stays off
+    api.state.isOwner = true;
+    await refreshAccount();
+    expect(api.state.features).toEqual([]);
+    expect(featureOn('roles', user.id)).toBe(true);
+    expect(rolesMode(user.id)).toBe('server');
+    expect((await rolesCall(user.id, '/roles/list', {})).ok).toBe(true);
+    // anyone else is refused while it is not offered
+    api.state.isOwner = false;
+    expect(await rolesCall(user.id, '/roles/list', {})).toMatchObject({ ok: false, status: 404 });
   });
 
   it('sends the kept resume lines, never an unticked one, and LinkedIn job descriptions when asked', async () => {
@@ -158,7 +181,9 @@ describe('Roles in the browser, against the fake orbit-api', () => {
               description: 'Built the card reconciliation service.',
             },
           ],
-          education: [{ school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: '2027' }],
+          education: [
+            { school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: String(GRAD) },
+          ],
           throttled: [],
           skills: ['Go', 'Kubernetes'],
         },
@@ -202,31 +227,186 @@ describe('Roles in the browser, against the fake orbit-api', () => {
   it('waits between /roles/more calls (the server reads in the background), and an answer of every row read so far replaces rows by id', async () => {
     await saveProfile(user, await built(), { search: false });
     setRolesPauseForTests(60);
-    // the production server: each answer is every row read so far, `done` false until all are read
-    const seen = new Map<string, unknown>();
+    // the production server: it answers at once and reads behind the answer, so the first answers hold nothing new,
+    // then each holds every row read so far, `done` false until all are read
     const at: number[] = [];
+    const answers: { read: number; done: boolean; ids: string[] }[] = [];
+    let asked = 0;
     setOrbitApiFetchForTests(async (input, init) => {
-      const res = await api.fetch(input, init);
-      if (!String(input).endsWith('/roles/more')) return res;
+      if (!String(input).endsWith('/roles/more')) return api.fetch(input, init);
       at.push(Date.now());
-      const body = (await res.json()) as { matches: { id: string }[] };
-      for (const m of body.matches) seen.set(m.id, m);
-      return new Response(JSON.stringify({ ...body, matches: [...seen.values()] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      // every other ask finds the background read still going: the same rows as before, nothing more read
+      const res = ++asked % 2 === 1 && answers.length ? undefined : await api.fetch(input, init);
+      if (!res) {
+        const last = answers.at(-1)!;
+        const kept = (await keptMatches(user.id)).map((r) => r.match).filter((m) => last.ids.includes(m.id));
+        answers.push(last);
+        return Response.json({ ...lastBody, matches: kept, read: last.read, done: false });
+      }
+      const body = (await res.clone().json()) as RolesSearchResponse;
+      lastBody = body;
+      answers.push({ read: body.read, done: body.done, ids: body.matches.map((m) => m.id) });
+      return res;
     });
+    let lastBody: RolesSearchResponse | undefined;
     try {
-      await runSearch(user);
+      expect((await runSearch(user)).ok).toBe(true);
     } finally {
       setRolesPauseForTests(undefined);
     }
-    expect(at.length).toBeGreaterThan(1);
+    // it waited between asks, never a tight loop
+    expect(at.length).toBeGreaterThan(3);
     for (let i = 1; i < at.length; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(50);
+    // each answer was the whole of what is read so far, growing, and only the last said done
+    expect(answers.map((a) => a.done)).toEqual([...answers.slice(0, -1).map(() => false), true]);
+    for (let i = 1; i < answers.length; i++)
+      expect(answers[i]!.read).toBeGreaterThanOrEqual(answers[i - 1]!.read);
+    expect(answers.at(-1)!.ids.length).toBe(answers.at(-1)!.read);
+    expect(
+      answers.some((a, i) => i > 0 && a.ids.length > 5 && a.ids.length < answers.at(-1)!.ids.length),
+    ).toBe(true);
+    // and no row is kept twice: the table has each role once
     const s = await keptSearch(user.id);
+    expect(s).toMatchObject({ done: true, read: s!.listed });
     const rows = tableMatches(await keptMatches(user.id), s);
     expect(rows).toHaveLength(s!.listed);
     expect(new Set(rows.map((m) => m.id)).size).toBe(rows.length);
+    expect((await keptMatches(user.id)).length).toBe(rows.length);
+  });
+
+  it('nothing more read for a long while: it stops asking, lists the rest as not read closely, and carries on next time', async () => {
+    await saveProfile(user, await built(), { search: false });
+    // a clock the test moves: each ask of /roles/more is 20 seconds after the last
+    let clock = 0;
+    setRolesStallForTests(90_000, () => clock);
+    let asked = 0;
+    let stuck: RolesSearchResponse | undefined;
+    setOrbitApiFetchForTests(async (input, init) => {
+      if (!String(input).endsWith('/roles/more')) return api.fetch(input, init);
+      asked++;
+      clock += 20_000;
+      // the first ask reads five; after that the background read has died: the same answer, never done
+      if (!stuck) {
+        const res = await api.fetch(input, init);
+        stuck = (await res.clone().json()) as RolesSearchResponse;
+        return res;
+      }
+      return Response.json(stuck);
+    });
+    try {
+      const out = await runSearch(user);
+      // not an error: a polite stop
+      expect(out).toEqual({ ok: true });
+    } finally {
+      setRolesStallForTests(undefined);
+    }
+    // 20 s an ask: the first reads, then five more with nothing new reach 100 s without progress, past 90
+    expect(asked).toBe(6);
+    expect(searchRunning(user.id)).toBe(false);
+    expect(rolesRun(user.id)).toMatchObject({ phase: 'idle', error: undefined });
+    const s = await keptSearch(user.id);
+    expect(s).toMatchObject({ done: false, read: 5, note: STALLED_NOTE });
+    expect(STALLED_NOTE).not.toMatch(/[—!]/);
+    // what was read keeps its score; the rest are listed too, with no number
+    const rows = tableMatches(await keptMatches(user.id), s);
+    expect(rows).toHaveLength(s!.listed);
+    expect(rows.filter((m) => m.fit)).toHaveLength(5);
+    const rest = rows.filter((m) => !m.fit);
+    expect(rest.length).toBe(s!.listed - 5);
+    expect(rest.every((m) => m.roughFit && m.state === 'to_read')).toBe(true);
+    expect(routes().filter((c) => c === '/roles/list').length).toBeGreaterThan(0);
+    expect(api.state.roleCalls.find((c) => c.route === '/roles/list' && c.body.rest === true)).toBeTruthy();
+    // the least fit shown never hides a role that has no number
+    expect(filterMatches(rows, DEFAULT_FILTERS).filter((m) => !m.fit)).toHaveLength(rest.length);
+    // the next visit carries on from there, with no new search, and the line that said it stopped goes
+    const before = routes().filter((c) => c === '/roles/search').length;
+    setOrbitApiFetchForTests(api.fetch);
+    expect((await runSearch(user, { resume: true })).ok).toBe(true);
+    expect(routes().filter((c) => c === '/roles/search').length).toBe(before);
+    const done = await keptSearch(user.id);
+    expect(done).toMatchObject({ done: true, searchId: s!.searchId, read: s!.listed });
+    expect(done?.note).toBeUndefined();
+    const all = tableMatches(await keptMatches(user.id), done);
+    expect(all).toHaveLength(done!.listed);
+    expect(all.every((m) => m.fit && !m.roughFit)).toBe(true);
+  });
+
+  it('a search that still makes progress, however slowly, is never given up on', async () => {
+    await saveProfile(user, await built(), { search: false });
+    let clock = 0;
+    setRolesStallForTests(90_000, () => clock);
+    api.state.roles = createRolesSim({ step: 1 });
+    await api.state.roles.handle('/roles/profile', { save: (await keptProfile(user.id))!.profile });
+    setOrbitApiFetchForTests(async (input, init) => {
+      // 80 seconds between asks, one more role read each time: slow, and alive
+      if (String(input).endsWith('/roles/more')) clock += 80_000;
+      return api.fetch(input, init);
+    });
+    try {
+      expect((await runSearch(user)).ok).toBe(true);
+    } finally {
+      setRolesStallForTests(undefined);
+    }
+    const s = await keptSearch(user.id);
+    expect(s).toMatchObject({ done: true, read: s!.listed });
+    expect(s?.note).toBeUndefined();
+  });
+
+  it('a search another tab replaced: /roles/more answers 404 search_replaced, and the loop follows the newer search', async () => {
+    await saveProfile(user, await built(), { search: false });
+    let more = 0;
+    let newer: string | undefined;
+    setOrbitApiFetchForTests(async (input, init) => {
+      // after the first step another tab presses Search again: the server has a newer search for the same profile
+      if (String(input).endsWith('/roles/more') && ++more === 2 && !newer) {
+        const r = await api.state.roles.handle('/roles/search', { fresh: true });
+        newer = r.ok ? (r.value as RolesSearchResponse).searchId : undefined;
+      }
+      return api.fetch(input, init);
+    });
+    expect((await runSearch(user)).ok).toBe(true);
+    const calls = api.state.roleCalls.filter((c) => c.route === '/roles/search');
+    // the loop asked which search to follow, once, and did not start one of its own (that would replace the newer
+    // one in turn, and spend one of the day's three searches)
+    expect(calls.map((c) => c.body)).toEqual([{}, {}]);
+    const s = await keptSearch(user.id);
+    expect(newer).toBeTruthy();
+    expect(s).toMatchObject({ searchId: newer, done: true });
+    const rows = tableMatches(await keptMatches(user.id), s);
+    expect(rows).toHaveLength(s!.listed);
+    expect(new Set(rows.map((m) => m.id)).size).toBe(rows.length);
+  });
+
+  it('a search the server no longer has is asked about once, then the loop stops with what the server said', async () => {
+    await saveProfile(user, await built(), { search: false });
+    // every /roles/more is refused, whatever the search: the loop must not go round for ever
+    let more = 0;
+    setOrbitApiFetchForTests(async (input, init) => {
+      if (!String(input).endsWith('/roles/more')) return api.fetch(input, init);
+      more++;
+      return Response.json(
+        { error: { code: 'search_replaced', message: 'That search was replaced by a newer one.' } },
+        { status: 404 },
+      );
+    });
+    const out = await runSearch(user);
+    expect(out.ok).toBe(false);
+    expect(more).toBe(2);
+    expect(routes().filter((c) => c === '/roles/search')).toHaveLength(2);
+    expect(rolesRun(user.id).error).toBeTruthy();
+  });
+
+  it('Roles switched off mid-search (404 not_offered) is not a replaced search: nothing is asked again', async () => {
+    await saveProfile(user, await built(), { search: false });
+    let more = 0;
+    setOrbitApiFetchForTests(async (input, init) => {
+      if (String(input).endsWith('/roles/more') && ++more === 2) api.state.features = [];
+      return api.fetch(input, init);
+    });
+    const out = await runSearch(user);
+    expect(out.ok).toBe(false);
+    expect(routes().filter((c) => c === '/roles/search')).toHaveLength(1);
+    expect(routes().filter((c) => c === '/roles/more')).toHaveLength(2);
   });
 
   it('carries on from where it stopped, without listing the roles again', async () => {
@@ -372,7 +552,7 @@ describe('Roles in the browser, against the fake orbit-api', () => {
     await saveProfile(user, await built(), { search: false });
     await runSearch(user);
     const s = await keptSearch(user.id);
-    expect(s?.note).toMatch(/could not read these roles closely/);
+    expect(s?.note).toBe(NOT_READ_NOTE);
     const rows = tableMatches(await keptMatches(user.id), s);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((m) => !m.fit && m.roughFit)).toBe(true);
@@ -456,7 +636,7 @@ describe('the score (the sample server keeps the plan 44 formula)', () => {
     expect(all.parts.education).toBeUndefined();
     expect(all.weights.skills! + all.weights.experience! + all.weights.level!).toBeCloseTo(1);
     const capped = fitOf({ ...answers, caps: [{ kind: 'thin', label: 'The posting says little' }] });
-    expect(capped.score).toBe(7);
+    expect(capped.score).toBe(6);
     expect(capped.raw).toBe(10);
   });
 

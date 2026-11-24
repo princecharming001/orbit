@@ -7,6 +7,7 @@ import { ToastProvider } from '../../ui';
 import { friendStatus } from './FriendRow';
 import {
   FriendsListSection,
+  gravatarUrl,
   InviteLinkSection,
   RAIL_FOLDED,
   RequestedSection,
@@ -275,6 +276,14 @@ describe('Requested', () => {
     expect(q('friends-requested-count')!.textContent).toBe('8');
     await tap(q('friends-requested-more'));
     expect(all('friends-requested-row')).toHaveLength(8);
+  });
+
+  it('an address gets a photo address from its scrambled form, never the address itself', async () => {
+    const url = await gravatarUrl('  Noah.Patel@Cornell.edu ');
+    expect(url).toMatch(/^https:\/\/gravatar\.com\/avatar\/[0-9a-f]{64}\?d=404&s=112$/);
+    expect(url).not.toContain('noah');
+    expect(await gravatarUrl('noah.patel@cornell.edu')).toBe(url);
+    expect(await gravatarUrl('not an address')).toBeUndefined();
   });
 
   it('says only what is known of each one', () => {

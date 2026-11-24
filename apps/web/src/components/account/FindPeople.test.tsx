@@ -1,7 +1,8 @@
 /**
  * Find people as a table: one sentence is read into filters and criteria, the results list the student's own people
  * and new ones together with a match, a path and an answer per criterion; the two dialogs change the search and run
- * it again; a new person is added alone or with others; an address is looked up only when asked (plan 35 C3).
+ * it again; a new person is saved alone or with others, or, when the student's LinkedIn can send, asked to connect
+ * with one click (the button says which); an address is looked up only when asked (plan 35 C3).
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -16,7 +17,13 @@ import {
 } from '../../engine/peopleSearch';
 
 const search = vi.hoisted(() => ({ interpretAsk: vi.fn(), runPeopleSearch: vi.fn() }));
-const sourcing = vi.hoisted(() => ({ findEmail: vi.fn(), addSourced: vi.fn() }));
+const sourcing = vi.hoisted(() => ({
+  findEmail: vi.fn(),
+  addSourced: vi.fn(),
+  connectSourced: vi.fn(),
+  canConnectOnLinkedIn: vi.fn(),
+  requestsWaiting: vi.fn(),
+}));
 const hints = vi.hoisted(() => ({ suggestFilter: vi.fn() }));
 const batch = vi.hoisted(() => ({ createBatch: vi.fn() }));
 vi.mock('../../engine/batch', () => batch);
@@ -38,6 +45,7 @@ vi.mock('../../integrations/orbitApi', async (orig) => ({
 vi.mock('../CompanyLogo', () => ({ CompanyLogo: () => null }));
 
 import { readPeopleTable } from '../../chat/ui/cards/shapes';
+import { ToastProvider } from '../../ui';
 import { carryFindPeople, FindPeople } from './FindPeople';
 
 const crit = newCriterion('Works at a venture capital firm', 'must');
@@ -95,6 +103,9 @@ beforeEach(() => {
   root = createRoot(host);
   search.interpretAsk.mockResolvedValue({ form: FORM, by: 'model' });
   hints.suggestFilter.mockResolvedValue([]);
+  // LinkedIn cannot send unless a test says it can: the button on someone new is Save
+  sourcing.canConnectOnLinkedIn.mockResolvedValue(false);
+  sourcing.requestsWaiting.mockResolvedValue(new Set());
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -120,7 +131,9 @@ async function searchFor(rows: ResultRow[], over: Partial<PeopleSearchResult> = 
   await act(async () => {
     root.render(
       <MemoryRouter>
-        <FindPeople userId="u1" />
+        <ToastProvider>
+          <FindPeople userId="u1" />
+        </ToastProvider>
       </MemoryRouter>,
     );
   });
@@ -159,7 +172,7 @@ describe('Find people: the results table', () => {
       'Company',
       'Match',
       'Works at a venture capital firm',
-      'Add',
+      'Connect or save',
     ]);
     const [a, b] = $$('find-result');
     expect(a!.dataset.own).toBe('true');
@@ -170,12 +183,12 @@ describe('Find people: the results table', () => {
     expect($('find-thumb', a!)!.getAttribute('aria-label')).toBe('Yes: Partner at Accel');
     expect($('result-path', a!)!.dataset.kind).toBe('direct');
     expect($('result-path-bars', a!)!.dataset.level).toBe('3');
-    // someone the student already has is never offered Add; they can be picked like anyone, and start unpicked
+    // someone the student already has is never offered Connect or Save; they can be picked like anyone, and start unpicked
     expect($('find-add', a!)).toBeNull();
     expect(($('find-pick', a!) as HTMLInputElement).checked).toBe(false);
     // the company opens its page in Orbit, or who the student knows there when Orbit has no page for it
     expect($('find-company', a!)!.getAttribute('href')).toBe('/map?reach=1&company=Accel');
-    // the new person: a path through someone warm, a dash where nothing is known, and Add
+    // the new person: a path through someone warm, a dash where nothing is known, and the button (Save here)
     expect(b!.dataset.own).toBe('false');
     expect($('find-name', b!)!.tagName).toBe('SPAN');
     expect($('result-path', b!)!.textContent).toContain('Sam Warm');
@@ -282,7 +295,7 @@ describe('Find people: the search is still there after the page was away', () =>
     expect($('find-count')?.textContent).toBe('3 matches');
     expect($('find-tools')).not.toBeNull();
     expect($('find-open', $$('find-result')[1]!)?.getAttribute('href')).toBe('/people/p77');
-    expect($('find-add-picked')?.textContent).toContain('Add 1');
+    expect($('find-add-picked')?.textContent).toContain('Save 1');
   });
 
   it('a search still running when the student left goes on, and its rows are there on return', async () => {
@@ -611,21 +624,199 @@ describe('Find people: adding and emails', () => {
     expect(await asked('advanced', 'filter-keywords-box-input')).toBe('keywords');
   });
 
-  it('Add puts one person in, and the row then opens their page', async () => {
+  it('Save puts one person in People, says so, and the row then opens their page', async () => {
     sourcing.addSourced.mockResolvedValue({
       ok: true,
       people: [{ id: 'new1', displayName: 'Maya Chen', chatId: 'c' }],
     });
     await searchFor([own, fresh]);
+    // LinkedIn cannot send here: the button says Save, and saving is all it does
+    expect($('find-add')!.textContent!.trim()).toBe('Save');
+    expect($('find-add')!.getAttribute('data-action')).toBe('save');
     await click($('find-add'));
     expect(sourcing.addSourced).toHaveBeenCalledWith({ id: 'u1' }, ['r1']);
+    expect(sourcing.connectSourced).not.toHaveBeenCalled();
     const row = $$('find-result')[1]!;
     expect($('find-add', row)).toBeNull();
+    expect($('find-open', row)!.textContent).toBe('Saved, open');
+    expect($('find-open', row)!.getAttribute('data-state')).toBe('saved');
     expect($('find-open', row)!.getAttribute('href')).toBe('/people/new1');
     expect($('find-name', row)!.getAttribute('href')).toBe('/people/new1');
+    expect($('toasts')!.textContent).toContain('Saved Maya Chen to People.');
+    // the old words are gone: nothing says "added" or "to contact"
+    expect(document.body.textContent).not.toMatch(/Added|to contact/i);
   });
 
-  it('picking everyone new and Add 2 adds them in one go, each row to its own person', async () => {
+  const li = (r: ResultRow, slug: string): ResultRow => ({
+    ...r,
+    linkedinUrl: `https://www.linkedin.com/in/${slug}`,
+  });
+  const sentTo = (id: string, name: string) => ({
+    ok: true,
+    person: { id, displayName: name, chatId: `c-${id}` },
+    sent: true,
+    requested: true,
+  });
+
+  it('the button says what it does: Connect when LinkedIn can send to them, Save when it cannot', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+    await searchFor([
+      own,
+      li(fresh, 'maya-chen'),
+      // no LinkedIn profile on the row: nothing to send a request to
+      other,
+      // already a 1st-degree connection on LinkedIn: nothing to request
+      { ...li(other, 'cy-near'), key: 'r:r3', recommendationId: 'r3', name: 'Cy Near', connected: true },
+    ]);
+    expect(sourcing.canConnectOnLinkedIn).toHaveBeenCalledWith({ id: 'u1' });
+    const rows = $$('find-result');
+    // someone the student already has gets no button at all
+    expect($('find-add', rows[0]!)).toBeNull();
+    expect($('find-add', rows[1]!)!.textContent!.trim()).toBe('Connect');
+    expect($('find-add', rows[1]!)!.getAttribute('data-action')).toBe('connect');
+    expect($('find-add', rows[2]!)!.textContent!.trim()).toBe('Save');
+    expect($('find-add', rows[3]!)!.textContent!.trim()).toBe('Save');
+    expect($('find-add', rows[3]!)!.getAttribute('data-action')).toBe('save');
+  });
+
+  it('LinkedIn not connected, paused or signed out: every button is Save', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(false);
+    await searchFor([li(fresh, 'maya-chen'), li(other, 'leo-grant')]);
+    expect($$('find-add').map((b) => b.textContent!.trim())).toEqual(['Save', 'Save']);
+  });
+
+  it('Connect sends one request and saves them: the row reads "Request sent, open"', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+    sourcing.connectSourced.mockResolvedValue(sentTo('new1', 'Maya Chen'));
+    await searchFor([own, li(fresh, 'maya-chen')]);
+    await click($('find-add'));
+    expect(sourcing.connectSourced).toHaveBeenCalledTimes(1);
+    expect(sourcing.connectSourced).toHaveBeenCalledWith({ id: 'u1' }, 'r1');
+    // Connect is its own call: nothing is saved a second time through Save
+    expect(sourcing.addSourced).not.toHaveBeenCalled();
+    const row = $$('find-result')[1]!;
+    expect($('find-add', row)).toBeNull();
+    expect($('find-open', row)!.textContent).toBe('Request sent, open');
+    expect($('find-open', row)!.getAttribute('data-state')).toBe('requested');
+    expect($('find-open', row)!.getAttribute('href')).toBe('/people/new1');
+    expect($('find-name', row)!.getAttribute('href')).toBe('/people/new1');
+    expect($('toasts')!.textContent).toContain('Connection request sent to Maya Chen. Saved to People.');
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('two fast clicks on Connect send one call', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+    let finish: (v: unknown) => void = () => {};
+    sourcing.connectSourced.mockReturnValue(new Promise((res) => (finish = res)));
+    await searchFor([li(fresh, 'maya-chen')]);
+    const button = $('find-add')!;
+    // both clicks land before the screen has drawn the button as busy
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    expect(sourcing.connectSourced).toHaveBeenCalledTimes(1);
+    expect(($('find-add') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finish(sentTo('new1', 'Maya Chen')));
+    expect($('find-open')!.textContent).toBe('Request sent, open');
+    expect(sourcing.connectSourced).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['weekly_limit', "LinkedIn's weekly limit on connection requests is reached. Saved to People instead."],
+    ['profile_not_found', 'LinkedIn could not find their profile. Saved to People instead.'],
+    ['linkedin_not_active', 'LinkedIn is paused because you were away. Saved to People instead.'],
+  ])(
+    'LinkedIn refuses (%s): the reason is said in its own words and the row falls back to saved',
+    async (code, reason) => {
+      sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+      sourcing.connectSourced.mockResolvedValue({
+        ok: true,
+        person: { id: 'new1', displayName: 'Maya Chen', chatId: 'c' },
+        sent: false,
+        requested: false,
+        code,
+        reason,
+      });
+      await searchFor([li(fresh, 'maya-chen')]);
+      await click($('find-add'));
+      // said at once, exactly as the server said it
+      expect($('toasts')!.textContent).toContain(reason);
+      const row = $$('find-result')[0]!;
+      // saved, never shown as a request that went
+      expect($('find-open', row)!.textContent).toBe('Saved, open');
+      expect($('find-open', row)!.getAttribute('data-state')).toBe('saved');
+      expect($('find-open', row)!.getAttribute('href')).toBe('/people/new1');
+      // and it stays on the row after the toast has gone
+      expect($('find-open', row)!.getAttribute('title')).toBe(reason);
+      // no button is left to press a second time
+      expect($('find-add', row)).toBeNull();
+    },
+  );
+
+  it('a request already out is not sent again: the row reads "Request sent, open"', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+    sourcing.connectSourced.mockResolvedValue({
+      ok: true,
+      person: { id: 'new1', displayName: 'Maya Chen', chatId: 'c' },
+      sent: false,
+      requested: true,
+      code: 'already_requested',
+      reason: 'You already sent them a connection request. Saved to People.',
+    });
+    await searchFor([li(fresh, 'maya-chen')]);
+    await click($('find-add'));
+    expect($('find-open')!.textContent).toBe('Request sent, open');
+    expect($('toasts')!.textContent).toContain('You already sent them a connection request.');
+  });
+
+  it('Connect that could not reach Orbit says why and leaves the button, for one more try', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+    sourcing.connectSourced.mockResolvedValue({
+      ok: false,
+      message: 'Orbit could not be reached. Try again.',
+    });
+    await searchFor([li(fresh, 'maya-chen')]);
+    await click($('find-add'));
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe('Orbit could not be reached. Try again.');
+    expect($('find-add')!.textContent!.trim()).toBe('Connect');
+    expect(($('find-add') as HTMLButtonElement).disabled).toBe(false);
+    expect($('find-open')).toBeNull();
+  });
+
+  it('someone the student already has with a request still waiting says "Request sent", with no button', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+    sourcing.requestsWaiting.mockResolvedValue(new Set(['p1']));
+    await searchFor([own, { ...own, key: 'p:p2', personId: 'p2', name: 'Bo Own' }]);
+    expect(sourcing.requestsWaiting).toHaveBeenCalledWith(['p1', 'p2']);
+    const rows = $$('find-result');
+    expect($('find-requested', rows[0]!)!.textContent).toBe('Request sent');
+    expect($('find-add', rows[0]!)).toBeNull();
+    // a connection, or someone never asked, shows nothing there
+    expect($('find-requested', rows[1]!)).toBeNull();
+    expect($('find-add', rows[1]!)).toBeNull();
+  });
+
+  it('Save 2 and Write to the picked only ever save, even when Connect is on the rows', async () => {
+    sourcing.canConnectOnLinkedIn.mockResolvedValue(true);
+    sourcing.addSourced.mockResolvedValue({
+      ok: true,
+      people: [
+        { id: 'n1', displayName: 'Maya Chen', chatId: 'c1' },
+        { id: 'n2', displayName: 'Leo Grant', chatId: 'c2' },
+      ],
+    });
+    await searchFor([li(fresh, 'maya-chen'), li(other, 'leo-grant')]);
+    expect($$('find-add').map((b) => b.textContent!.trim())).toEqual(['Connect', 'Connect']);
+    await click($('find-pick-all'));
+    await click($('find-add-picked'));
+    expect(sourcing.addSourced).toHaveBeenCalledWith({ id: 'u1' }, ['r1', 'r2']);
+    expect(sourcing.connectSourced).not.toHaveBeenCalled();
+    expect($$('find-open').map((a) => a.textContent)).toEqual(['Saved, open', 'Saved, open']);
+    expect($('toasts')!.textContent).toContain('Saved Maya Chen and Leo Grant to People.');
+  });
+
+  it('picking everyone new and Save 2 saves them in one go, each row to its own person', async () => {
     sourcing.addSourced.mockResolvedValue({
       ok: true,
       people: [
@@ -636,7 +827,7 @@ describe('Find people: adding and emails', () => {
     await searchFor([own, fresh, other]);
     expect($('find-add-picked')).toBeNull();
     await click($('find-pick-all'));
-    expect($('find-add-picked')!.textContent).toContain('Add 2');
+    expect($('find-add-picked')!.textContent).toContain('Save 2');
     await click($('find-add-picked'));
     expect(sourcing.addSourced).toHaveBeenCalledWith({ id: 'u1' }, ['r1', 'r2']);
     expect($$('find-open').map((a) => a.getAttribute('href'))).toEqual(['/people/n1', '/people/n2']);
@@ -654,7 +845,7 @@ describe('Find people: adding and emails', () => {
     await click($$('find-pick')[0]!);
     expect($$('find-pick').map((b) => (b as HTMLInputElement).checked)).toEqual([true, false, false]);
     expect($('find-picked')!.textContent).toContain('1 picked');
-    // someone already in Orbit is never offered Add, picked or not
+    // someone already in Orbit is never offered Save, picked or not
     expect($('find-add-picked')).toBeNull();
     await click($('find-pick-clear'));
     expect($$('find-pick').map((b) => (b as HTMLInputElement).checked)).toEqual([false, false, false]);
@@ -688,7 +879,7 @@ describe('Find people: adding and emails', () => {
     expect(picks()).toEqual([false, false, false, false, false]);
   });
 
-  it('Write to the picked: new people are added first, and everyone goes to Send to many in the order shown', async () => {
+  it('Write to the picked: new people are saved first, and everyone goes to Send to many in the order shown', async () => {
     sourcing.addSourced.mockResolvedValue({ ok: true, people: [{ id: 'n1', displayName: 'Maya Chen' }] });
     batch.createBatch.mockResolvedValue({ id: 'b7' });
     await searchFor([own, fresh, other]);

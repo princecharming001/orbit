@@ -11,6 +11,7 @@ export const dayOf = (now: Date) => now.toISOString().slice(0, 10);
 export type SourceCount =
   | 'boards_read'
   | 'boards_failed'
+  | 'boards_rate_limited'
   | 'boards_too_large'
   | 'roles_added'
   | 'roles_updated'

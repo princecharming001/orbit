@@ -13,7 +13,7 @@
  */
 import type { Db } from '../db.ts';
 import type { Queue } from '../queue.ts';
-import { readDueBoards } from './boards.ts';
+import { BOARD_BYTES_PER_TICK, readDueBoards } from './boards.ts';
 import { discoverSome, harvestBoards } from './discover.ts';
 import { keepListings } from './intake.ts';
 import type { ReaderNet } from './readers/http.ts';
@@ -24,8 +24,11 @@ import { count, counted, dayOf, setMark } from './usage.ts';
 const DAY = 86_400_000;
 /** Wall clock a tick may use, all parts together. */
 export const TICK_MS = 40_000;
-/** Bytes a tick may parse (roughly its share of the isolate's CPU allowance). */
-export const TICK_MAX_BYTES = 16_000_000;
+/**
+ * Bytes of boards a tick may parse (roughly its share of the isolate's CPU allowance): one board of the largest size
+ * read (an Ashby board of 12 MB), so a large board is a tick's whole share and several small ones share a tick.
+ */
+export const TICK_MAX_BYTES = BOARD_BYTES_PER_TICK;
 /** List and LinkedIn roles not seen for this long are closed. */
 export const LIST_UNSEEN_MS = 3 * DAY;
 /** A closed role with no saved match is deleted after this long. */
@@ -170,7 +173,8 @@ export async function fillTexts(
   let n = 0;
   for (const r of rows) {
     if (run.deadline - run.clock() < 3_000) break;
-    if (await text(db, net, r.id)) n++;
+    // a source that is busy just now is asked again in a later tick
+    if (await text(db, net, r.id).catch(() => undefined)) n++;
   }
   return n;
 }

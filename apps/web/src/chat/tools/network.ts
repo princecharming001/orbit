@@ -33,6 +33,7 @@ import { forget, listMemories, MEMORY_KINDS, remember, searchMemories } from '..
 import { AUTONOMY_TEXT, type AutonomyLevel, pauseOutreach, setAutonomy } from '../../engine/outreach';
 import { askForIntro, cachedPath } from '../../engine/paths';
 import {
+  formIsEmpty,
   interpretAsk,
   type PeopleSearchResult,
   runPeopleSearch,
@@ -642,7 +643,7 @@ export function addSourcedIntent(recommendationIds: string[], next?: 'routes' | 
       : next === 'drafts'
         ? ' Then Orbit drafts a message to each for you to review. Nothing is sent.'
         : '';
-  return `Add ${who} to your People, saved to contact.${then}`;
+  return `Save ${who} to your People.${then}`;
 }
 
 const joinNames = (xs: string[]) =>
@@ -659,7 +660,9 @@ export const findPeopleTool = defineTool({
       .string()
       .max(300)
       .optional()
-      .describe('Who, in the student\'s words ("seed investors in climate software").'),
+      .describe(
+        "Who, in the words of the student's own message. Never add a quality they did not state (stage, sector, level, place).",
+      ),
     goalId: z.string().optional().describe('The goal this is for (from list_goals), if there is one.'),
     school: z
       .string()
@@ -711,9 +714,17 @@ export const findPeopleTool = defineTool({
     // The same search Discover's Find people runs (engine/peopleSearch): the sentence read into filters and
     // criteria, the student's own network and people outside it in one list, people only (a fund is not a person),
     // each with a path, a match and an answer per criterion. The card is the same table.
-    const ask = sourcingAsk(input);
-    const read = await interpretAsk(ask);
-    const form = withNamed(read.form, input);
+    const restated = sourcingAsk(input);
+    // The model restates the ask, and adds what it knows of the student ("early-stage", "biotech") that they never
+    // asked for. The criteria are the student's own: read from the message they typed whenever that message says who
+    // they want. A message that only points back ("yes, find them") leaves the restated ask to stand.
+    const own = ctx.said && ctx.caller === 'llm' ? ctx.said.slice(0, 300) : undefined;
+    const [read, mine] = await Promise.all([
+      interpretAsk(restated),
+      own ? interpretAsk(own) : Promise.resolve(undefined),
+    ]);
+    const { ask, form: base, named } = statedAsk(read.form, mine?.form, own, restated, input);
+    const form = withNamed(base, named);
     const res = await runPeopleSearch(ctx.user, form, {
       signal: ctx.signal,
       purpose: input.purpose,
@@ -737,6 +748,32 @@ function sourcingAsk(input: FindInput): string {
     .map((x) => x?.trim())
     .filter((x): x is string => !!x && !q.toLowerCase().includes(x.toLowerCase()));
   return [q || GOAL_KIND_LABELS[input.purpose].toLowerCase(), ...extra].join(' ').trim();
+}
+
+/**
+ * Whose words decide: the student's own message when it says who they want (its criteria, and only the school,
+ * company and topic it names), else the ask as the model restated it.
+ */
+export function statedAsk(
+  read: SearchForm,
+  mine: SearchForm | undefined,
+  own: string | undefined,
+  restated: string,
+  input: FindInput,
+): { ask: string; form: SearchForm; named: FindInput } {
+  if (!own || !mine || formIsEmpty(mine)) return { ask: restated, form: read, named: input };
+  return { ask: own, form: { ...read, ask: own, criteria: mine.criteria }, named: onlySaid(input, own) };
+}
+
+/** The school, company and topic the model named, kept only where the student's own message names them too. */
+export function onlySaid(input: FindInput, said: string): FindInput {
+  const has = (x?: string) => !!x?.trim() && said.toLowerCase().includes(x.trim().toLowerCase());
+  return {
+    ...input,
+    school: has(input.school) ? input.school : undefined,
+    organization: has(input.organization) ? input.organization : undefined,
+    topic: has(input.topic) ? input.topic : undefined,
+  };
 }
 
 /** The school, company and topic the chat named go in as filters, unless the sentence already put them there. */
@@ -832,7 +869,7 @@ function peopleTable(
   );
 }
 
-type FindInput = {
+export type FindInput = {
   purpose: GoalKind;
   query?: string;
   goalId?: string;
@@ -994,7 +1031,7 @@ export const addSourcedTool = defineTool({
   kind: 'risky',
   runsOnStudentWords: true,
   description:
-    'Call this only when the student\'s own latest message asks to add people from find_people ("add Dana", "add the first two", "add them"; pass their recommendationIds): each becomes a person in their People with a chat at "to contact" for the goal. Never call it on your own after a search, a second-degree or mutuals look, research, routes or a draft: end with one short question instead ("Want me to add them?") and wait. The student approves the add before it happens. With next: "routes" it goes straight on to warm routes to each of them in one card; with next: "drafts" it drafts a message to each. Someone added this way is saved to contact, not someone the student knows.',
+    'Call this only when the student\'s own latest message asks to add people from find_people ("add Dana", "add the first two", "add them"; pass their recommendationIds): each is saved to their People for the goal, and nothing is sent to them (no message, no LinkedIn connection request). Never call it on your own after a search, a second-degree or mutuals look, research, routes or a draft: end with one short question instead ("Want me to add them?") and wait. The student approves the add before it happens. With next: "routes" it goes straight on to warm routes to each of them in one card; with next: "drafts" it drafts a message to each. Someone added this way is saved to People, not someone the student knows: say "Saved to People", never that they were contacted or connected with.',
   input: z.object({
     recommendationIds: z
       .array(z.string().min(1))
@@ -1020,10 +1057,10 @@ export const addSourcedTool = defineTool({
       if (!r.ok) throw new Error(r.message);
       if (input.next) return andThen(ctx, input.next, r.people);
       return list(
-        'Added',
+        'Saved to People',
         r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
         { added: r.people.map((p) => ({ personId: p.id, name: p.displayName, chatId: p.chatId })) },
-        `Added ${r.people.map((p) => p.displayName).join(', ')} to People (saved to contact), ready to write to on LinkedIn.`,
+        `Saved ${r.people.map((p) => p.displayName).join(', ')} to People, ready to write to on LinkedIn.`,
         r.people.length === 1 ? `/people/${r.people[0]!.id}` : '/people',
       );
     }
@@ -1032,10 +1069,10 @@ export const addSourcedTool = defineTool({
     if (!r.ok) throw new Error(r.message);
     if (input.next) return andThen(ctx, input.next, r.people);
     return list(
-      'Added',
+      'Saved to People',
       r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
       { added: r.people.map((p) => ({ personId: p.id, name: p.displayName, chatId: p.chatId })) },
-      `Added ${r.people.map((p) => p.displayName).join(', ')} to People (saved to contact). Deep research starts only when you press it on their page.`,
+      `Saved ${r.people.map((p) => p.displayName).join(', ')} to People. Nothing was sent to them. Deep research starts only when you press it on their page.`,
       r.people.length === 1 ? `/people/${r.people[0]!.id}` : '/people',
     );
   },
@@ -1052,7 +1089,7 @@ async function andThen(
   people: { id: string; displayName: string }[],
 ): Promise<ResultEnvelope> {
   const ids = people.map((p) => p.id);
-  const added = `Added ${people.map((p) => p.displayName).join(', ')} to People (saved to contact).`;
+  const added = `Saved ${people.map((p) => p.displayName).join(', ')} to People.`;
   const env =
     next === 'routes' ? await routesToMany(ctx, ids) : await createDrafts.execute({ personIds: ids }, ctx);
   return { ...env, summary: `${added} ${env.summary}` };

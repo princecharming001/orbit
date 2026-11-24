@@ -359,7 +359,7 @@ export const SAMPLE_JOBS: SampleJob[] = [
     url: gh('airtable', 7712004),
     source: 'greenhouse',
     postedDaysAgo: 1,
-    // a posting that says little: held at 7 whatever else fits
+    // a posting that says little: held at 6 whatever else fits
     skills: [{ name: 'TypeScript', need: 'nice', quote: 'TypeScript a plus' }],
     caps: [{ kind: 'thin', label: 'The posting says little' }],
   },

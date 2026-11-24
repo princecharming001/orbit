@@ -5,9 +5,14 @@
  *                searches a day per student; after that the stored results, with a note. A change of wants only
  *                (places, kinds, chips, eligibility) is not a full search: it re-filters and re-ranks, and rows read
  *                against the same evidence are scored again in code, with no model call.
- *   more         reads the next 10 closely (five model calls of two, side by side) and returns them
- *   list         what is stored, free: the matches, or Saved
- *   scoreOne     one posting by link or pasted text, scored now
+ *   more         reads the next 10 closely (five model calls of two, side by side) and returns them. With
+ *                `deps.background` (production) it answers at once and reads after the answer: each call returns every
+ *                row read so far, `done: false` until none is left. A search that was replaced (a newer one, or the
+ *                profile's evidence changed) answers 404 `search_replaced`, an id that never was 404 `not_found`: the
+ *                browser then asks /roles/search once, which gives the search to follow.
+ *   list         what is stored, free: the matches (with `rest`, also the roles not read closely yet), or Saved,
+ *                which keeps roles that have since closed (`job.closedAt`)
+ *   scoreOne     one posting by link or pasted text, scored now; `{problem}` when there is no profile yet
  *   act          save, dismiss with a reason, applied, interviewing; watch a company
  *   topup        the nightly job: at most 20 new roles read for one student's current profile
  *
@@ -44,7 +49,7 @@ import {
   rankJobs,
   warmCompanies,
 } from './candidates.ts';
-import { loadProfile, plain, type StoredProfile } from './profile.ts';
+import { confirmedProfile, plain, type StoredProfile } from './profile.ts';
 import {
   BACKGROUND_TIMEOUTS,
   CLAIM_MS,
@@ -59,6 +64,7 @@ import {
   readRows,
   readsToday,
   refit,
+  roughFitOf,
 } from './score.ts';
 
 export const SEARCHES_PER_DAY = 3;
@@ -66,7 +72,8 @@ export const MORE_SIZE = 10;
 export const TOPUP_SIZE = 20;
 export const SEARCHES_USED_NOTE =
   'You have run three searches today. These are your latest results, and more are read tonight.';
-export const PROFILE_CHANGED_NOTE = 'Your profile changed. Run the search again to read roles against it.';
+/** What /roles/more says of a search that a newer one replaced; the browser asks /roles/search once and follows it. */
+export const SEARCH_REPLACED = 'That search was replaced by a newer one.';
 export const NO_PROFILE = 'Read your resume or LinkedIn profile first, so Orbit has something to match.';
 
 type SearchRow = {
@@ -85,7 +92,7 @@ type SearchRow = {
 const dayStart = (now: Date) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
 async function needProfile(db: Db, userId: string): Promise<StoredProfile> {
-  const p = await loadProfile(db, userId);
+  const p = await confirmedProfile(db, userId);
   if (!p) throw new HttpError(409, 'no_profile', NO_PROFILE);
   return p;
 }
@@ -163,12 +170,38 @@ async function withJobs(
   });
 }
 
+/**
+ * The roles of a search not read closely (still to be read, or the model left them out twice), each with the parts
+ * Orbit can read without it (`roughFit`): what the table marks "Not read closely yet".
+ */
+async function restOf(db: Db, userId: string, searchId: string, stored: StoredProfile): Promise<RoleMatch[]> {
+  const rows = (await matchesWhere(db, userId, { searchId, open: true })).filter(
+    (r) => r.row.state === 'to_read' || r.row.state === 'failed',
+  );
+  if (!rows.length) return [];
+  // skills by word are read from the posting's text where Orbit already keeps it (nothing is fetched for this)
+  const texts = new Map(
+    (
+      await db.sql<{ id: string; text: string | null }>`
+        select id::text as id, text from orbit_private.jobs
+         where id = any(${rows.map((r) => r.row.job_id)}::uuid[])`
+    ).map((r) => [r.id, r.text]),
+  );
+  const matches = await withJobs(db, rows, { evidenceHash: stored.evidenceHash, profile: stored.profile });
+  return matches.map((m) =>
+    m.fit ? m : { ...m, roughFit: roughFitOf(m.job, stored.profile, texts.get(m.job.id) ?? undefined) },
+  );
+}
+
 async function counts(db: Db, searchId: string, evidenceHash: string) {
+  // the open roles of the search: one taken down since it was listed has left the table, so it is neither listed,
+  // read nor left to read (it is never claimed)
   const [c] = await db.sql<{ listed: number; read: number; left: number }>`
     select count(*)::int as listed,
-           count(*) filter (where state = 'read' and evidence_hash = ${evidenceHash})::int as read,
-           count(*) filter (where state = 'to_read' and status <> 'dismissed')::int as left
-      from orbit.role_matches where search_id = ${searchId}::uuid`;
+           count(*) filter (where m.state = 'read' and m.evidence_hash = ${evidenceHash})::int as read,
+           count(*) filter (where m.state = 'to_read' and m.status <> 'dismissed')::int as left
+      from orbit.role_matches m join orbit_private.jobs j on j.id = m.job_id
+     where m.search_id = ${searchId}::uuid and j.closed_at is null`;
   return c ?? { listed: 0, read: 0, left: 0 };
 }
 
@@ -177,7 +210,12 @@ async function respond(
   userId: string,
   search: SearchRow,
   stored: StoredProfile,
-  extra: { matches?: RoleMatch[]; note?: string } = {},
+  extra: {
+    matches?: RoleMatch[];
+    note?: string;
+    /** stop here: answer `done`, with the roles not read closely as rough rows */
+    over?: boolean;
+  } = {},
 ): Promise<RolesSearchResponse> {
   const c = await counts(s.db, search.id, stored.evidenceHash);
   const done = c.left === 0;
@@ -198,17 +236,12 @@ async function respond(
       }),
       { evidenceHash: stored.evidenceHash },
     );
-    // the model is off: every listed role with the parts Orbit can read without it
-    if (!s.claude.configured && !done) {
-      const rough = await withJobs(
-        s.db,
-        (await matchesWhere(s.db, userId, { searchId: search.id, open: true })).filter(
-          (r) => r.row.state === 'to_read',
-        ),
-        { evidenceHash: stored.evidenceHash, profile: stored.profile },
-      );
+    // the search is over for now (nothing left to read, or the model is off): the roles not read closely come too,
+    // with the parts Orbit can read without it
+    if (done || !s.claude.configured || extra.over) {
+      const rough = await restOf(s.db, userId, search.id, stored);
       matches = [...matches, ...rough];
-      note ??= NOT_READ_NOTE;
+      if (rough.length && (!s.claude.configured || extra.over)) note ??= NOT_READ_NOTE;
     }
   }
   return {
@@ -216,7 +249,7 @@ async function respond(
     matches,
     listed: c.listed,
     read: c.read,
-    done: done || !s.claude.configured,
+    done: done || !s.claude.configured || !!extra.over,
     coverage: await coverageOf(s.db, !!search.sources?.linkedin),
     ...(note ? { note } : {}),
   };
@@ -249,7 +282,14 @@ export async function startSearch(
        where user_id = ${userId}::uuid and created_at >= ${dayStart(now)}::timestamptz
          and coalesce((sources->>'full')::boolean, false)`;
     if ((c?.n ?? 0) >= SEARCHES_PER_DAY && latest)
-      return respond(s, userId, latest, stored, { note: SEARCHES_USED_NOTE });
+      return respond(s, userId, latest, stored, {
+        note: SEARCHES_USED_NOTE,
+        // the latest search is for other evidence (the profile changed after today's third): nothing of it can be
+        // read against this profile, so the browser is told to stop and not to ask for more
+        ...(latest.evidence_hash !== stored.evidenceHash || latest.status === 'dropped'
+          ? { over: true }
+          : {}),
+      });
   } else await refit(s.db, userId, stored);
   const profile = stored.profile;
   const linkedin = await linkedinRoles(s, deps.sources, userId, profile).catch(() => ({
@@ -283,25 +323,14 @@ export async function more(
       from orbit.role_searches where id = ${searchId}::uuid and user_id = ${userId}::uuid`;
   if (!search) throw new HttpError(404, 'not_found', 'no such search');
   const stored = await needProfile(s.db, userId);
-  const coverage = await coverageOf(s.db, !!search.sources?.linkedin);
+  // a newer search took its place, or the profile it was for has other evidence now: not this search any more
   if (search.status === 'dropped' || search.evidence_hash !== stored.evidenceHash)
-    return {
-      searchId,
-      matches: [],
-      listed: search.listed,
-      read: 0,
-      done: true,
-      coverage,
-      note: PROFILE_CHANGED_NOTE,
-    };
+    throw new HttpError(404, 'search_replaced', SEARCH_REPLACED);
+  const coverage = await coverageOf(s.db, !!search.sources?.linkedin);
   const now = s.now();
   const used = await readsToday(s.db, userId, now);
   if (used >= READS_PER_DAY || !s.claude.configured) {
-    const rough = await withJobs(
-      s.db,
-      (await matchesWhere(s.db, userId, { searchId, open: true })).filter((r) => r.row.state === 'to_read'),
-      { evidenceHash: stored.evidenceHash, profile: stored.profile },
-    );
+    const rough = await restOf(s.db, userId, searchId, stored);
     const c = await counts(s.db, searchId, stored.evidenceHash);
     return {
       searchId,
@@ -319,10 +348,9 @@ export async function more(
     const [busy] = await s.db.sql<{ n: number }>`
       select count(*)::int as n from orbit.role_matches
        where search_id = ${searchId}::uuid and state = 'to_read' and read_at > ${new Date(now.getTime() - CLAIM_MS)}::timestamptz`;
-    if (search.error && !busy?.n) {
-      const res = await respond(s, userId, search, stored, { note: NOT_READ_NOTE });
-      return { ...res, done: true };
-    }
+    // the last background read could read nothing: what is read, the rest with their rough parts, and why
+    if (search.error && !busy?.n)
+      return respond(s, userId, search, stored, { note: search.error, over: true });
     if (!busy?.n) {
       const rows = await claimRows(s.db, userId, { searchId, n, now });
       if (rows.length)
@@ -354,8 +382,11 @@ export async function list(
   s: Services,
   userId: string,
   view: 'matches' | 'saved' = 'matches',
+  o: {
+    /** also the latest search's roles not read closely yet, each with its rough parts */ rest?: boolean;
+  } = {},
 ): Promise<RolesListResponse> {
-  const stored = await loadProfile(s.db, userId);
+  const stored = await confirmedProfile(s.db, userId);
   const latest = await latestSearch(s.db, userId);
   const coverage = latest ? await coverageOf(s.db, !!latest.sources?.linkedin) : undefined;
   if (!stored) return { matches: [], ...(latest ? { searchId: latest.id } : {}) };
@@ -369,8 +400,20 @@ export async function list(
           evidenceHash: stored.evidenceHash,
           open: true,
         });
+  const matches = await withJobs(s.db, rows, { evidenceHash: stored.evidenceHash, profile: stored.profile });
+  // only of a search for this profile's evidence: rows listed for an older profile are not this profile's roles
+  if (
+    view === 'matches' &&
+    o.rest &&
+    latest &&
+    latest.status !== 'dropped' &&
+    latest.evidence_hash === stored.evidenceHash
+  ) {
+    const have = new Set(matches.map((m) => m.id));
+    for (const m of await restOf(s.db, userId, latest.id, stored)) if (!have.has(m.id)) matches.push(m);
+  }
   return {
-    matches: await withJobs(s.db, rows, { evidenceHash: stored.evidenceHash, profile: stored.profile }),
+    matches,
     ...(latest ? { searchId: latest.id } : {}),
     ...(coverage ? { coverage } : {}),
     profileAt: stored.updatedAt,
@@ -384,7 +427,9 @@ export async function scoreOne(
   userId: string,
   req: RolesScoreRequest,
 ): Promise<RolesScoreResponse> {
-  const stored = await needProfile(s.db, userId);
+  // no profile yet is not an error: the posting card says so and links to Roles
+  const stored = await confirmedProfile(s.db, userId);
+  if (!stored) return { problem: NO_PROFILE };
   let listing: JobListing;
   const pasted = req.text?.trim();
   if (pasted) {
@@ -472,9 +517,16 @@ export async function act(
     [id, userId, status, reason, s.now()],
   );
   if (!row) throw new HttpError(404, 'not_found', 'no such role');
-  const stored = await loadProfile(s.db, userId);
+  const stored = await confirmedProfile(s.db, userId);
   const [job] = await jobsById(s.db, [row.job_id]);
-  return { match: matchOf(row, jobOf(job!), stored ? { evidenceHash: stored.evidenceHash } : undefined) };
+  // a row not read closely keeps its rough parts, so it stays "Not read closely yet" after it is saved
+  return {
+    match: matchOf(
+      row,
+      jobOf(job!),
+      stored ? { evidenceHash: stored.evidenceHash, profile: stored.profile } : undefined,
+    ),
+  };
 }
 
 /**
@@ -486,7 +538,7 @@ export async function topup(
   deps: RolesDeps,
   userId: string,
 ): Promise<{ listed: number; read: number; note?: string }> {
-  const stored = await loadProfile(s.db, userId);
+  const stored = await confirmedProfile(s.db, userId);
   if (!stored) return { listed: 0, read: 0 };
   const now = s.now();
   const left = READS_PER_DAY - (await readsToday(s.db, userId, now));

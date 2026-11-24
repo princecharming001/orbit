@@ -121,12 +121,21 @@ export interface WorkdayJob {
   companyName?: string;
 }
 
-/** One role's detail: its text and every place it is listed in. */
-export async function readWorkdayJob(net: ReaderNet, token: string, path: string): Promise<Got<WorkdayJob>> {
+/**
+ * One role's detail: its text and every place it is listed in. A 429 is not asked again here (`retries` 0 for it is
+ * the caller's choice): sources.ts spaces these reads and stops asking Workday for a while after one.
+ */
+export async function readWorkdayJob(
+  net: ReaderNet,
+  token: string,
+  path: string,
+  o: { retries?: number } = {},
+): Promise<Got<WorkdayJob>> {
   const w = workdayParts(token);
   if (!w) return fail('bad_shape', 'not a Workday token');
   const got = await askJson(net, `https://${w.host}/wday/cxs/${w.tenant}/${w.site}${path}`, {
     maxBytes: 2_000_000,
+    ...(o.retries !== undefined ? { retries: o.retries } : {}),
   });
   if (!got.ok) return got;
   const info = obj(obj(got.value)?.jobPostingInfo);

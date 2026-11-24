@@ -160,6 +160,29 @@ describe('the questions already waiting, and doubles of one profile', () => {
     expect(d!.merged_into).toBe(first);
   });
 
+  it('whichever of the two rows stays, the question that waited on the other moves over and is settled', async () => {
+    const { userId } = await signedInUser(t, { firstName: 'Xan' });
+    const [older] = await t.db.sql<{ id: string }>`
+      insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, linkedin_member_id, sources, created_at)
+      values (${userId}::uuid, 'Isolde Varga-Whitlock', 'Isolde', 'Varga-Whitlock', 'isolde varga-whitlock', 'ACoGGG1', ${['linkedin']}::text[],
+              now() - interval '1 day')
+      returning id`;
+    // the newer double is the one the question was asked about: it is the one folded away
+    const newer = await addPerson(t, userId, linkedIn('Isolde Varga-Whitlock', 'ACoGGG1'));
+    await t.db
+      .sql`delete from orbit.person_identities where person_id = ${newer}::uuid and kind = 'linkedin_member'`;
+    const mail = await addPerson(t, userId, { name: 'Isolde Varga-Whitlock', email: 'isolde@varga.studio' });
+    await ask(userId, newer, mail);
+    const out = await settleSamePeople(t.db, userId);
+    expect(out.sameProfile).toBe(1);
+    expect(out.assumed).toBe(1);
+    expect(await live(userId)).toEqual(['Isolde Varga-Whitlock']);
+    expect(await questions(userId)).toBe(0);
+    const [n] = await t.db.sql<{ merged_into: string | null }>`
+      select merged_into from orbit.people where id = ${newer}::uuid`;
+    expect(n!.merged_into).toBe(older!.id);
+  });
+
   it('nothing is ever deleted: a folded record keeps its row, and the student can still be asked nothing twice', async () => {
     const { userId } = await signedInUser(t, { firstName: 'Wes' });
     const li = await addPerson(t, userId, linkedIn('Perpetua Lindqvist', 'ACoFFF1'));

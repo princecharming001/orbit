@@ -74,6 +74,21 @@ async function chatFor(userId: string, personId: string, stage = 'identified') {
   return c!.id;
 }
 
+/**
+ * A time zone whose send window (08:00 to 10:30, Tuesday to Thursday) is not open at the moment the test runs. Inside
+ * the window a level 1 approval sends at once, which is right and is not what these tests check.
+ */
+function closedZone(a = 'America/Chicago', b = 'Asia/Tokyo'): string {
+  const hourIn = (zone: string) =>
+    Number(
+      new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', hourCycle: 'h23' }).format(
+        new Date(),
+      ),
+    );
+  const h = hourIn(a);
+  return h >= 7 && h < 11 ? b : a;
+}
+
 describe('sending (§8.5, §14.6, §16)', () => {
   it('§16.8 test 1: two concurrent approves of one draft make exactly one Gmail send', async () => {
     const net = fakeNet(google());
@@ -139,10 +154,11 @@ describe('sending (§8.5, §14.6, §16)', () => {
     const call = api(t, net, { env: {} });
     const { userId, token } = await signedInUser(t);
     await t.db.sql`update orbit.users set autonomy_level = 1 where id = ${userId}::uuid`;
+    const zone = closedZone();
     const p = await addPerson(t, userId, {
       name: 'Omar Hale',
       email: 'omar@example.com',
-      timezone: 'America/Chicago',
+      timezone: zone,
     });
     const c = await call<{ draft: { id: string } }>('/drafts/compose', token, {
       personId: p,
@@ -155,7 +171,7 @@ describe('sending (§8.5, §14.6, §16)', () => {
     expect(r.body.draft.status).toBe('approved');
     const at = new Date(r.body.draft.sendAt);
     const local = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/Chicago',
+      timeZone: zone,
       weekday: 'short',
       hour: 'numeric',
       hourCycle: 'h23',
@@ -221,14 +237,7 @@ describe('sending (§8.5, §14.6, §16)', () => {
     });
     // Yara is somewhere her send window is not open right now, whatever the hour the test runs at: inside the
     // window a level 1 approval sends at once, which is right and is not what this checks
-    const hourIn = (zone: string) =>
-      Number(
-        new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', hourCycle: 'h23' }).format(
-          new Date(),
-        ),
-      );
-    const h = hourIn('America/New_York');
-    const zone = h >= 7 && h < 11 ? 'Asia/Tokyo' : 'America/New_York';
+    const zone = closedZone('America/New_York');
     await t.db.sql`update orbit.people set timezone = ${zone} where id = ${q}::uuid`;
     const r2 = await call<{ draft: { status: string; sendAt: string } }>('/drafts/approve', token, {
       draftId: c2.body.draft.id,

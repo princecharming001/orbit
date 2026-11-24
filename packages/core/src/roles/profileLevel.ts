@@ -21,7 +21,7 @@ export function fullTimeTitle(title: string): boolean {
   return !NOT_FULL_TIME.test(title);
 }
 
-/** "2027-05", "2027-05-15", "May 2027", "2027" → YYYY-MM; anything else undefined. */
+/** "2027-05", "2027-05-15", "May 2027", "5/2027", "5/15/2027", "2027" → YYYY-MM; anything else undefined. */
 export function yearMonth(raw: string | undefined | null): string | undefined {
   if (!raw) return undefined;
   const s = raw.trim();
@@ -30,6 +30,9 @@ export function yearMonth(raw: string | undefined | null): string | undefined {
   if (m) return `${m[1]}-${m[2]!.padStart(2, '0')}`;
   m = /^(\d{1,2})\/(\d{4})$/.exec(s);
   if (m) return `${m[2]}-${m[1]!.padStart(2, '0')}`;
+  // LinkedIn through Unipile writes a date as month/day/year ("6/1/2026")
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  if (m && Number(m[1]) >= 1 && Number(m[1]) <= 12) return `${m[3]}-${m[1]!.padStart(2, '0')}`;
   const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   m = /^([a-z]{3})[a-z]*\.?\s+(\d{4})$/i.exec(s);
   if (m) {

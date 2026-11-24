@@ -896,6 +896,11 @@ export interface CoffeeChat {
   prepQuestions?: string[];
   /** when the referrer introduced the student to this person by email (the chat was opened from that intro) */
   introducedAt?: string;
+  /**
+   * when a LinkedIn connection request with no note went to them from Connect in a people search; until they accept
+   * (the person then has `linkedinConnectedOn`) the request is waiting
+   */
+  connectionRequestedAt?: string;
   priority: 1 | 2 | 3;
   archivedAt?: string;
   createdAt: string;

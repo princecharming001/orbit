@@ -709,7 +709,7 @@ export function MapPage() {
       const r = await addLinkedInFound(user, [f.id]);
       if (!r.ok) return void toast.push({ text: r.message, tone: 'neutral' });
       setQuery(f.name);
-      toast.push({ text: `Added ${f.name} to People, saved to contact.`, tone: 'good' });
+      toast.push({ text: `Saved ${f.name} to People.`, tone: 'good' });
       setParams({ reach: r.people[0]!.id });
     });
   };

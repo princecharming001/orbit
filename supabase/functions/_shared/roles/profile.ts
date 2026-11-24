@@ -26,6 +26,7 @@ import {
   canonicalSkill,
   skillIn,
   skillName,
+  splitSkillList,
   uniqueSkills,
 } from '../../../../packages/core/src/roles/skills.ts';
 import type {
@@ -122,9 +123,8 @@ const DEGREE_RANK: Record<DegreeKind, number> = {
 export function splitSkills(raw: string[]): string[] {
   const out: string[] = [];
   for (const line of raw)
-    for (const part of line.replace(/^[^:]{1,30}:\s*/, '').split(/[,;|•·/]|\s+and\s+/)) {
-      const s = part.replace(/\([^)]*\)/g, '').trim();
-      if (s && s.length <= 40) out.push(s);
+    for (const part of splitSkillList(line.replace(/^[^:]{1,30}:\s*/, '').replace(/\([^)]*\)/g, ' '))) {
+      if (part.length <= 40) out.push(part);
     }
   return out;
 }
@@ -510,7 +510,10 @@ export async function readProfile(
   return { proposed, ...(note ? { note } : {}) };
 }
 
-/** Keeps what Orbit read beside the student's own; the first read is the profile until they save one. */
+/**
+ * Keeps what Orbit read beside the student's own. The first read makes the row, so the proposal survives a reload;
+ * the row is the student's profile only once they confirm it (`saveProfile` sets `confirmed_at`).
+ */
 async function storeProposed(db: Db, userId: string, proposed: RoleProfile): Promise<void> {
   const h = await hashesOf(proposed);
   await db.sql`
@@ -527,8 +530,11 @@ export interface StoredProfile {
   evidenceHash: string;
   wantsHash: string;
   updatedAt: string;
+  /** the student saved it ("Find roles"); false while the row holds only what Orbit proposed */
+  confirmed: boolean;
 }
 
+/** The stored row, confirmed or not. Searching, scoring and listing use `confirmedProfile`. */
 export async function loadProfile(db: Db, userId: string): Promise<StoredProfile | undefined> {
   const [r] = await db.sql<{
     profile: RoleProfile;
@@ -536,8 +542,9 @@ export async function loadProfile(db: Db, userId: string): Promise<StoredProfile
     evidence_hash: string;
     wants_hash: string;
     updated_at: Date | string;
+    confirmed_at: Date | string | null;
   }>`
-    select profile, proposed, evidence_hash, wants_hash, updated_at from orbit.role_profiles
+    select profile, proposed, evidence_hash, wants_hash, updated_at, confirmed_at from orbit.role_profiles
      where user_id = ${userId}::uuid`;
   if (!r) return undefined;
   return {
@@ -546,7 +553,14 @@ export async function loadProfile(db: Db, userId: string): Promise<StoredProfile
     evidenceHash: r.evidence_hash,
     wantsHash: r.wants_hash,
     updatedAt: new Date(r.updated_at).toISOString(),
+    confirmed: r.confirmed_at !== null,
   };
+}
+
+/** The profile the student confirmed; nothing while they have only been shown what Orbit read (plan 44 §2.2). */
+export async function confirmedProfile(db: Db, userId: string): Promise<StoredProfile | undefined> {
+  const p = await loadProfile(db, userId);
+  return p?.confirmed ? p : undefined;
 }
 
 const str = (v: unknown, max: number): string | undefined =>
@@ -665,9 +679,10 @@ export async function saveProfile(db: Db, userId: string, raw: unknown, now: Dat
   const profile = cleanProfile(raw, now, await namesOf(db, userId));
   const h = await hashesOf(profile);
   await db.sql`
-    insert into orbit.role_profiles (user_id, profile, evidence_hash, wants_hash)
-    values (${userId}::uuid, ${profile}::jsonb, ${h.evidenceHash}, ${h.wantsHash})
+    insert into orbit.role_profiles (user_id, profile, evidence_hash, wants_hash, confirmed_at)
+    values (${userId}::uuid, ${profile}::jsonb, ${h.evidenceHash}, ${h.wantsHash}, ${now}::timestamptz)
     on conflict (user_id) do update set profile = excluded.profile, evidence_hash = excluded.evidence_hash,
-      wants_hash = excluded.wants_hash`;
+      wants_hash = excluded.wants_hash,
+      confirmed_at = coalesce(orbit.role_profiles.confirmed_at, excluded.confirmed_at)`;
   return (await loadProfile(db, userId))!;
 }

@@ -2640,7 +2640,8 @@ async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>,
 //
 // Unipile shapes, checked against its API reference and its official SDK (unipile-node-sdk 1.9.3, ISC licence):
 //   GET /api/v1/users/{provider_id | public_identifier}?account_id=…&linkedin_sections=experience&linkedin_sections=…
-//     -> work_experience[] {position, company, company_id, company_url, company_picture_url, current, start, end},
+//     -> work_experience[] {position, company, company_id, company_url, company_picture_url, current, start, end,
+//        description (with the full experience section)},
 //        education[] {school, school_id, school_picture_url, degree, field_of_study, start, end}, summary,
 //        contact_info {emails, phones} (1st-degree connections), throttled_sections[], network_distance,
 //        profile_picture_url(_large). Several sections go as one parameter each (a comma-joined list is refused).
@@ -3035,7 +3036,13 @@ export function mapRecommendations(p: Record<string, unknown>): ProfileRecommend
   return out;
 }
 
-/** One LinkedIn profile, trimmed to what Orbit keeps: identity, current and past positions, schools, contact. */
+/** The most of one position's description that is kept: a long one is cut, never dropped. */
+export const POSITION_DESCRIPTION_MAX = 2000;
+
+/**
+ * One LinkedIn profile, trimmed to what Orbit keeps: identity, current and past positions (each with what the person
+ * wrote about it, when LinkedIn gives it), schools, contact.
+ */
 export function mapProfile(p: Record<string, unknown>, opts: { recommendations?: boolean } = {}) {
   const num = (v: unknown) => {
     const n = typeof v === 'string' ? Number(v.replace(/[,+\s]/g, '')) : Number(v);
@@ -3088,6 +3095,9 @@ export function mapProfile(p: Record<string, unknown>, opts: { recommendations?:
         current: x.current === true || (x.current !== false && !dateText(x.end)),
         start: dateText(x.start),
         end: dateText(x.end),
+        // what they did there, in their own words, when LinkedIn gives it (the full experience section does): the
+        // lines the Roles profile quotes for "shown in work" (plan 44 §3)
+        description: str(x.description, POSITION_DESCRIPTION_MAX),
       }))
       .filter((x) => x.company || x.title),
     education: list(p.education)

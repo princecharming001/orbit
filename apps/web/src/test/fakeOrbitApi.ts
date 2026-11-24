@@ -26,6 +26,7 @@ import type {
   ReplyClass,
   ReplyItem,
   ServerDraft,
+  SourceConnectCode,
   SourcedCandidate,
   SourceState,
   SourceStates,
@@ -35,7 +36,7 @@ import type {
   WarmUpRefusal,
   WarmUpRun,
 } from '@orbit/core';
-import { approvedCommentError, autoWarmUpSchedule, readiness } from '@orbit/core';
+import { approvedCommentError, autoWarmUpSchedule, readiness, SOURCE_CONNECT_REASONS } from '@orbit/core';
 import { createRolesSim, type RolesSim } from '../engine/rolesSim';
 import type { AccountUser, TextDaysRequest } from '../integrations/orbitApi';
 
@@ -50,6 +51,60 @@ function callNotes(
     .filter((e) => kept[e.id])
     .map((e) => ({ app, eventId: e.id, startAt: e.startAt, ...kept[e.id]! }));
   return { notes, none: events.filter((e) => !kept[e.id]).map((e) => e.id) };
+}
+
+/**
+ * Saves sourced candidates as /source/add does: each becomes a person with a chat at "to contact", sent down with the
+ * next pull. Someone saved before keeps the person they became.
+ */
+function saveSourced(
+  state: FakeState,
+  ids: string[],
+  /** now, as ISO text */
+  at: string,
+): { id: string; displayName: string; chatId: string }[] {
+  const uuid = () => crypto.randomUUID();
+  const fresh: { id: string; displayName: string; chatId: string; from: SourcedCandidate }[] = [];
+  const out: { id: string; displayName: string; chatId: string }[] = [];
+  for (const id of ids) {
+    const c = state.sourced.find((x) => x.id === id);
+    if (!c) continue;
+    let p = state.savedSourced.get(id);
+    if (!p) {
+      p = { id: uuid(), displayName: c.name, chatId: uuid() };
+      state.savedSourced.set(id, p);
+      fresh.push({ ...p, from: c });
+    }
+    out.push(p);
+  }
+  if (!fresh.length) return out;
+  state.pages.push({
+    changes: {
+      people: fresh.map((p) => ({
+        id: p.id,
+        userId: state.user.id,
+        displayName: p.displayName,
+        currentTitle: p.from.title,
+        currentOrganizationRaw: p.from.org,
+        // as the server keeps them (plan 31): the email the page gave, and a LinkedIn address when known
+        primaryEmail: p.from.email ?? null,
+        linkedinUrl: p.from.linkedinUrl ?? null,
+        sources: ['manual'],
+        createdAt: at,
+        updatedAt: at,
+      })),
+      chats: fresh.map((p) => ({
+        id: p.chatId,
+        userId: state.user.id,
+        personId: p.id,
+        stage: 'identified',
+        stageEnteredAt: at,
+        createdAt: at,
+        updatedAt: at,
+      })),
+    },
+  });
+  return out;
 }
 
 export const FAKE_API_BASE = 'https://orbit-api.test/functions/v1/orbit-api';
@@ -108,6 +163,8 @@ export interface FakeState {
   /** dossiers asked for that become ready on the next /research/get */
   researchQueue: Map<string, Dossier>;
   sourced: SourcedCandidate[];
+  /** who each sourced candidate became when it was saved (by /source/add or /source/connect), by recommendation id */
+  savedSourced: Map<string, { id: string; displayName: string; chatId: string }>;
   /** every POST /source/search body, in order, for tests that check what a search asked */
   sourceSearches: Record<string, unknown>[];
   paths: Map<string, (WarmPath & { id: string; names: Record<string, string> })[]>;
@@ -159,6 +216,12 @@ export interface FakeState {
     found?: { memberId: string; name: string; headline?: string; distance?: number }[];
     searchReason?: 'limit' | 'error';
     searches?: string[];
+    /**
+     * POST /source/connect: the recommendations a connection request went out for (one each, however often asked),
+     * and what LinkedIn answers with instead of taking a request (`weekly_limit`, `profile_not_found`, ...)
+     */
+    connects?: string[];
+    connectError?: SourceConnectCode;
   };
   /** what /people/history answers per person (empty lists otherwise) */
   history: Map<
@@ -216,8 +279,9 @@ export interface FakeState {
   /** plan 43: the signed-in account is the owner's (isOwner beside the user on /auth/session and /auth/me) */
   isOwner: boolean;
   /**
-   * plan 44 §9.4: the features the owner switched on, sent beside the user on /auth/session and /auth/me; the owner's
-   * Launch row (GET /admin/features, PUT /admin/features/:feature) changes it
+   * plan 44 §9.4: the features the owner switched on for everyone (the public switch); the owner's Launch row
+   * (GET /admin/features, PUT /admin/features/:feature) reads and changes it. What /auth/session and /auth/me send
+   * beside the user is this list, plus every feature for the owner's own account, who tries one before it is launched
    */
   features: string[];
   /**
@@ -411,6 +475,7 @@ export function createFakeOrbitApi(
     dossiers: new Map(),
     researchQueue: new Map(),
     sourced: [],
+    savedSourced: new Map(),
     sourceSearches: [],
     paths: new Map(),
     replies: [],
@@ -592,11 +657,14 @@ export function createFakeOrbitApi(
         { error: { code: 'unconfigured', message: 'not configured', missing: ['EXA_API_KEY'] } },
         { 'x-orbit-connector': 'unconfigured' },
       );
+    // what this account is shown: what is offered to everyone, and for the owner every feature (the real
+    // _shared/features.ts featuresShownTo)
+    const shownFeatures = () => (state.isOwner ? [...new Set([...state.features, 'roles'])] : state.features);
     // sign-in and sessions
     if (route === '/auth/session') {
       if (body.code !== code)
         return error(401, 'unauthorized', 'that sign-in link has expired; sign in again');
-      return json(200, { ...issue(), user: state.user, isOwner: state.isOwner, features: state.features });
+      return json(200, { ...issue(), user: state.user, isOwner: state.isOwner, features: shownFeatures() });
     }
     if (route === '/auth/refresh') {
       if (!state.refresh || body.refreshToken !== state.refresh)
@@ -711,7 +779,7 @@ export function createFakeOrbitApi(
     // plan 44: Roles, only while the owner offers it
     if (route.startsWith('/roles/')) {
       state.roleCalls.push({ route, body });
-      if (!state.features.includes('roles')) return error(404, 'not_found', 'Roles is not offered.');
+      if (!shownFeatures().includes('roles')) return error(404, 'not_offered', 'Roles is not offered yet.');
       const r = await state.roles.handle(route, body);
       return r.ok ? json(200, r.value) : error(r.status, r.code, r.message);
     }
@@ -1335,7 +1403,7 @@ export function createFakeOrbitApi(
         state.refresh = undefined;
         return json(200, { ok: true });
       case '/auth/me':
-        return json(200, { user: state.user, isOwner: state.isOwner, features: state.features });
+        return json(200, { user: state.user, isOwner: state.isOwner, features: shownFeatures() });
       case '/sync/status':
         return json(200, {
           counts: state.status.counts,
@@ -1617,40 +1685,51 @@ export function createFakeOrbitApi(
       }
       case '/source/add': {
         const ids = (body.recommendationIds as string[]) ?? [];
-        const people = ids
-          .map((id) => state.sourced.find((c) => c.id === id))
-          .filter((c): c is SourcedCandidate => !!c)
-          .map((c) => ({ id: uuid(), displayName: c.name, chatId: uuid(), from: c }));
+        return json(200, { people: saveSourced(state, ids, iso(clock)) });
+      }
+      case '/source/connect': {
+        // saved first, as /source/add saves them; then one request, once per recommendation
+        const recId = String(body.recommendationId ?? '');
+        const c = state.sourced.find((x) => x.id === recId);
+        if (!c) return error(404, 'not_found', 'no such recommendation');
+        const [person] = saveSourced(state, [recId], iso(clock));
+        const no = (code: SourceConnectCode, reason = SOURCE_CONNECT_REASONS[code]) =>
+          json(200, { person, sent: false, code, reason });
+        if (!c.linkedinUrl) return no('no_profile');
+        if (c.degree === 1) return no('already_connected');
+        state.linkedin.connects ??= [];
+        if (state.linkedin.connects.includes(recId)) return no('already_requested');
+        if (state.linkedin.status !== 'active')
+          return no(
+            'linkedin_not_active',
+            state.linkedin.status === 'parked'
+              ? 'LinkedIn is paused because you were away. Saved to People instead.'
+              : state.linkedin.status === 'needs_reauth'
+                ? 'LinkedIn signed Orbit out. Saved to People instead.'
+                : undefined,
+          );
+        if (state.linkedin.connectError) return no(state.linkedin.connectError);
+        state.linkedin.connects.push(recId);
         const at = iso(clock);
+        // the chat stands where a sent request belongs
         state.pages.push({
           changes: {
-            people: people.map((p) => ({
-              id: p.id,
-              userId: state.user.id,
-              displayName: p.displayName,
-              currentTitle: p.from.title,
-              currentOrganizationRaw: p.from.org,
-              // as the server keeps them (plan 31): the email the page gave, and a LinkedIn address when known
-              primaryEmail: p.from.email ?? null,
-              linkedinUrl: p.from.linkedinUrl ?? null,
-              sources: ['manual'],
-              createdAt: at,
-              updatedAt: at,
-            })),
-            chats: people.map((p) => ({
-              id: p.chatId,
-              userId: state.user.id,
-              personId: p.id,
-              stage: 'identified',
-              stageEnteredAt: at,
-              createdAt: at,
-              updatedAt: at,
-            })),
+            chats: [
+              {
+                id: person!.chatId,
+                userId: state.user.id,
+                personId: person!.id,
+                stage: 'outreach_sent',
+                stageEnteredAt: at,
+                outreachChannel: 'linkedin',
+                connectionRequestedAt: at,
+                createdAt: at,
+                updatedAt: at,
+              },
+            ],
           },
         });
-        return json(200, {
-          people: people.map(({ id, displayName, chatId }) => ({ id, displayName, chatId })),
-        });
+        return json(200, { person, sent: true });
       }
       // routes
       case '/paths/find': {

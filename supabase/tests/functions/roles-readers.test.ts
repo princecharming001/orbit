@@ -17,7 +17,7 @@ import {
   TEXT_CAP,
   titleKey,
 } from '../../functions/_shared/roles/intake.ts';
-import { readAshby } from '../../functions/_shared/roles/readers/ashby.ts';
+import { ASHBY_MAX_BYTES, readAshby } from '../../functions/_shared/roles/readers/ashby.ts';
 import { boardLinksIn, boardOfUrl } from '../../functions/_shared/roles/readers/boardUrls.ts';
 import { readGreenhouse, readGreenhouseJob } from '../../functions/_shared/roles/readers/greenhouse.ts';
 import { askJson } from '../../functions/_shared/roles/readers/http.ts';
@@ -182,12 +182,42 @@ describe('Ashby', () => {
   });
 
   it('a board larger than the worker can read is too_large, with its size', async () => {
+    // 12 MB: stage 0 measured 22% of Ashby boards over the old 2 MB, and parsing 10 MB costs well under 100 ms
+    expect(ASHBY_MAX_BYTES).toBe(12_000_000);
     const f = fakeBoards([
       (u) => (u.hostname === 'api.ashbyhq.com' ? json(fixture('ashby-board.json')) : undefined),
     ]);
     const r = await readAshby(net(f), 'quarry', 'Quarry', 2000);
     expect(r).toMatchObject({ ok: false, reason: 'too_large' });
     expect(r.ok ? 0 : (r.bytes ?? 0)).toBeGreaterThan(2000);
+  });
+
+  it('a large answer is decoded as it arrives: a character split between two parts is read whole', async () => {
+    const body = JSON.stringify({ jobs: [], note: 'Zürich, São Paulo, 東京 — “quoted”' });
+    const bytes = new TextEncoder().encode(body);
+    // one byte a part: every multi-byte character is split
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const b of bytes) c.enqueue(new Uint8Array([b]));
+        c.close();
+      },
+    });
+    const f = fakeBoards([() => new Response(stream, { headers: { 'content-type': 'application/json' } })]);
+    const got = await askJson(net(f), 'https://api.ashbyhq.com/posting-api/job-board/parts');
+    expect(got).toMatchObject({ ok: true, bytes: bytes.length });
+    if (got.ok) expect((got.value as { note: string }).note).toBe('Zürich, São Paulo, 東京 — “quoted”');
+    // and the cap is on bytes read, not on what the site says it will send
+    const again = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(bytes);
+        c.close();
+      },
+    });
+    const g = fakeBoards([() => new Response(again)]);
+    expect(await askJson(net(g), 'https://api.ashbyhq.com/x', { maxBytes: 20 })).toMatchObject({
+      ok: false,
+      reason: 'too_large',
+    });
   });
 });
 
@@ -278,6 +308,13 @@ describe('Workday', () => {
     const r = await readWorkday(net(f), 'busy.wd1.myworkdayjobs.com/busy/Site', 'Busy');
     expect(r).toMatchObject({ ok: false, reason: 'rate_limited' });
     expect(f.calls).toHaveLength(3);
+    // a role's detail can be asked once and no more: its caller spaces these reads and pauses after a 429
+    const g = fakeBoards([() => new Response('', { status: 429 })]);
+    const d = await readWorkdayJob(net(g), 'busy.wd1.myworkdayjobs.com/busy/Site', '/job/X/Y_JR1', {
+      retries: 0,
+    });
+    expect(d).toMatchObject({ ok: false, reason: 'rate_limited' });
+    expect(g.calls).toHaveLength(1);
   });
 });
 

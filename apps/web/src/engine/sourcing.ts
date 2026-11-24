@@ -4,6 +4,7 @@
  */
 import type {
   GoalKind,
+  SourceConnectCode,
   SourcedCandidate,
   SourceEmailResponse,
   SourceSearchResponse,
@@ -11,7 +12,8 @@ import type {
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isAccountMode, isServerUser, NO_SERVER, SIGN_IN_FIRST } from '../integrations/orbitApi';
-import { pullNow, serverIdOf } from './serverSync';
+import { blockForStatus } from './linkedinSendWords';
+import { freshLinkedinStatus, pullNow, serverIdOf } from './serverSync';
 
 /** The providers by the names a student would know. */
 export const PROVIDER_LABELS: Record<string, string> = {
@@ -97,15 +99,108 @@ export type AddOutcome =
   | { ok: true; people: { id: string; displayName: string; chatId: string }[] }
   | { ok: false; message: string };
 
-/** Add sourced candidates the student picked: each becomes a person with a chat at "to contact". No research starts. */
+const PULL_WAITS_MS = [0, 1500, 2500, 4000];
+
+/** Pulls until every one of these people is in the browser's own copy, a few tries, then gives up quietly. */
+export async function pullUntilHere(
+  userId: string,
+  personIds: string[],
+  waits: number[] = PULL_WAITS_MS,
+): Promise<boolean> {
+  for (const wait of waits) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    await pullNow(userId).catch(() => undefined);
+    const here = await db.people.bulkGet(personIds);
+    if (here.every(Boolean)) return true;
+  }
+  return false;
+}
+
+/**
+ * Save sourced candidates the student picked to People: each becomes a person with a chat that waits for a first
+ * message. Nothing is sent and no research starts.
+ */
 export async function addSourced(user: Pick<User, 'id'>, recommendationIds: string[]): Promise<AddOutcome> {
   if (!isServerUser(user.id)) return notHere();
-  if (!recommendationIds.length) return { ok: false, message: 'Pick someone to add first.' };
+  if (!recommendationIds.length) return { ok: false, message: 'Pick someone to save first.' };
   const r = await callApi('/source/add', { recommendationIds });
   if (!r.ok) return { ok: false, message: r.message };
-  // the new people and their chats come down with the next pull; do it now so their pages open
-  await pullNow(user.id).catch(() => undefined);
+  // The new people and their chats come down with a pull, and a pull leaves out rows written in the last couple of
+  // seconds (they may still be mid-transaction). So pull until they are here: "Saved, open" must open a page.
+  await pullUntilHere(
+    user.id,
+    r.value.people.map((p) => p.id),
+  );
   return { ok: true, people: r.value.people };
+}
+
+/**
+ * What Connect did. The person is in People either way; `sent` says whether a LinkedIn connection request went out
+ * on this click, and when it did not, `reason` says why in words to show as they are. `requested`: a request from the
+ * student is waiting with them (this one, or one sent before), so the row reads "Request sent".
+ */
+export type ConnectOutcome =
+  | {
+      ok: true;
+      person: { id: string; displayName: string; chatId: string };
+      sent: boolean;
+      requested: boolean;
+      code?: SourceConnectCode;
+      reason?: string;
+    }
+  | { ok: false; message: string };
+
+/**
+ * Connect with someone a search found: the server saves them to People and sends one LinkedIn connection request,
+ * with no note, from the student's own LinkedIn. The click is the approval of that one request; no message and no
+ * follow-up goes with it. The server sends at most one request per person, so a retry never sends a second.
+ */
+export async function connectSourced(
+  user: Pick<User, 'id'>,
+  recommendationId: string,
+): Promise<ConnectOutcome> {
+  if (!isServerUser(user.id)) return notHere();
+  const r = await callApi('/source/connect', { recommendationId });
+  if (!r.ok) return { ok: false, message: r.message };
+  await pullUntilHere(user.id, [r.value.person.id]);
+  const { person, sent, code, reason } = r.value;
+  return {
+    ok: true,
+    person,
+    sent,
+    requested: sent || code === 'already_requested',
+    ...(code ? { code } : {}),
+    ...(reason ? { reason } : {}),
+  };
+}
+
+/**
+ * Whether Connect is offered on people a search found: an Orbit account whose own LinkedIn is connected and active
+ * (the server sends the request from it). Not connected, paused, signed out, a copy with no account, the sample
+ * student: the button is Save instead. The same status rule as a LinkedIn message (`linkedInSendWay`).
+ */
+export async function canConnectOnLinkedIn(user: Pick<User, 'id'>): Promise<boolean> {
+  if (!isServerUser(user.id)) return false;
+  const { status, asked } = await freshLinkedinStatus().catch(() => ({ status: undefined, asked: false }));
+  return asked && !blockForStatus(status);
+}
+
+/**
+ * The people, of these, with a connection request waiting: one went from Connect (their chat says when) and they are
+ * not a connection yet.
+ */
+export async function requestsWaiting(personIds: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!personIds.length) return out;
+  const chats = await db.chats.where('personId').anyOf(personIds).toArray();
+  const asked = [
+    ...new Set(chats.filter((c) => c.connectionRequestedAt && !c.archivedAt).map((c) => c.personId)),
+  ];
+  const people = await db.people.bulkGet(asked);
+  asked.forEach((id, i) => {
+    if (people[i] && !people[i]!.linkedinConnectedOn) out.add(id);
+  });
+  return out;
 }
 
 /**

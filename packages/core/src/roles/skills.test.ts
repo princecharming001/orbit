@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { verifyQuote } from './quote';
-import { canonicalSkill, sameSkill, skillIn, skillName, skillsIn, uniqueSkills } from './skills';
+import {
+  canonicalSkill,
+  knownSkill,
+  sameSkill,
+  showsSkill,
+  skillIn,
+  skillName,
+  skillsIn,
+  splitSkillList,
+  uniqueSkills,
+} from './skills';
 
 describe('skill names', () => {
   it('folds the common spellings into one skill', () => {
@@ -105,5 +115,46 @@ describe('a skill that plainly includes another', () => {
     expect(skillShownIn('Built reconciliation services in Go and PostgreSQL', 'SQL')).toBe(true);
     expect(skillShownIn('Cleaned claims data with pandas', 'Python')).toBe(true);
     expect(skillShownIn('Wrote the site in JavaScript', 'Java')).toBe(false);
+  });
+});
+
+describe('a written list of skills', () => {
+  it('splits on commas, semicolons, slashes, "and" and "or"', () => {
+    expect(splitSkillList('Python, SQL; Figma/Sketch and R or Stata')).toEqual([
+      'Python',
+      'SQL',
+      'Figma',
+      'Sketch',
+      'R',
+      'Stata',
+    ]);
+  });
+
+  it('keeps names written with a slash or an ampersand whole', () => {
+    expect(splitSkillList('Figma, user research, A/B testing')).toEqual([
+      'Figma',
+      'user research',
+      'A/B testing',
+    ]);
+    expect(splitSkillList('CI/CD, UI/UX design and TCP/IP')).toEqual(['CI/CD', 'UI/UX design', 'TCP/IP']);
+    expect(splitSkillList('P&L ownership; R&D')).toEqual(['P&L ownership', 'R&D']);
+  });
+});
+
+describe('a skill Orbit knows by name', () => {
+  it('is one specific tool or language, however it is spelled', () => {
+    for (const s of ['Python', 'js', 'Postgres', 'Excel', 'k8s', 'Figma', 'PowerPoint'])
+      expect(knownSkill(s), s).toBe(true);
+    for (const s of ['Spreadsheets', 'Secondary research', 'Statistical programs', 'Kafkaesque writing'])
+      expect(knownSkill(s), s).toBe(false);
+  });
+
+  it('a tool shows the kind of work it is for', () => {
+    expect(showsSkill('Excel', 'Spreadsheets')).toBe(true);
+    expect(showsSkill('Google Sheets', 'spreadsheets')).toBe(true);
+    expect(showsSkill('PowerPoint', 'Presentations')).toBe(true);
+    expect(showsSkill('Stata', 'Statistical software')).toBe(true);
+    // one direction only
+    expect(showsSkill('Spreadsheets', 'Excel')).toBe(false);
   });
 });

@@ -33,7 +33,7 @@ test.describe('a setting, straight from the chat', () => {
     await expect(card).toBeVisible({ timeout: 30_000 });
     await expect(card).toHaveAttribute('data-setting', 'resume');
     await expect(card).toContainText('Resume');
-    await expect(card).toContainText('Settings · Integrations');
+    await expect(card).toContainText('Settings · Profile');
     // what is there now, said plainly
     await expect(card).toContainText(/On file: .+\.pdf|No resume yet/);
     await card.getByTestId('setting-open').click();

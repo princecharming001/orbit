@@ -47,7 +47,9 @@ export const FIT_WEIGHTS = {
     citizenship_no: 2,
     citizenship_ask: 5,
     place: 5,
-    thin: 7,
+    // §6.4 drafted this at 7. A posting that says little cannot be called a good fit on paper, because there is
+    // little paper: at 7 it was the one cap under which a role still showed as a good fit (§6.7: none may)
+    thin: 6,
   } satisfies Record<FitCapKind, number>,
   /** fewer requirements than this and the posting "says little" */
   thinBelow: 3,
@@ -162,12 +164,13 @@ const placeHits = (places: string[], words: string[]) =>
 /**
  * The caps (§6.4) for one student and one role, from the requirements read from the posting and the role's own
  * fields, set against what the student said. Unknown is never a cap: a posting silent on sponsorship holds nobody
- * down, and neither does a student who was never asked, except for citizenship, which is asked once.
+ * down, and neither does a student who was never asked, except for citizenship, which is asked once. One cap comes
+ * from the role itself: an internship, for someone who is no longer a student or a new graduate.
  */
 export function capsFor(
   reqs: JobRequirement[],
   profile: Pick<RoleProfile, 'degree' | 'graduation' | 'fullTimeMonths' | 'eligibility' | 'wants' | 'level'>,
-  job?: Pick<Job, 'places' | 'remote' | 'sponsorship'>,
+  job?: Pick<Job, 'places' | 'remote' | 'sponsorship'> & Partial<Pick<Job, 'level'>>,
 ): FitCapFact[] {
   const caps: FitCapFact[] = [];
   const add = (c: FitCapFact) => {
@@ -213,6 +216,10 @@ export function capsFor(
       }
     }
   }
+  // an internship is for people still studying (or just finishing): someone a year or more into full-time work is
+  // outside it whatever the posting says of dates, as they are outside a graduation window
+  if (job?.level === 'intern' && !studying)
+    add({ kind: 'graduation', label: 'An internship, for current students' });
   if (job?.sponsorship === 'none' && profile.eligibility.needsSponsorship === true)
     add({ kind: 'sponsorship', label: 'Does not sponsor visas' });
   if (job && job.remote !== 'remote' && placeHits(job.places, profile.wants.notPlaces))

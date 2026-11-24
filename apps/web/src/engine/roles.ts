@@ -9,6 +9,10 @@
  * - A search is a job, not one long request (§5): /roles/search lists the roles to read, then /roles/more reads a few
  *   at a time until it is done. Each step is one short call, well inside the client's 25 seconds. The loop outlives
  *   the page: leaving Roles and coming back finds it still going, or carries on from where the last visit stopped.
+ *   In production the server answers /roles/more at once and reads behind the answer, so each answer holds every row
+ *   read so far and `done: false` until none is left: the loop waits between asks, keeps rows by id (never twice),
+ *   stops on `done`, shows `note`, follows the search that replaced its own (404 `search_replaced`), and when nothing
+ *   more is read for a long while it stops asking and shows the rest as "Not read closely yet".
  * - Every match is kept in `roleMatches`, so a reload, an offline visit and a chat card show the last matches.
  * - The demo student runs on sample roles in the browser (`rolesSim.ts`); a local copy with no Orbit account has no
  *   Roles at all.
@@ -17,6 +21,7 @@ import {
   type DismissReason,
   type Job,
   type JobLevel,
+  levelsFor,
   type MatchStatus,
   normalizeCompany,
   type PostingInfo,
@@ -42,7 +47,7 @@ import { readView, writeView } from '../state/viewState';
 import { featureOn } from './features';
 import { barsOfScore } from './peopleSearch';
 import { currentResumeFacets } from './resume';
-import { createRolesSim, levelsFor, profileKey, type RolesSim, type RolesSimState } from './rolesSim';
+import { createRolesSim, profileKey, type RolesSim, type RolesSimState } from './rolesSim';
 import { ownProfile, readOwnProfile } from './selfProfile';
 import { buildTargetPlan } from './targetPlan';
 import { addTarget } from './targets';
@@ -86,6 +91,7 @@ function demoSim(userId: string): RolesSim {
 /** Test hook: forget the demo's sample servers held in memory. */
 export function resetRolesForTests(): void {
   sims.clear();
+  proposals.clear();
   for (const r of running.values()) r.abort.abort();
   running.clear();
 }
@@ -270,7 +276,16 @@ export async function readProfile(
   if (!r.ok) return { ok: false, message: r.message };
   const proposed = (r.value as RolesProfileResponse).proposed;
   if (!proposed) return { ok: false, message: 'Orbit could not read a profile from that. Try again.' };
-  return { ok: true, proposed, note: (r.value as RolesProfileResponse).note };
+  return { ok: true, proposed: withLevels(proposed), note: (r.value as RolesProfileResponse).note };
+}
+
+/**
+ * The server leaves `wants.levels` empty to mean "the levels that fit the profile's level". The profile screen shows
+ * levels as ticked boxes, so an empty list is filled with those levels here: the student sees which are searched and
+ * unticks what they do not want. The search is the same either way.
+ */
+export function withLevels(p: RoleProfile): RoleProfile {
+  return p.wants.levels.length ? p : { ...p, wants: { ...p.wants, levels: levelsFor(p.level) } };
 }
 
 export async function keptProfile(userId: string): Promise<KeptProfile | undefined> {
@@ -288,7 +303,7 @@ export async function saveProfile(
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   const r = await rolesCall(user.id, '/roles/profile', { save: profile });
   if (!r.ok) return { ok: false, message: r.message };
-  const saved = (r.value as RolesProfileResponse).profile ?? profile;
+  const saved = withLevels((r.value as RolesProfileResponse).profile ?? profile);
   const before = await keptProfile(user.id);
   await db.kv.put({
     key: PROFILE_KEY(user.id),
@@ -313,16 +328,38 @@ export async function saveProfile(
   return { ok: true };
 }
 
-/** The profile from the server, kept here (a new browser, or another device changed it). */
+/**
+ * The profile from the server, kept here (a new browser, or another device changed it). The server answers `profile`
+ * only once the student has confirmed one; before that it answers what Orbit proposed, which is never kept as their
+ * profile: `proposedProfile` hands it to the review screen.
+ */
 export async function syncProfile(user: User): Promise<KeptProfile | undefined> {
   const r = await rolesCall(user.id, '/roles/profile', { get: true });
   const kept = await keptProfile(user.id);
   if (!r.ok) return kept;
   const p = (r.value as RolesProfileResponse).profile;
-  if (!p) return kept;
-  const next: KeptProfile = { profile: p, at: kept?.at ?? new Date().toISOString(), note: kept?.note };
+  if (!p) {
+    const proposed = (r.value as RolesProfileResponse).proposed;
+    if (proposed && !kept) proposals.set(user.id, withLevels(proposed));
+    return kept;
+  }
+  const next: KeptProfile = {
+    profile: withLevels(p),
+    at: kept?.at ?? new Date().toISOString(),
+    note: kept?.note,
+  };
   await db.kv.put({ key: PROFILE_KEY(user.id), value: next });
   return next;
+}
+
+const proposals = new Map<string, RoleProfile>();
+
+/**
+ * What Orbit read for a student who has not confirmed a profile yet (they left before "Find roles"), as the last
+ * `syncProfile` found it on the server: the review screen opens on it again, with no second read.
+ */
+export function proposedProfile(userId: string): RoleProfile | undefined {
+  return proposals.get(userId);
 }
 
 // ---- the matches kept in this browser ---------------------------------------------------------------------------
@@ -362,10 +399,17 @@ export async function keepMatches(userId: string, matches: RoleMatch[], searchId
       userId,
       match: m,
       keptAt: at,
-      searchId: searchId ?? (had[i] as KeptMatchRow | undefined)?.searchId,
+      // a posting the student scored themselves stays marked as theirs, whatever search lists it later
+      searchId:
+        (had[i] as KeptMatchRow | undefined)?.searchId === PASTED
+          ? PASTED
+          : (searchId ?? (had[i] as KeptMatchRow | undefined)?.searchId),
     })) as KeptMatchRow[],
   );
 }
+
+/** The search a posting the student pasted or linked is kept under (the server lists it with every search). */
+export const PASTED = 'pasted';
 
 /** Every match kept for the student, with the search each came from. */
 export async function keptMatches(userId: string): Promise<KeptMatchRow[]> {
@@ -377,13 +421,22 @@ export async function keptMatch(userId: string, matchId: string): Promise<RoleMa
   return (await db.roleMatches.get(rowId(userId, matchId)))?.match;
 }
 
-/** The roles the table lists: the current search's, not dismissed, still open. */
+/**
+ * The roles the table lists: the current search's and the postings the student scored themselves, not dismissed,
+ * still open. A role still to be read is left out until it is read, unless the server sent it with its rough parts
+ * (`roughFit`: the model is off, a limit is reached, the search stopped): that one is listed, marked "Not read
+ * closely yet".
+ */
 export function tableMatches(rows: KeptMatchRow[], search: KeptSearch | undefined): RoleMatch[] {
   return rows
-    .filter((r) => !search || r.searchId === search.searchId)
+    .filter((r) => !search || r.searchId === search.searchId || r.searchId === PASTED)
     .map((r) => r.match)
     .filter(
-      (m) => m.status !== 'dismissed' && !m.job.closedAt && m.state !== 'gone' && m.state !== 'to_read',
+      (m) =>
+        m.status !== 'dismissed' &&
+        !m.job.closedAt &&
+        m.state !== 'gone' &&
+        (m.state !== 'to_read' || !!m.fit || !!m.roughFit),
     );
 }
 
@@ -406,21 +459,31 @@ async function dropSearch(userId: string): Promise<void> {
 }
 
 /** Bring the kept copy up to date from the server's stored matches (free): the matches and Saved. */
-export async function refreshMatches(user: Pick<User, 'id'>): Promise<{ ok: boolean; offline?: boolean }> {
+export async function refreshMatches(
+  user: Pick<User, 'id'>,
+  opts: {
+    /** also the roles not read closely yet; by default whenever the kept search is over and none is running */
+    rest?: boolean;
+  } = {},
+): Promise<{ ok: boolean; offline?: boolean }> {
+  const search = await keptSearch(user.id);
+  // a search that is over: the roles it could not read closely come too, so they stay listed as such
+  const rest = opts.rest ?? (!!search?.done && !searchRunning(user.id));
   const [list, saved] = await Promise.all([
-    rolesCall(user.id, '/roles/list', { view: 'matches' }),
+    rolesCall(user.id, '/roles/list', rest ? { view: 'matches', rest: true } : { view: 'matches' }),
     rolesCall(user.id, '/roles/list', { view: 'saved' }),
   ]);
   if (!list.ok) return { ok: false, offline: list.reason === 'network' };
-  const search = await keptSearch(user.id);
   const searchId = list.value.searchId ?? search?.searchId;
   await keepMatches(user.id, list.value.matches, searchId);
   if (saved.ok) await keepMatches(user.id, saved.value.matches);
   // a role taken down since: it leaves the table; Saved keeps it, marked as no longer listed
   const listed = new Set(list.value.matches.map((m) => m.id));
   const rows = await keptMatches(user.id);
+  // only when the whole list was asked for (the roles not read closely too): a role missing from it is gone
   const closed = rows.filter(
     (r) =>
+      rest &&
       r.searchId === searchId &&
       r.match.status === 'new' &&
       !listed.has(r.match.id) &&
@@ -527,8 +590,16 @@ export async function runSearch(
         metadata: { listed: search.listed, fresh: !!opts.fresh },
       });
     }
+    // carrying on a search that had stopped: the line that said so goes, the reading is on again
+    if (carryOn && search?.note === STALLED_NOTE) {
+      search = { ...search, note: undefined };
+      await db.kv.put({ key: SEARCH_KEY(userId), value: search });
+    }
     let retried = false;
     let first = true;
+    // when one more role was last read: a search that stops growing is not asked about for ever
+    let progressAt = now();
+    let lastRead = search?.read ?? 0;
     while (search && !search.done) {
       // the server reads in the background and answers with what it has read so far: the next ask waits a beat
       // (never a tight loop); each answer replaces the rows by id
@@ -538,21 +609,29 @@ export async function runSearch(
       const r = await rolesCall(userId, '/roles/more', { searchId: search.searchId });
       if (!live()) return { ok: false };
       if (!r.ok) {
-        // the server has a newer search for this profile (another tab, another device): start again once
-        if (r.status === 404 && !retried) {
+        // a newer search took this one's place (another tab or device ran one, or the profile changed there), or the
+        // server no longer has it: ask once which search to follow. Not a fresh search: that would replace the newer
+        // one in turn, and spend one of the day's searches.
+        if (r.status === 404 && r.code !== 'not_offered' && !retried) {
           retried = true;
-          const s = await rolesCall(userId, '/roles/search', { fresh: true });
+          const s = await rolesCall(userId, '/roles/search', {});
           if (!live()) return { ok: false };
           if (!s.ok) return finish({ ok: false, message: s.message, offline: s.reason === 'network' });
           search = {
-            ...search,
             searchId: s.value.searchId,
             listed: s.value.listed,
             read: s.value.read,
             done: s.value.done,
+            coverage: s.value.coverage,
+            note: s.value.note,
+            at: new Date().toISOString(),
+            profileKey: key,
           };
           await keepMatches(userId, s.value.matches, search.searchId);
           await db.kv.put({ key: SEARCH_KEY(userId), value: search });
+          progressAt = now();
+          lastRead = search.read;
+          first = true;
           continue;
         }
         return finish({ ok: false, message: r.message, offline: r.reason === 'network' });
@@ -561,18 +640,52 @@ export async function runSearch(
         ...search,
         listed: r.value.listed,
         read: r.value.read,
-        done: r.value.done || r.value.read >= r.value.listed,
+        // done is the server's word alone: a search can end with roles it could not read (they come with the answer)
+        done: r.value.done,
         coverage: r.value.coverage ?? search.coverage,
         note: r.value.note ?? search.note,
         at: new Date().toISOString(),
       };
       await keepMatches(userId, r.value.matches, search.searchId);
       await db.kv.put({ key: SEARCH_KEY(userId), value: search });
+      if (search.read > lastRead) {
+        lastRead = search.read;
+        progressAt = now();
+      } else if (!search.done && now() - progressAt >= stallMs()) {
+        // nothing more was read for a long while: stop asking. What is read stays; the rest are listed as not read
+        // closely yet; the search is left open, so the next visit carries on from here.
+        await refreshMatches(user, { rest: true });
+        if (!live()) return { ok: false };
+        search = { ...search, note: STALLED_NOTE, at: new Date().toISOString() };
+        await db.kv.put({ key: SEARCH_KEY(userId), value: search });
+        void audit(userId, 'roles.search_stalled', {
+          metadata: { listed: search.listed, read: search.read },
+        });
+        return finish({ ok: true });
+      }
     }
     return finish({ ok: true });
   } catch (e) {
     return finish({ ok: false, message: e instanceof Error ? e.message : 'The search stopped. Try again.' });
   }
+}
+
+/**
+ * How long the loop keeps asking while nothing more is read. The server reads ten roles behind each answer, and a
+ * slow one can take a minute; past this the reading has stopped (the model is down, the read died), and asking on
+ * would only spin.
+ */
+export const STALL_MS = 90_000;
+export const STALLED_NOTE =
+  'Orbit is taking longer than usual to read the rest. They are listed without a score for now, and the reading carries on the next time you open Roles.';
+let stallOverride: number | undefined;
+const stallMs = () => stallOverride ?? STALL_MS;
+let now: () => number = () => Date.now();
+
+/** Test hooks: how long without progress before the loop stops, and the clock it measures with. */
+export function setRolesStallForTests(ms: number | undefined, clock?: () => number): void {
+  stallOverride = ms;
+  now = clock ?? (() => Date.now());
 }
 
 /** How long the loop waits between /roles/more calls: the server's background read, or the demo filling in. */
@@ -709,7 +822,7 @@ export async function scorePosting(
   const r = await rolesCall(user.id, '/roles/score', input);
   if (!r.ok) return { ok: false, message: r.message };
   if (!r.value.match) return { ok: false, message: r.value.problem ?? 'Orbit could not score that posting.' };
-  await keepMatches(user.id, [r.value.match], 'pasted');
+  await keepMatches(user.id, [r.value.match], PASTED);
   void audit(user.id, 'roles.scored', {
     metadata: { company: r.value.match.job.companyName, score: r.value.match.fit?.score },
   });

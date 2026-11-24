@@ -122,6 +122,12 @@ export interface JobRequirement {
   name: string;
   /** the posting's own words, checked to be in its text */
   quote: string;
+  /**
+   * skill: one specific tool, language or framework by name (Python, Figma, Kafka), which counts only when the
+   * student's words name it; false for a kind of work or a method (spreadsheets, user research), which a line that
+   * does it shows. Absent on requirements read before this was asked.
+   */
+  named?: boolean;
   /** experience: years asked for; education: the lowest degree asked */
   years?: number;
   degree?: 'high_school' | 'associate' | 'bachelor' | 'master' | 'phd' | 'mba' | 'jd' | 'md';
@@ -308,7 +314,11 @@ export interface RoleMatch {
   status: MatchStatus;
   dismissReason?: DismissReason;
   readAt?: string;
-  /** set when the model could not read it: the row shows the free parts and "Not read closely yet" */
+  /**
+   * set when the row is not read closely (the model is off, a limit is reached, it is still to be read when a search
+   * stops): the row shows these free parts and "Not read closely yet", never a number. Such a row has no `fit` and
+   * its state is `to_read` or `failed`.
+   */
   roughFit?: { skills: number; level: boolean; place: boolean };
 }
 
@@ -317,8 +327,9 @@ export interface RoleMatch {
 /** POST /roles/profile: read lines into a proposed profile, or save the one the student confirmed. */
 export type RolesProfileRequest = { read: ProfileLines } | { save: RoleProfile } | { get: true };
 export interface RolesProfileResponse {
+  /** the profile the student confirmed (`save`, `get`); absent from `get` until they have confirmed one */
   profile?: RoleProfile;
-  /** what Orbit read, before the student changed anything */
+  /** what Orbit read, before the student changed anything (`read`, and kept for `get`) */
   proposed?: RoleProfile;
   /** a line for the profile screen when it read little ("Your LinkedIn lists roles but not what you did in them") */
   note?: string;
@@ -349,7 +360,13 @@ export interface RolesCoverage {
   simplify: boolean;
 }
 
-/** POST /roles/more: read the next few closely and return them. */
+/**
+ * POST /roles/more: read the next few closely. In production the answer comes at once and the reading carries on
+ * behind it: each answer holds every row read so far for the search, `done: false` until none is left to read. When
+ * the search is over without everything read (the model is off, a limit is reached), `done` is true and the rows not
+ * read closely come too, each with `roughFit` and no `fit`. A search that a newer one replaced answers 404
+ * `search_replaced`: ask /roles/search once more and follow the search it gives.
+ */
 export interface RolesMoreRequest {
   searchId: string;
 }
@@ -358,6 +375,8 @@ export type RolesMoreResponse = RolesSearchResponse;
 /** POST /roles/list: what is already scored, and Saved. Free. */
 export interface RolesListRequest {
   view?: 'matches' | 'saved';
+  /** with `matches`: also the latest search's roles not read closely yet, each with `roughFit` and no `fit` */
+  rest?: boolean;
 }
 export interface RolesListResponse {
   matches: RoleMatch[];
@@ -375,11 +394,14 @@ export interface RolesScoreRequest {
 }
 export interface RolesScoreResponse {
   match?: RoleMatch;
-  /** why it could not be scored ("Orbit cannot read this site: paste the posting's text") */
+  /**
+   * why it could not be scored ("Orbit cannot read this site: paste the posting's text"). With no profile yet it
+   * names the profile ("Read your resume or LinkedIn profile first ..."), and the posting card links to Roles.
+   */
   problem?: string;
 }
 
-/** POST /roles/act */
+/** POST /roles/act: a status for one match answers `match`; `watch` answers `watching`, the companies watched now. */
 export type RolesActRequest =
   | { matchId: string; status: MatchStatus; dismissReason?: DismissReason }
   | { watch: { companyName: string; on: boolean } };

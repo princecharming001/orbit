@@ -1,7 +1,9 @@
 /**
  * Ashby (plan 44 §4.6): one request for the whole board, with each role's text and pay. No paging and no short form,
- * so a board larger than ASHBY_MAX_BYTES is not read inside the worker: it comes back `too_large` with its size, and
- * the daily digest names it. Ashby says no company name.
+ * so a board is read whole or not at all. Stage 0 measured 22% of Ashby boards over 2 MB, and parsing about 10 MB
+ * costs well under 100 ms, so boards up to ASHBY_MAX_BYTES (12 MB) are read; a board over LARGE_BOARD_BYTES is a
+ * tick's whole share of boards (boards.ts). One larger still comes back `too_large` with its size, and the daily
+ * digest names it. Ashby says no company name.
  */
 import type { JobListing, JobPay, Remote } from '../../../../../packages/core/src/roles/types.ts';
 import { pageText } from '../../postings.ts';
@@ -18,7 +20,7 @@ import {
   str,
 } from './http.ts';
 
-export const ASHBY_MAX_BYTES = 2_000_000;
+export const ASHBY_MAX_BYTES = 12_000_000;
 
 const REMOTE: Record<string, Remote> = { remote: 'remote', hybrid: 'hybrid', onsite: 'on_site' };
 

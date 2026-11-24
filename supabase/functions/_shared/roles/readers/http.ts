@@ -78,7 +78,9 @@ async function readCapped(
     const bytes = new TextEncoder().encode(text).length;
     return bytes > maxBytes ? bytes : { text, bytes };
   }
-  const chunks: Uint8Array[] = [];
+  // decoded as it arrives: a 12 MB board is never held as bytes and as text at once
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
   let size = 0;
   for (;;) {
     const { done, value } = await reader.read();
@@ -88,15 +90,10 @@ async function readCapped(
       await reader.cancel().catch(() => undefined);
       return size;
     }
-    chunks.push(value);
+    parts.push(decoder.decode(value, { stream: true }));
   }
-  const all = new Uint8Array(size);
-  let at = 0;
-  for (const c of chunks) {
-    all.set(c, at);
-    at += c.length;
-  }
-  return { text: new TextDecoder().decode(all), bytes: size };
+  parts.push(decoder.decode());
+  return { text: parts.join(''), bytes: size };
 }
 
 export interface AskOptions {

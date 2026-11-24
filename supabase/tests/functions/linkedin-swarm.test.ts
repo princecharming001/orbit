@@ -196,6 +196,47 @@ describe('orbit-connectors: the swarm limit', () => {
     expect(take.asked.length).toBe(asked);
   });
 
+  it("a profile read keeps each position's description (plan 44: the lines Roles quotes)", async () => {
+    const full = {
+      ...PROFILE,
+      work_experience: [
+        {
+          position: 'Software Engineering Intern',
+          company: 'Brex',
+          start: '6/1/2026',
+          end: '8/15/2026',
+          description: 'Built a reconciliation service for card transactions in Go.\nWrote SQL reports.',
+        },
+        { position: 'President', company: 'Enactus Berkeley', current: true },
+      ],
+    };
+    const h = harness({
+      fetch: (async (url: string) =>
+        url.includes('/api/v1/users/')
+          ? new Response(JSON.stringify(full))
+          : new Response(new Uint8Array([1]))) as unknown as typeof fetch,
+    });
+    const r = await h.post('/profile', 'a1', { identifier: TARGET, sections: ['experience'] });
+    expect(r.body.ok).toBe(true);
+    expect(r.body.profile.experience).toMatchObject([
+      {
+        title: 'Software Engineering Intern',
+        company: 'Brex',
+        description: 'Built a reconciliation service for card transactions in Go.\nWrote SQL reports.',
+      },
+      { title: 'President', company: 'Enactus Berkeley', current: true },
+    ]);
+    // a position with no description has no such key, and another account gets the kept copy with it
+    expect('description' in r.body.profile.experience[1]).toBe(false);
+    const kept = await h.post('/profile', 'b2', {
+      identifier: TARGET,
+      sections: ['experience'],
+      public: true,
+    });
+    expect(kept.body).toMatchObject({ ok: true, shared: true });
+    expect(kept.body.profile.experience[0].description).toMatch(/^Built a reconciliation service/);
+  });
+
   it('lets the same account ask again and again', async () => {
     const h = harness({ targetTake: dbTake(1200) });
     for (let i = 0; i < 3; i++)
