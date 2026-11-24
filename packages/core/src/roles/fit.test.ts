@@ -121,7 +121,7 @@ describe('fitOf: caps (§6.4)', () => {
     ['citizenship_no', 2],
     ['citizenship_ask', 5],
     ['place', 5],
-    ['thin', 7],
+    ['thin', 6],
   ];
   for (const [kind, cap] of cases)
     it(`${kind} holds a 10 down to ${cap}`, () => {
@@ -131,8 +131,9 @@ describe('fitOf: caps (§6.4)', () => {
       expect(f.caps.map((c) => c.kind)).toEqual([kind]);
     });
 
-  it('a posting with fewer than three requirements is thin and caps at 7', () => {
-    expect(fitOf(perfect(), { requirements: 2 }).score).toBe(7);
+  it('a posting with fewer than three requirements is thin and caps at 6: never a good fit on paper', () => {
+    expect(fitOf(perfect(), { requirements: 2 }).score).toBe(6);
+    expect(fitOf(perfect(), { requirements: 2 }).band).toBe('stretch');
     expect(fitOf(perfect(), { requirements: 2 }).caps[0]!.label).toBe('The posting says little');
     expect(fitOf(perfect(), { requirements: 3 }).score).toBe(10);
   });
@@ -268,6 +269,30 @@ describe('capsFor', () => {
     );
     expect(capsFor([], p, { places: ['Austin, TX'], remote: 'remote' })).toEqual([]);
     expect(capsFor([], p, { places: ['Austin, TX', 'New York, NY'], remote: 'on_site' })).toEqual([]);
+  });
+
+  it('an internship, for someone a year or more into full-time work', () => {
+    const intern = { places: [], level: 'intern' as const };
+    const cap = [{ kind: 'graduation', label: 'An internship, for current students' }];
+    expect(capsFor([], profile({ level: 'early', fullTimeMonths: 30 }), intern)).toEqual(cap);
+    expect(capsFor([], profile({ level: 'mid', fullTimeMonths: 60 }), intern)).toEqual(cap);
+    expect(capsFor([], profile({ level: 'senior', fullTimeMonths: 100 }), intern)).toEqual(cap);
+    // a student and someone just finishing are who an internship is for
+    expect(capsFor([], profile({ level: 'student' }), intern)).toEqual([]);
+    expect(capsFor([], profile({ level: 'new_grad' }), intern)).toEqual([]);
+    // a role at any other level, or one that does not say, is never capped for this
+    expect(capsFor([], profile({ level: 'mid' }), { places: [], level: 'entry' })).toEqual([]);
+    expect(capsFor([], profile({ level: 'mid' }), { places: [] })).toEqual([]);
+    // with a graduation window the posting names, the window's own words are kept
+    const window = req({
+      kind: 'eligibility',
+      eligibility: 'graduation_window',
+      gradFrom: '2027-12',
+      gradTo: '2028-08',
+    });
+    expect(
+      capsFor([window], profile({ level: 'mid', graduation: '2021-05' }), intern).map((c) => c.label),
+    ).toEqual(['For 2027 to 2028 graduates']);
   });
 
   it('unknown is never a cap', () => {

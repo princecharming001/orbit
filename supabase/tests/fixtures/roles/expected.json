@@ -1,0 +1,85 @@
+{
+  "note": "The band a careful recruiter would give each pair on paper (plan 44 §6.5): strong 9 to 10, good 7 to 8, stretch 5 to 6, out 1 to 4. Every pair not named is out: the wrong field, an internship or a graduate programme for someone outside it, or years the person does not have. Written by hand on 2026-11-24 before the bench was run against them.",
+  "bands": {
+    "data-junior": {
+      "stripe-8194291": "strong",
+      "databricks-6865687002": "stretch",
+      "databricks-6883068002": "stretch",
+      "robinhood-8357464": "stretch"
+    },
+    "cs-junior": {
+      "stripe-8194291": "good",
+      "databricks-6865687002": "strong",
+      "databricks-6883068002": "good",
+      "robinhood-7263592": "stretch"
+    },
+    "finance-junior": {
+      "stripe-8194291": "stretch",
+      "robinhood-8357464": "good"
+    },
+    "design-student": {
+      "stripe-8332681": "good",
+      "robinhood-6494244": "stretch",
+      "ramp-eca54d0e": "stretch"
+    },
+    "consulting-new-grad": {
+      "cra-8053996": "strong",
+      "robinhood-8357464": "stretch"
+    },
+    "finance-two-years": {
+      "databricks-8414474002": "good"
+    },
+    "swe-five-years": {
+      "robinhood-7263592": "strong",
+      "ramp-a84ae1e2": "stretch"
+    },
+    "pm-six-years": {
+      "ramp-a84ae1e2": "strong"
+    },
+    "design-eight-years": {
+      "robinhood-6494244": "strong",
+      "ramp-eca54d0e": "strong"
+    }
+  },
+  "why": {
+    "data-junior": {
+      "stripe-8194291": "a quantitative degree in the window, SQL and Python in a data internship",
+      "databricks-6865687002": "Python in work and the right graduation, but no software engineering, algorithms or data structures",
+      "databricks-6883068002": "SQL and Python first hand and the right year, but statistics is not computer science and there is no product work",
+      "robinhood-8357464": "reporting and analysis, no finance; the posting names almost no requirement"
+    },
+    "cs-junior": {
+      "stripe-8194291": "a quantitative degree in the window and SQL in work, but engineering, not analysis",
+      "databricks-6865687002": "the degree, the year, Python and Java in an internship, algorithms and data structures",
+      "databricks-6883068002": "the degree, the year, SQL and Python; no product work yet",
+      "robinhood-7263592": "Python and Postgres in an internship, but it asks for two years, Kafka and fintech"
+    },
+    "finance-junior": {
+      "stripe-8194291": "an eligible degree and year, analysis in Excel, but no SQL",
+      "robinhood-8357464": "the same work in an internship (forecast, consolidated model, board slides); the posting says little, so it cannot be a strong fit on paper"
+    },
+    "design-student": {
+      "stripe-8332681": "Figma, user flows and research in two design roles, an HCI degree; an internship for someone who graduates that May",
+      "robinhood-6494244": "the right craft, two internships, a senior role with consumer scale and A/B testing she has not shown",
+      "ramp-eca54d0e": "product design internships and customer interviews, but it asks for experience on complex products and design systems"
+    },
+    "consulting-new-grad": {
+      "cra-8053996": "a 2027 graduate with a consulting internship, research, Excel and PowerPoint, in energy",
+      "robinhood-8357464": "financial analysis in a consulting internship, an internship for someone who graduates that May"
+    },
+    "finance-two-years": {
+      "databricks-8414474002": "the degree, financial models, Excel, SQL and SaaS; two and a half years where it asks for three, and a step up"
+    },
+    "swe-five-years": {
+      "robinhood-7263592": "five years of backend work in Go with Postgres and Kubernetes, at a payments company; no Kafka",
+      "ramp-a84ae1e2": "technical and five years building, but an engineer who has not owned a product"
+    },
+    "pm-six-years": {
+      "ramp-a84ae1e2": "six years owning accounts payable products, AI features shipped with evals, pulls own data"
+    },
+    "design-eight-years": {
+      "robinhood-6494244": "the same surfaces on a consumer investing app, A/B testing at scale, presenting to executives",
+      "ramp-eca54d0e": "fintech product design, interviews, design systems, and well past the level"
+    }
+  }
+}

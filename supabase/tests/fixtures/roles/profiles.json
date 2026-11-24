@@ -1,5 +1,5 @@
 {
-  "note": "Made-up students for the Roles bench (plan 44 §6.7). No real person.",
+  "note": "Made-up people for the Roles bench (plan 44 §6.7): students, a new grad, and people two to eight years into engineering, data, design, product, finance and consulting. No real person.",
   "profiles": [
     {
       "id": "data-junior",
@@ -43,6 +43,102 @@
           ],
           "skills": ["Languages: Python, SQL, R", "Tools: Tableau, Excel, Git"],
           "courses": ["Linear Models", "Databases", "Probability"]
+        }
+      }
+    },
+    {
+      "id": "cs-junior",
+      "about": "Third-year, B.S. Computer Science, one software internship, Python and Java in work",
+      "lines": {
+        "resume": {
+          "experience": [
+            {
+              "title": "Software Engineering Intern",
+              "org": "Harborline Logistics",
+              "start": "2026-06",
+              "end": "2026-08",
+              "lines": [
+                "Built REST endpoints in Java and Python for the order tracking service, used by 40 warehouse sites",
+                "Wrote unit and integration tests and fixed slow PostgreSQL queries behind the shipment search page",
+                "Shipped behind code review with a team of six engineers"
+              ]
+            },
+            {
+              "title": "Peer Tutor, Data Structures",
+              "org": "State University",
+              "start": "2025-09",
+              "end": "2026-05",
+              "lines": ["Tutored 20 students a week on linked lists, trees, hashing and graph algorithms"]
+            }
+          ],
+          "education": [
+            {
+              "school": "State University",
+              "degree": "B.S.",
+              "field": "Computer Science",
+              "end": "May 2028",
+              "lines": []
+            }
+          ],
+          "projects": [
+            {
+              "title": "Ray tracer",
+              "lines": ["A multithreaded ray tracer in C++ with a bounding volume hierarchy"]
+            },
+            {
+              "title": "Course scheduler",
+              "lines": ["A Python tool that builds conflict-free schedules with a graph coloring algorithm"]
+            }
+          ],
+          "skills": ["Languages: Python, Java, C++, SQL", "Tools: Git, Linux, PostgreSQL"],
+          "courses": [
+            "Data Structures",
+            "Algorithms",
+            "Operating Systems",
+            "Databases",
+            "Object-Oriented Design"
+          ]
+        }
+      }
+    },
+    {
+      "id": "finance-junior",
+      "about": "Third-year, B.S. Finance, a corporate finance internship, Excel models",
+      "lines": {
+        "resume": {
+          "experience": [
+            {
+              "title": "FP&A Intern",
+              "org": "Meridian Foods",
+              "start": "2026-06",
+              "end": "2026-08",
+              "lines": [
+                "Updated the monthly revenue forecast in Excel and reconciled it to actuals for four product lines",
+                "Built a variance analysis of freight costs that the finance director used in the quarterly review",
+                "Prepared slides for the CFO's board update from the consolidated model"
+              ]
+            },
+            {
+              "title": "Analyst, Student Investment Fund",
+              "org": "State University",
+              "start": "2025-09",
+              "lines": [
+                "Built a discounted cash flow model and pitched a consumer staples stock to the fund's committee"
+              ]
+            }
+          ],
+          "education": [
+            {
+              "school": "State University",
+              "degree": "B.S.",
+              "field": "Finance",
+              "end": "May 2028",
+              "lines": []
+            }
+          ],
+          "projects": [],
+          "skills": ["Excel, financial modeling, PowerPoint, accounting, valuation"],
+          "courses": ["Corporate Finance", "Financial Accounting", "Econometrics"]
         }
       }
     },
@@ -93,6 +189,95 @@
       }
     },
     {
+      "id": "consulting-new-grad",
+      "about": "Senior, B.A. Economics, a consulting internship and a case competition, graduating May 2027",
+      "lines": {
+        "resume": {
+          "experience": [
+            {
+              "title": "Summer Analyst",
+              "org": "Beacon Strategy Group",
+              "start": "2026-06",
+              "end": "2026-08",
+              "lines": [
+                "Researched the US home battery market for a utility client and sized it from public filings and 14 expert interviews",
+                "Built the pricing analysis in Excel and wrote six slides of the final client presentation in PowerPoint",
+                "Interviewed three of the client's regional managers and summarized the findings for the partner"
+              ]
+            },
+            {
+              "title": "Research Assistant, Department of Economics",
+              "org": "Lakeside College",
+              "start": "2025-09",
+              "end": "2026-05",
+              "lines": [
+                "Cleaned state energy price data in Stata and ran regressions for a paper on rooftop solar adoption"
+              ]
+            }
+          ],
+          "education": [
+            {
+              "school": "Lakeside College",
+              "degree": "B.A.",
+              "field": "Economics",
+              "end": "May 2027",
+              "lines": ["GPA 3.8, Dean's List"]
+            }
+          ],
+          "projects": [
+            {
+              "title": "Regional case competition",
+              "lines": [
+                "Led a team of four to first place with a market entry plan for an electric bus maker"
+              ]
+            }
+          ],
+          "skills": ["Excel, PowerPoint, Stata, market research, financial analysis"],
+          "courses": ["Industrial Organization", "Energy Economics", "Statistics"]
+        }
+      }
+    },
+    {
+      "id": "finance-two-years",
+      "about": "Two and a half years as a financial analyst at a software company, Excel and SQL, graduated 2024",
+      "lines": {
+        "resume": {
+          "experience": [
+            {
+              "title": "Financial Analyst, FP&A",
+              "org": "Tallyworks Software",
+              "start": "2024-07",
+              "lines": [
+                "Own the bookings and ARR forecast model in Excel and Google Sheets for a $90M SaaS business",
+                "Built driver-based models for sales capacity and quota planning with the go-to-market finance lead",
+                "Write SQL against the billing warehouse to tie bookings to revenue each month",
+                "Prepare the monthly variance commentary and recommendations for the VP of Finance"
+              ]
+            },
+            {
+              "title": "Investment Banking Summer Analyst",
+              "org": "Corvin Partners",
+              "start": "2023-06",
+              "end": "2023-08",
+              "lines": ["Built merger models and comparable company analyses for two software deals"]
+            }
+          ],
+          "education": [
+            {
+              "school": "State University",
+              "degree": "B.S.",
+              "field": "Finance",
+              "end": "May 2024",
+              "lines": []
+            }
+          ],
+          "projects": [],
+          "skills": ["Excel, Google Sheets, SQL, financial modeling, forecasting"],
+          "courses": []
+        }
+      }
+    },
+    {
       "id": "swe-five-years",
       "about": "Five years as a backend engineer, Go and Kubernetes, LinkedIn only",
       "lines": {
@@ -114,10 +299,99 @@
             }
           ],
           "schools": [
-            { "school": "State University", "degree": "BS", "field": "Computer Science", "end": "2021" }
+            {
+              "school": "State University",
+              "degree": "BS",
+              "field": "Computer Science",
+              "end": "2021"
+            }
           ],
           "skills": ["Go", "Kubernetes", "PostgreSQL", "Bazel"],
           "projects": []
+        }
+      }
+    },
+    {
+      "id": "pm-six-years",
+      "about": "Six years in product at fintech companies, accounts payable and payments, SQL, LinkedIn only",
+      "lines": {
+        "linkedin": {
+          "headline": "Senior Product Manager",
+          "positions": [
+            {
+              "title": "Senior Product Manager",
+              "org": "Payline",
+              "start": "2023-02",
+              "description": "Own invoice capture and approvals for our accounts payable product, used by 6,000 finance teams. Shipped an LLM-based invoice coding feature from prototype to 70% automatic coding, with evals and a review queue for low-confidence bills. Pull my own data in SQL to size problems and read experiments."
+            },
+            {
+              "title": "Product Manager",
+              "org": "Payline",
+              "start": "2021-01",
+              "end": "2023-01",
+              "description": "Took vendor payments from first customer interviews with controllers to general availability. Worked with engineering on the ERP sync data model and with risk on payment fraud checks."
+            },
+            {
+              "title": "Associate Product Manager",
+              "org": "Brightledger",
+              "start": "2020-07",
+              "end": "2020-12",
+              "description": "Ran discovery interviews and wrote specs for expense report approvals."
+            }
+          ],
+          "schools": [
+            {
+              "school": "Tech Institute",
+              "degree": "BS",
+              "field": "Computer Science",
+              "end": "2020"
+            }
+          ],
+          "skills": ["Product management", "SQL", "Product strategy", "User research", "A/B testing"],
+          "projects": []
+        }
+      }
+    },
+    {
+      "id": "design-eight-years",
+      "about": "Eight years as a product designer on consumer finance apps, A/B testing, design systems",
+      "lines": {
+        "resume": {
+          "experience": [
+            {
+              "title": "Senior Product Designer",
+              "org": "Finch Money",
+              "start": "2022-04",
+              "lines": [
+                "Lead design for the home screen, search and watchlist of a mobile investing app with 3M monthly users",
+                "Ran more than 40 A/B tests on navigation and onboarding with product and data science, and shipped the winners",
+                "Present design direction and trade-offs to the CEO and the product leadership team every month",
+                "Maintain the mobile design system in Figma and extended its components for dark mode"
+              ]
+            },
+            {
+              "title": "Product Designer",
+              "org": "Lumen Bank",
+              "start": "2018-08",
+              "end": "2022-03",
+              "lines": [
+                "Designed the iOS and Android card controls and budgeting flows from research to launch",
+                "Planned and ran customer interviews and usability tests each quarter"
+              ]
+            }
+          ],
+          "education": [
+            {
+              "school": "City College of Art",
+              "degree": "B.F.A.",
+              "field": "Graphic Design",
+              "end": "May 2018",
+              "lines": []
+            }
+          ],
+          "projects": [],
+          "skills": ["Figma, prototyping, visual design, design systems, user research, A/B testing"],
+          "courses": []
         }
       }
     }

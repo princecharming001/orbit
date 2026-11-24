@@ -122,6 +122,12 @@ export interface JobRequirement {
   name: string;
   /** the posting's own words, checked to be in its text */
   quote: string;
+  /**
+   * skill: one specific tool, language or framework by name (Python, Figma, Kafka), which counts only when the
+   * student's words name it; false for a kind of work or a method (spreadsheets, user research), which a line that
+   * does it shows. Absent on requirements read before this was asked.
+   */
+  named?: boolean;
   /** experience: years asked for; education: the lowest degree asked */
   years?: number;
   degree?: 'high_school' | 'associate' | 'bachelor' | 'master' | 'phd' | 'mba' | 'jd' | 'md';

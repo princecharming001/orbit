@@ -26,6 +26,7 @@ import {
   canonicalSkill,
   skillIn,
   skillName,
+  splitSkillList,
   uniqueSkills,
 } from '../../../../packages/core/src/roles/skills.ts';
 import type {
@@ -122,9 +123,8 @@ const DEGREE_RANK: Record<DegreeKind, number> = {
 export function splitSkills(raw: string[]): string[] {
   const out: string[] = [];
   for (const line of raw)
-    for (const part of line.replace(/^[^:]{1,30}:\s*/, '').split(/[,;|•·/]|\s+and\s+/)) {
-      const s = part.replace(/\([^)]*\)/g, '').trim();
-      if (s && s.length <= 40) out.push(s);
+    for (const part of splitSkillList(line.replace(/^[^:]{1,30}:\s*/, '').replace(/\([^)]*\)/g, ' '))) {
+      if (part.length <= 40) out.push(part);
     }
   return out;
 }

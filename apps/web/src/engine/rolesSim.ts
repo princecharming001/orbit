@@ -286,6 +286,7 @@ function answersFor(p: RoleProfile, s: SampleJob): FitAnswers {
   const level = { answer: levelAnswerOf(p.level, s.level) ?? ('at' as const) };
   // the caps are facts from the posting's requirements set against what the student said: the server's own rule
   const caps: FitCapFact[] = capsFor(requirementsOf(s), p, {
+    level: s.level,
     places: s.places,
     remote: s.remote,
     sponsorship: s.sponsorship,

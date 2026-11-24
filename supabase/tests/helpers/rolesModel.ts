@@ -64,6 +64,7 @@ export function fakeRolesModel(o: { profileReply?: () => unknown } = {}) {
               need: m[1] === 'Must' ? 'must' : 'nice',
               name: m[2],
               quote: m[0],
+              named: true,
               years: 0,
               degree: 'none',
               eligibility: 'none',

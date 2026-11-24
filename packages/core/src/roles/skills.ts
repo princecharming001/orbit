@@ -63,6 +63,8 @@ const TABLE: Record<string, string[]> = {
   tableau: ['Tableau'],
   'power bi': ['Power BI', 'PowerBI'],
   excel: ['Excel', 'Microsoft Excel', 'MS Excel'],
+  'google sheets': ['Google Sheets', 'Sheets'],
+  powerpoint: ['PowerPoint', 'Microsoft PowerPoint', 'MS PowerPoint'],
   kubernetes: ['Kubernetes', 'k8s'],
   docker: ['Docker'],
   terraform: ['Terraform'],
@@ -119,6 +121,32 @@ export function canonicalSkill(name: string): string {
   const f = fold(name).replace(/[.,;:]+$/, '');
   return ALIAS.get(f) ?? ALIAS.get(f.replace(/\.js$/, '')) ?? f;
 }
+
+/**
+ * Whether the name is one specific tool, language or framework Orbit knows by name (Python, Figma, Excel). Such a
+ * skill counts only when the student's words name it; a kind of work ("spreadsheets", "user research") is shown by a
+ * line that does it.
+ */
+export function knownSkill(name: string): boolean {
+  return Object.hasOwn(TABLE, canonicalSkill(name));
+}
+
+/**
+ * Split a written list of skills ("Python, SQL; Figma/Sketch and R") into its names. Names written with a slash or
+ * an ampersand of their own stay whole: A/B testing, CI/CD, UI/UX, TCP/IP, I/O, R&D, P&L.
+ */
+export function splitSkillList(text: string): string[] {
+  const kept: string[] = [];
+  const held = text.replace(WHOLE_TERMS, (m) => {
+    kept.push(m);
+    return `orbitwholeterm${kept.length - 1}x`;
+  });
+  return held
+    .split(/[,;|•·/]|\s+and\s+|\s+or\s+/i)
+    .map((p) => p.replace(/orbitwholeterm(\d+)x/g, (_m, i) => kept[Number(i)]!).trim())
+    .filter(Boolean);
+}
+const WHOLE_TERMS = /\b(?:A\/B|CI\/CD|UI\/UX|UX\/UI|TCP\/IP|I\/O|R&D|P&L|PL\/SQL|AR\/VR|AI\/ML|ML\/AI)\b/gi;
 
 /** How Orbit shows a skill: "js" → "JavaScript"; an unknown skill as written. */
 export function skillName(name: string): string {
@@ -225,6 +253,9 @@ const IMPLIES: [string[], string[]][] = [
   [['AWS', 'GCP', 'Azure'], ['Cloud']],
   [['Kubernetes', 'Docker'], ['Containers']],
   [['Figma', 'Sketch', 'Adobe XD'], ['Prototyping']],
+  [['Excel', 'Google Sheets'], ['Spreadsheets']],
+  [['PowerPoint', 'Google Slides', 'Keynote'], ['Presentations']],
+  [['Stata', 'SAS', 'SPSS', 'MATLAB'], ['Statistical software']],
 ];
 const IMPLIED = new Map<string, Set<string>>();
 for (const [from, to] of IMPLIES)

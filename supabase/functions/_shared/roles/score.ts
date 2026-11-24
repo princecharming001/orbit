@@ -2,7 +2,7 @@
  * Plan 44 §6: reading roles closely and scoring them out of 10.
  *
  *   1. The posting's text, from the source side (`RoleSources.text`). A role whose source has no text to give is
- *      scored on what its listing says, and is thin: fewer than three requirements, capped at 7. A role whose text
+ *      scored on what its listing says, and is thin: fewer than three requirements, capped at 6. A role whose text
  *      could not be read just now (the source is busy, the read timed out) is not scored: it stays to be read.
  *   2. Its requirements (task `role_requirements`, light model, five postings a call), read once per text hash and
  *      shared by every student, counted against Orbit's own daily limit (`orbit_roles_take('requirements', 2000)`)
@@ -22,7 +22,12 @@ import { z } from 'zod/v4';
 import { capsFor, fitOf } from '../../../../packages/core/src/roles/fit.ts';
 import { levelAnswerOf } from '../../../../packages/core/src/roles/profileLevel.ts';
 import { verifyQuote } from '../../../../packages/core/src/roles/quote.ts';
-import { showsSkill, skillShownIn } from '../../../../packages/core/src/roles/skills.ts';
+import {
+  knownSkill,
+  showsSkill,
+  skillShownIn,
+  splitSkillList,
+} from '../../../../packages/core/src/roles/skills.ts';
 import type {
   EducationAnswer,
   ExperienceAnswer,
@@ -51,6 +56,10 @@ export const REQUIREMENTS_PER_DAY = 2000;
 /** Roles read closely a day per student: three searches of 60 and a night's 20. */
 export const READS_PER_DAY = 200;
 export const MAX_REQUIREMENTS = 12;
+/** Fewer requirements than this and the posting "says little" (core FIT_WEIGHTS.thinBelow). */
+const THIN_BELOW = 3;
+/** A posting at least this long that reads as thin is read once more. */
+export const FULL_POSTING_CHARS = 1500;
 export const POSTING_CHARS = 8000;
 /** Notes are whole sentences: the page shows one on its own line, above rows marked "Not read closely yet". */
 export const NOT_READ_NOTE =
@@ -79,11 +88,14 @@ export interface RolesDeps {
 
 // ---- requirements --------------------------------------------------------------------------------------------------
 
-export const REQUIREMENTS_SYSTEM = `You read job postings for Orbit and list what each one asks of a candidate. For each posting (J1, J2, ...) list at most twelve requirements, the most important first:
+export const REQUIREMENTS_SYSTEM = `You read job postings for Orbit and list what each one asks of a candidate. For each posting (J1, J2, ...) list at most twelve requirements, the most important first. Take them from the part of the posting that says what it asks for (requirements, qualifications, minimum, preferred, what you bring, who you are, what we look for). What the person will do in the role is not a requirement: use it only when the posting has no such part. One line of the posting is one requirement: a line that gives examples of one thing ("experimentation: A/B testing, concept sprints, iterating on data") is that one thing, not three. List every line that asks for something a resume can show, the work done before as well as the tools: "proven experience designing consumer mobile apps" is an experience requirement, and a full posting usually has five to ten.
 - kind: skill (a tool, language, framework, method or body of knowledge a resume can show: Python, SQL, Figma, user research, financial modeling, A/B testing), experience (work done before, years in a field), education (a degree or field of study), eligibility (citizenship, a security clearance, work authorization, no visa sponsorship, a graduation window).
-- Leave out traits and soft skills entirely (communication, collaboration, teamwork, learning quickly, curiosity, ownership, attention to detail, working with a mentor, interpersonal skills, passion). Leave out general use of AI tools unless the posting names a specific tool as a requirement.
+- Leave out traits and soft skills entirely (communication, collaboration, teamwork, learning quickly, curiosity, ownership, attention to detail, working with a mentor, interpersonal skills, passion). Leave out general use of AI tools ("proficiency with AI tools", "uses AI coding agents") unless the posting names a specific tool as a requirement. What a candidate sends with an application (a cover letter, a transcript) is not a requirement; a portfolio is how a skill is shown, so name the skill it must show ("a portfolio that shows visual craft" is "visual design").
+- An internship or a programme for students or new graduates asks for people who are studying: when it gives graduation dates ("graduating December 2027 or spring 2028", "2027 graduates", in the title too), that is an eligibility requirement, graduation_window, with gradFrom and gradTo.
 - need: must when the posting says required, minimum, must, or lists it as a qualification; nice when it says preferred, bonus, plus, nice to have.
 - name: a short name, the thing itself ("Python", "Figma", "2+ years in data analysis", "BS in Computer Science", "US citizenship"). When the posting accepts alternatives, join them with " or " ("Python or R", "Figma or Sketch"). Never a sentence ("Experience using design programs (Figma)" is "Figma").
+  When the posting gives examples of tools or languages ("a programming language such as Python, Java or C++", "tools like Cursor or Claude Code"), the requirement is those names joined with " or " ("Python or Java or C++"), never the category ("programming languages").
+- named: for a skill, true when it is one specific tool, language, framework or product by name (Python, SQL, Figma, Kafka, Excel, Kubernetes), false when it is a kind of work, a method or a category (spreadsheets, user research, financial modeling, distributed systems, data pipelines, statistical programs). False for every other kind.
 - quote: the posting's exact words for it, at most 20, copied character for character.
 - years: for experience, the years asked for; otherwise 0.
 - degree: for education, the lowest degree asked (high_school, associate, bachelor, master, phd, mba, jd, md); otherwise none.
@@ -101,6 +113,7 @@ const reqSchema = z.object({
           need: z.enum(['must', 'nice']),
           name: z.string(),
           quote: z.string(),
+          named: z.boolean(),
           years: z.number(),
           degree: z.enum([
             'high_school',
@@ -136,6 +149,22 @@ const SOFT =
   /\b(communicat\w*|collaborat\w*|teamwork|team player|interpersonal|curious|curiosity|ownership|self[- ]starter|detail[- ]oriented|attention to detail|fast learner|learn(ing)? (quickly|new)|ability to learn|passion\w*|growth mindset|work(ing)? with (a )?mentor|problem[- ]solving|critical thinking|adaptab\w*|proactive|motivated|work ethic)\b/i;
 export const isSoftSkill = (name: string) => SOFT.test(name);
 
+/** Products whose name makes "AI tools" a specific requirement and not a general one. */
+const AI_PRODUCT =
+  /\b(cursor|copilot|claude|chatgpt|gpt|gemini|openai|v0|lovable|midjourney|langchain|hugging ?face|llama|bedrock|vertex)\b/i;
+/** "Proficiency with AI tools", "uses AI coding agents daily": general use of AI tools, which no resume line shows. */
+const GENERAL_AI =
+  /\bAI[- ]?(?:powered |assisted |coding |productivity )?(?:tools?|tooling|assistants?|agents?|workflows?)\b|\bleverag\w+ AI\b|\buse of AI\b/i;
+/** What goes with an application and is not a skill: a cover letter, a transcript. */
+const SENT_WITH = /\b(cover letter|transcript|writing sample|references)\b/i;
+
+/**
+ * A "skill" that is not one a line of a resume can show (plan 44 §6.2): general use of AI tools, or something sent
+ * with the application. The model is told to leave these out and mostly does; this holds it to that.
+ */
+export const isNotASkill = (name: string) =>
+  (GENERAL_AI.test(name) && !AI_PRODUCT.test(name)) || SENT_WITH.test(name);
+
 /** The model's requirements for one posting, each quote checked against the posting. */
 export function settleRequirements(
   text: string,
@@ -146,8 +175,9 @@ export function settleRequirements(
     const quote = verifyQuote(text, r.quote);
     const name = plain(r.name, 80);
     if (!quote || !name) continue;
-    if (r.kind === 'skill' && isSoftSkill(name)) continue;
+    if (r.kind === 'skill' && (isSoftSkill(name) || isNotASkill(name))) continue;
     const req: JobRequirement = { kind: r.kind, need: r.need, name, quote };
+    if (r.kind === 'skill') req.named = r.named === true;
     if (r.kind === 'experience' && r.years > 0 && r.years < 40) req.years = Math.round(r.years);
     if (r.kind === 'education' && r.degree !== 'none') req.degree = r.degree;
     if (r.kind === 'eligibility' && r.eligibility !== 'none') req.eligibility = r.eligibility;
@@ -170,10 +200,12 @@ skills: for every requirement listed under the posting (R1, R2, ...), how the st
 - project: a project or course line uses it
 - listed: it is only named in their skills list or education
 - none: nothing in the student's lines shows it
-When a requirement accepts alternatives ("Figma or Sketch"), any one of them counts. Quote the student's words that name the skill itself.
+When a requirement accepts alternatives ("Figma or Sketch"), any one of them counts. For a tool or language by name (Python, Figma, Kafka), quote the student's words that name it: a line that does not name it does not show it. For a kind of work or a method (spreadsheets, user research, data pipelines), quote the line where they did it, whatever words it uses: a model built in Excel shows spreadsheets.
 experience: has the student done this kind of work? same (the same kind of role), related (a related kind), projects (only in projects or courses), none.
 education: does their degree, field and year fit what the posting asks? fits, close (a related field, or a year off), no, unsaid (the posting does not say).
-level: is the role at the student's level? at, below (below them), stretch (one step up), far (well above). The listing's own level, when it gives one, is shown as a hint.
+level: is the role at the student's level? at, below (below them), stretch (one step up), far (well above). The listing's own level, when it gives one, is shown as a hint. A minimum the person passes is at their level: a role that asks for "2+ years" is at the level of someone with five. Below is for a role plainly meant for people earlier on than they are (an internship or a new graduate programme for someone with years of full-time work, a junior role for a senior person).
+
+Quote the strongest line: when a job line shows the skill, quote the job line, not the skills list.
 
 Every answer other than none and unsaid needs two quotes: you, the exact words (at most 15) copied character for character from the student's lines, and posting, the exact words (at most 15) copied from that posting. An answer whose quote is not really in the text counts as the weakest answer, so leave a quote empty rather than invent one.
 
@@ -214,8 +246,21 @@ const lower = (a: SkillAnswer, b: SkillAnswer) => (SKILL_ORDER.indexOf(a) < SKIL
 export function skillAlternatives(name: string): string[] {
   const inner = /\(([^)]*)\)/.exec(name)?.[1];
   const outer = name.replace(/\([^)]*\)/g, ' ');
-  const parts = [outer, ...(inner ? [inner] : [])].flatMap((p) => p.split(/\s+or\s+|\/|,|;|\s+and\s+/i));
-  return [...new Set(parts.map((p) => p.trim()).filter((p) => p.length > 0))];
+  // "A/B testing" and "CI/CD" are one name each, not two alternatives
+  const parts = [outer, ...(inner ? [inner] : [])].flatMap(splitSkillList);
+  return [...new Set(parts)];
+}
+
+/**
+ * Whether the student's words must name the skill for it to count. One specific tool or language (the posting's
+ * requirement says so, or Orbit knows the name) is shown only by words that name it: "Kubernetes" is never credited
+ * from a line about Go. A kind of work or a method ("spreadsheets", "secondary research", "data pipelines") is shown
+ * by a line that does it, whatever words it uses: Excel is a spreadsheet.
+ */
+export function mustBeNamed(r: Pick<JobRequirement, 'name' | 'named'>): boolean {
+  const alts = skillAlternatives(r.name);
+  if (alts.some(knownSkill)) return true;
+  return r.named === true;
 }
 
 /**
@@ -244,6 +289,23 @@ export function wholeSentences(text: string, max: number): string {
   return '';
 }
 
+/**
+ * For a tool or language by name: the strongest place the student's own lines name it, whatever the model quoted. A
+ * job line that says "designed the onboarding flow in Figma" shows Figma in work, even when the model pointed at the
+ * skills list. Job headings are left out (a company's name is not a skill the student used).
+ */
+export function namedEvidence(ev: Evidence, name: string): { answer: SkillAnswer; line?: string } {
+  const alts = skillAlternatives(name);
+  const find = (text: string) =>
+    text.split('\n').find((l) => !l.startsWith('Job: ') && alts.some((a) => skillShownIn(l, a)));
+  const clip = (l: string) => (l.length > 240 ? `${l.slice(0, 237).trimEnd()}...` : l).trim();
+  const work = find(ev.work);
+  if (work) return { answer: 'work', line: clip(work) };
+  const project = find(ev.project);
+  if (project) return { answer: 'project', line: clip(project) };
+  return find(ev.listed) ? { answer: 'listed' } : { answer: 'none' };
+}
+
 /** Where in the evidence a quote is: the strongest skill answer it can carry. */
 function whereSkill(ev: Evidence, you: string): SkillAnswer {
   if (verifyQuote(ev.work, you)) return 'work';
@@ -256,6 +318,42 @@ const label = (s: string, prefix: string) => {
   const m = new RegExp(`^\\s*${prefix}\\s*(\\d+)`, 'i').exec(s);
   return m ? Number(m[1]) : undefined;
 };
+
+const folded = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * Which of the model's answers is for which posting. The model is asked to name each by its label (J1, J2), and
+ * mostly does; sometimes it writes the posting's title instead ("Data Analyst, Intern at Stripe"), which is no
+ * reason to leave the role unread. So: by label, then by title, then the one answer left for the one posting left.
+ */
+export function answersFor<T extends { posting: string }>(roles: T[], titles: string[]): (T | undefined)[] {
+  const out: (T | undefined)[] = titles.map(() => undefined);
+  const used = new Set<T>();
+  for (const role of roles) {
+    const n = label(role.posting, 'J');
+    if (n !== undefined && n >= 1 && n <= titles.length && !out[n - 1]) {
+      out[n - 1] = role;
+      used.add(role);
+    }
+  }
+  for (const [i, title] of titles.entries()) {
+    if (out[i]) continue;
+    const want = folded(title);
+    const hit = want ? roles.find((r) => !used.has(r) && folded(r.posting).includes(want)) : undefined;
+    if (hit) {
+      out[i] = hit;
+      used.add(hit);
+    }
+  }
+  const left = roles.filter((r) => !used.has(r));
+  const open = out.flatMap((x, i) => (x ? [] : [i]));
+  if (left.length === 1 && open.length === 1) out[open[0]!] = left[0];
+  return out;
+}
 
 /**
  * The model's answers for one role after the quote rule, the where rule and the student's own chips. Caps come from the
@@ -281,10 +379,19 @@ export function settleAnswers(
     let answer: SkillAnswer = 'none';
     let you: string | undefined;
     if (a && a.answer !== 'none') {
+      // the quote is really the student's; and when the requirement is a tool or language by name, it names it
       const q = verifyQuote(ev.all, a.you);
-      if (q && quoteNames(q, r.name)) {
+      if (q && (!mustBeNamed(r) || quoteNames(q, r.name))) {
         answer = lower(a.answer, whereSkill(ev, q));
         if (answer !== 'none') you = q;
+      }
+    }
+    // a tool or language by name is read from the student's lines themselves: the same lines, the same answer
+    if (mustBeNamed(r)) {
+      const best = namedEvidence(ev, r.name);
+      if (SKILL_ORDER.indexOf(best.answer) > SKILL_ORDER.indexOf(answer)) {
+        answer = best.answer;
+        you = best.line;
       }
     }
     // a skill on the student's chips that the lines do not show counts as listed, never as shown in work
@@ -556,14 +663,14 @@ export async function readRows(
         for (const it of ready) out.unread.push(await release(s.db, it, stored));
         return;
       }
-      const byLabel = new Map<number, ScoredRole>();
-      for (const role of r.data.roles) {
-        const n = label(role.posting, 'J');
-        if (n !== undefined && !byLabel.has(n)) byLabel.set(n, role);
-      }
+      const matched = answersFor(
+        r.data.roles,
+        ready.map((it) => it.job.title),
+      );
       for (const [i, it] of ready.entries()) {
-        let answered = byLabel.get(i + 1);
-        if (!answered && ready.length > 1) {
+        let answered = matched[i];
+        // left out of the answer: asked once more, on its own
+        if (!answered) {
           const again = await s.claude.structured({
             task: 'role_score',
             system: SCORE_SYSTEM,
@@ -572,7 +679,7 @@ export async function readRows(
             userId,
             timeoutMs: timeouts.score,
           });
-          if (again.ok) answered = again.data.roles[0];
+          if (again.ok) answered = answersFor(again.data.roles, [it.job.title])[0];
         }
         if (!answered) {
           out.failed++;
@@ -691,7 +798,25 @@ async function requirementsFor(
       if (!r.ok) return 'budgetExceeded' in r || 'unconfigured' in r ? LIMIT_NOTE : NOT_READ_NOTE;
       const got = r.data.postings.find((p) => label(p.posting, 'J') === 1) ?? r.data.postings[0];
       if (!got) return NOT_READ_NOTE;
-      const reqs = settleRequirements(it.posting, got.requirements);
+      let reqs = settleRequirements(it.posting, got.requirements);
+      // a full posting read as asking for almost nothing is a short read more often than a posting that says
+      // little: read once more, and keep the fuller of the two (a posting that truly says little stays thin)
+      if (reqs.length < THIN_BELOW && it.posting.length >= FULL_POSTING_CHARS) {
+        const second = makeFence();
+        const again = await s.claude.structured({
+          task: 'role_requirements',
+          system: REQUIREMENTS_SYSTEM,
+          user: `${second.rule}\n\nJ1: ${it.job.title} at ${it.job.companyName}\n${second.wrap('posting', it.posting)}`,
+          schema: reqSchema,
+          userId: null,
+          timeoutMs: timeouts.requirements,
+        });
+        const more = again.ok
+          ? (again.data.postings.find((p) => label(p.posting, 'J') === 1) ?? again.data.postings[0])
+          : undefined;
+        const fuller = more ? settleRequirements(it.posting, more.requirements) : [];
+        if (fuller.length > reqs.length) reqs = fuller;
+      }
       await s.db.sql`
         update orbit_private.jobs set requirements = ${JSON.stringify(reqs)}::jsonb, requirements_hash = ${it.hash}
          where id = ${it.job.id}::uuid`;

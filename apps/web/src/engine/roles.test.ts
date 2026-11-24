@@ -636,7 +636,7 @@ describe('the score (the sample server keeps the plan 44 formula)', () => {
     expect(all.parts.education).toBeUndefined();
     expect(all.weights.skills! + all.weights.experience! + all.weights.level!).toBeCloseTo(1);
     const capped = fitOf({ ...answers, caps: [{ kind: 'thin', label: 'The posting says little' }] });
-    expect(capped.score).toBe(7);
+    expect(capped.score).toBe(6);
     expect(capped.raw).toBe(10);
   });
 
