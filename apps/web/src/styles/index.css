@@ -685,11 +685,15 @@ body {
   padding-top: 32px;
 }
 
-/* an empty grid's ghost cards (Friends): they breathe one after another, and hold still for reduced motion */
+/*
+  An empty grid's ghost cards (Friends): each card is drawn by a faint dashed outline that drifts slowly around it, a
+  soft light passes over the photo, and the figure floats. The cards wake one after another. All of it holds still for
+  reduced motion.
+*/
 @keyframes ghost-breathe {
   0%,
   100% {
-    opacity: 0.55;
+    opacity: 0.6;
     transform: translateY(0);
   }
   50% {
@@ -697,13 +701,74 @@ body {
     transform: translateY(-2px);
   }
 }
+@keyframes ghost-drift {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+@keyframes ghost-sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+  55%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+@keyframes ghost-float {
+  0%,
+  100% {
+    transform: translateY(10%);
+  }
+  50% {
+    transform: translateY(6%);
+  }
+}
+@keyframes ghost-label-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 .ghost-tile {
-  animation: ghost-breathe 2.8s ease-in-out infinite both;
+  animation: ghost-breathe 3.2s ease-in-out infinite both;
+}
+.ghost-outline rect {
+  stroke-dasharray: 4 6;
+  animation: ghost-drift 6s linear infinite;
+}
+.ghost-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.5) 50%, transparent 80%);
+  animation: ghost-sheen 3.2s ease-in-out infinite;
+  animation-delay: inherit;
+}
+.ghost-figure {
+  animation: ghost-float 3.2s ease-in-out infinite;
+  animation-delay: inherit;
+}
+.ghost-label {
+  animation: ghost-label-in 0.6s ease-out 0.2s both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .ghost-tile {
+  .ghost-tile,
+  .ghost-outline rect,
+  .ghost-sheen::after,
+  .ghost-figure,
+  .ghost-label {
     animation: none;
+  }
+  .ghost-tile {
     opacity: 0.8;
+  }
+  .ghost-sheen::after {
+    display: none;
   }
 }
 

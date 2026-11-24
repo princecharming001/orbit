@@ -303,26 +303,47 @@ export function TileSection({
 }
 
 /**
- * An empty grid, shown as the grid it will become: faded cards that breathe one after another, with a quiet line on
- * the first. No paragraph of advice.
+ * An empty grid, shown as the grid it will become: ghost cards drawn by a faint outline that drifts around them, a soft
+ * light passing over each photo, one card after another, and one quiet line centred over the row. No paragraph of
+ * advice.
  */
 export function GhostTiles({ label, testId }: { label: string; testId?: string }) {
   // one row at every width: as many ghosts as the grid has columns, fading off to the right
   const shown = ['', '', 'hidden @2xl:flex', 'hidden @4xl:flex', 'hidden @6xl:flex'];
   return (
-    <div className="relative [mask-image:linear-gradient(90deg,#000_55%,transparent)]" data-testid={testId}>
-      <ul className={GRID} aria-hidden>
+    <div className="relative" data-testid={testId}>
+      <ul className={cx(GRID, '[mask-image:linear-gradient(90deg,#000_60%,transparent)]')} aria-hidden>
         {shown.map((when, i) => (
           <li
             key={i}
-            className={cx(
-              'ghost-tile min-w-0 flex flex-col rounded-[12px] border border-dashed border-line p-2',
-              when,
-            )}
-            style={{ animationDelay: `${i * 220}ms` }}
+            className={cx('ghost-tile relative min-w-0 flex flex-col rounded-[12px] p-2', when)}
+            style={{ animationDelay: `${i * 260}ms` }}
           >
-            <div className="w-full aspect-square rounded-[8px] bg-[linear-gradient(180deg,#f4f3f0,#eeece8)] flex items-end justify-center overflow-hidden">
-              <UserRound className="w-1/2 h-1/2 translate-y-[10%] text-[#e2ded8]" strokeWidth={1} />
+            <svg
+              className="ghost-outline pointer-events-none absolute inset-0 h-full w-full overflow-visible text-line-2"
+              aria-hidden
+            >
+              <rect
+                x="0.5"
+                y="0.5"
+                width="100%"
+                height="100%"
+                rx="12"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1"
+                style={{
+                  width: 'calc(100% - 1px)',
+                  height: 'calc(100% - 1px)',
+                  animationDelay: `${i * -900}ms`,
+                }}
+              />
+            </svg>
+            <div
+              className="ghost-sheen relative w-full aspect-square rounded-[8px] bg-[linear-gradient(180deg,#f5f4f1,#eeece8)] flex items-end justify-center overflow-hidden"
+              style={{ animationDelay: `${i * 260}ms` }}
+            >
+              <UserRound className="ghost-figure w-1/2 h-1/2 text-[#e0dcd5]" strokeWidth={1} />
             </div>
             <div className="mt-2.5 h-2.5 w-2/3 rounded-full bg-[#efedea]" />
             <div className="mt-1.5 h-2 w-1/2 rounded-full bg-[#f3f2ef]" />
@@ -331,9 +352,11 @@ export function GhostTiles({ label, testId }: { label: string; testId?: string }
         ))}
       </ul>
       <p className="sr-only">{label}</p>
-      <span className="pointer-events-none absolute left-[28%] top-[38%] -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-canvas/90 px-3 py-1 text-[12.5px] text-ink-3 shadow-[0_1px_6px_rgba(0,0,0,0.05)]">
-        {label}
-      </span>
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden>
+        <span className="ghost-label whitespace-nowrap rounded-full border border-line bg-canvas/95 px-3.5 py-1.5 text-[12.5px] text-ink-3 shadow-[0_2px_12px_rgba(0,0,0,0.06)] backdrop-blur-[2px]">
+          {label}
+        </span>
+      </div>
     </div>
   );
 }
