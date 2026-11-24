@@ -411,14 +411,17 @@ Each cap is a fact with its line quoted, and the row says it in words beside the
 | A degree the student does not have and is not working toward (PhD required) | 3 | "Asks for a PhD" |
 | Years of full-time experience the student does not have (3 or more beyond theirs) | 4 | "Asks for 5 years" |
 | A graduation window the student is outside | 4 | "For 2026 graduates" |
+| An internship, and the person is a year or more into full-time work | 4 | "An internship, for current students" |
 | No sponsorship, and the student said they need it | 2 | "Does not sponsor visas" |
 | Citizenship or a clearance, and the student said they do not hold it | 2 | "Asks for US citizenship" |
 | Citizenship or a clearance, and the student has not been asked | 5, and asked once | "Asks for US citizenship. Do you hold it?" |
 | On site in a place the student excluded | 5 | "On site in Austin" |
-| The posting gives fewer than three requirements | 7 | "The posting says little" |
+| The posting gives fewer than three requirements | 6 | "The posting says little" |
 
 The last one is new. A two-line posting with no skills, read against one matching internship, came out as a 10 in
-draft 2. A posting that says little cannot be a strong fit on paper, because there is little paper.
+draft 2. A posting that says little cannot be a good fit on paper, because there is little paper. (Drafted at 7;
+the bench in 6.7 holds that no role with a cap shows as a fit, and at 7 this one did, so it is 6. The internship
+row was added by the same bench: an internship scored 7 for a designer with eight years.)
 
 Unknown is not a cap. A posting that says nothing about sponsorship is not held against anyone.
 
