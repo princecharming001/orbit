@@ -494,6 +494,26 @@ export function whyThemFor(
   return whyThem(whySignalsFor(person, rec, ctx, introducer));
 }
 
+/**
+ * Why a recommended person is worth writing to, read now, for a card outside Discover (a first-message card in
+ * Drafts or on their page): the same reasons their Discover card gives. Empty when the recommendation is gone.
+ */
+export async function whyForRecommendation(
+  user: PointContext['user'],
+  person: Person,
+  recommendationId: string,
+  now = new Date(),
+): Promise<WhyReason[]> {
+  const rec = await db.recommendations.get(recommendationId);
+  if (!rec || rec.personId !== person.id) return [];
+  const ctx = await loadPointContext(user, [person.id], now);
+  const hops = rec.bestPath?.hops ?? [];
+  const introducer = hops.length >= 2 ? ctx.people.get(hops[0]!.toId) : undefined;
+  return whyThem(whySignalsFor(person, rec, { ...ctx, dossier: ctx.dossiers.get(person.id) }, introducer), {
+    filler: false,
+  });
+}
+
 /** The points for one person beyond the reasons, strongest first, without repeats. */
 export function personPoints(person: Person, rec: Recommendation, ctx: PointContext): PersonPoint[] {
   const out: PersonPoint[] = [];
