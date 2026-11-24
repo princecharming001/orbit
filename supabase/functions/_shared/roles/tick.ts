@@ -36,6 +36,11 @@ export const TOPUP_HOUR = 6;
 export const TOPUP_ACTIVE_MS = 14 * DAY;
 /** SimplifyJobs listings kept per part, so the time share is checked between parts. */
 export const SIMPLIFY_PART = 500;
+/**
+ * SimplifyJobs listings kept per tick at most: intake costs about 0.13 ms of CPU a listing (measured on 2026-11-24),
+ * so 2,000 is about a quarter of a worker run's 2 s; the internship list (5,000 active) takes three ticks.
+ */
+export const SIMPLIFY_PER_TICK = 2000;
 export const TEXTS_PER_TICK = 15;
 export const DISCOVERY_PER_TICK = 8;
 
@@ -132,7 +137,8 @@ export async function readSimplifyPart(
   let at = await counted(db, now, `simplify_${list}_at`);
   const harvested = at === 0 ? await harvestBoards(db, listings, now) : 0;
   let kept = 0;
-  while (at < listings.length && run.clock() < run.deadline) {
+  const stop = at + SIMPLIFY_PER_TICK;
+  while (at < listings.length && at < stop && run.clock() < run.deadline) {
     const part = listings.slice(at, at + SIMPLIFY_PART);
     const r = await keepListings(db, part, { now });
     kept += r.added + r.updated;

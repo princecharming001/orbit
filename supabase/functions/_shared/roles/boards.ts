@@ -55,6 +55,8 @@ const DAY = 86_400_000;
 export const FAILURES_TO_STOP = 3;
 /** An incomplete read closes roles not seen for this long. */
 export const UNSEEN_CLOSE_MS = 7 * DAY;
+/** Workday sites read in one tick at most. */
+export const WORKDAY_PER_TICK = 2;
 /** Roughly how long a read of each service takes, so a tick never starts one it cannot finish. */
 export const READ_MS: Record<BoardService, number> = {
   greenhouse: 4_000,
@@ -245,6 +247,8 @@ export async function readDueBoards(db: Db, net: ReaderNet, now: Date, run: DueR
      where status in ('active', 'empty') and next_read_at <= ${now}::timestamptz
      order by next_read_at
      limit ${run.maxBoards ?? 50}::int`;
+  let workday = 0;
+  let workdaySlow = false;
   for (const b of due) {
     const left = run.deadline - run.clock();
     if (left <= READ_MS[b.service]) {
@@ -257,8 +261,13 @@ export async function readDueBoards(db: Db, net: ReaderNet, now: Date, run: DueR
       s.stoppedBy = 'bytes';
       break;
     }
+    // Workday answers 429 to a reader that asks several sites in a row (50 of 60 on 2026-11-24): a few a tick, and
+    // none after one says to slow down
+    if (b.service === 'workday' && (workday >= WORKDAY_PER_TICK || workdaySlow)) continue;
     if (!(await claimBoard(db, b.id, now))) continue;
+    if (b.service === 'workday') workday++;
     const o = await readBoard(db, net, b, now);
+    if (b.service === 'workday' && o.error === 'rate_limited') workdaySlow = true;
     s.outcomes.push(o);
     s.bytes += o.bytes;
     if (o.ok) {

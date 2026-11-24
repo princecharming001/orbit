@@ -219,6 +219,21 @@ describe('the daily read of a board', () => {
     expect(await claimBoard(t.db, b.id, DAY2)).toBe(true);
   });
 
+  it('reads two Workday sites a tick at most, and none more after one answers 429', async () => {
+    for (let i = 0; i < 4; i++) await board('workday', `t${i}.wd1.myworkdayjobs.com/t${i}/Site`, `T${i}`);
+    const page = fixture('workday-page.json');
+    const ok = fakeBoards([(u) => (u.hostname.endsWith('myworkdayjobs.com') ? json(page) : undefined)]);
+    const run = { clock: ok.clock, deadline: ok.clock() + 600_000, maxBytes: 10_000_000 };
+    expect((await readDueBoards(t.db, net(ok, DAY1), DAY1, run)).read).toBe(2);
+    const busy = fakeBoards([() => new Response('', { status: 429 })]);
+    const s = await readDueBoards(t.db, net(busy, DAY1), DAY1, {
+      ...run,
+      clock: busy.clock,
+      deadline: busy.clock() + 600_000,
+    });
+    expect(s).toMatchObject({ read: 0, failed: 1 });
+  });
+
   it('three 404s in three days make a board gone; an Ashby board too large is skipped with its size', async () => {
     const gone = await board('lever', 'vanished', 'Vanished');
     const big = await board('ashby', 'quarry', 'Quarry');
