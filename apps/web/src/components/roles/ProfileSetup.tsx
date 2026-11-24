@@ -14,9 +14,10 @@ import {
   type User,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, FileText, Upload } from 'lucide-react';
-import { type ReactNode, useState } from 'react';
+import { Check, FileText, Plus, Upload, X } from 'lucide-react';
+import { type InputHTMLAttributes, type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { CITY_OPTIONS, ROLE_KIND_OPTIONS, suggestFrom } from '../../data/options';
 import {
   type KeptProfile,
   LEVEL_WORDS,
@@ -27,8 +28,9 @@ import {
   whereTheyAre,
 } from '../../engine/roles';
 import { forgetViews, readView, useViewState, writeView } from '../../state/viewState';
-import { Button, cx, Input, PickCircle, Select, Switch, useToast, Working } from '../../ui';
+import { Button, cx, PickCircle, Select, Switch, useToast, Working } from '../../ui';
 import { ChipsField } from '../../ui/ChipsField';
+import { Suggest } from '../../ui/Suggest';
 
 /** What the screen holds while the student works on it, kept while they are away (state/viewState). */
 interface Draft {
@@ -137,9 +139,8 @@ export function ProfileSetup({
     return (
       <div className="max-w-[640px]" data-testid="roles-first-visit">
         <h2 className="text-[17px] font-medium tracking-[-0.01em]">Where should Orbit read you from?</h2>
-        <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-3">
-          Orbit reads what you have done, says which kinds of role fit, then lists open roles with a score out
-          of 10 and who you know at each company. Nothing is guessed from an empty profile.
+        <p className="mt-1.5 text-[13.5px] text-ink-2">
+          Orbit reads what you have done, then finds open roles that fit and who you know at each.
         </p>
         <div className="mt-5 divide-y divide-line rounded-[10px] border border-line bg-canvas">
           {sources?.linkedin && (
@@ -183,11 +184,6 @@ export function ProfileSetup({
             </div>
           )}
         </div>
-        {sources?.resume && sources.linkedin && (
-          <p className="mt-2 text-[12.5px] text-ink-3">
-            Using both: a job on one and not the other is kept, and the newer end date wins.
-          </p>
-        )}
         {error && (
           <p className="mt-3 text-[13px] text-bad" role="alert" data-testid="profile-error">
             {error}
@@ -215,11 +211,16 @@ export function ProfileSetup({
   const p = d.profile;
   const kinds = p.kinds;
   const setKinds = (next: RoleKind[]) => setProfile({ kinds: next });
+  const [gradYear, gradMonth] = (p.graduation ?? '').split('-');
+  const setGrad = (year?: string, month?: string) =>
+    setProfile({ graduation: year ? `${year}-${month || '05'}` : undefined });
+  const thisYear = new Date().getFullYear();
+  const years = Array.from({ length: 16 }, (_, i) => String(thisYear + 5 - i));
   return (
-    <div className="max-w-[720px]" data-testid="roles-profile">
-      <h2 className="text-[17px] font-medium tracking-[-0.01em]">What Orbit read</h2>
-      <p className="mt-1 text-[13.5px] text-ink-3">
-        From your{' '}
+    <div className="@container max-w-[860px]" data-testid="roles-profile">
+      <h2 className="text-[19px] font-medium tracking-[-0.015em]">Your profile for Roles</h2>
+      <p className="mt-1 text-[13.5px] text-ink-2">
+        Read from your{' '}
         {p.sources.length === 2
           ? 'resume and LinkedIn profile'
           : p.sources[0] === 'resume'
@@ -229,193 +230,231 @@ export function ProfileSetup({
       </p>
       {d.note && (
         <p
-          className="mt-3 rounded-[8px] bg-canvas-2 px-3 py-2 text-[13px] text-ink-2"
+          className="mt-3 rounded-[10px] bg-canvas-2 px-3.5 py-2.5 text-[13px] text-ink-2"
           data-testid="profile-note"
         >
           {d.note}
         </p>
       )}
 
-      <Field title="Where you are" testId="profile-where">
-        <p className="text-[14px]" data-testid="profile-where-line">
-          {whereTheyAre(p)}
-        </p>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Select
-            value={p.level}
-            onChange={(e) => {
-              const level = e.target.value as ProfileLevel;
-              setProfile({ level, wants: { ...p.wants, levels: levelsFor(level) } });
-            }}
-            aria-label="Where you are"
-            className="h-9 text-[13px]"
-            data-testid="profile-level"
-          >
-            {(Object.keys(PROFILE_LEVEL_WORDS) as ProfileLevel[]).map((l) => (
-              <option key={l} value={l}>
-                {PROFILE_LEVEL_WORDS[l]}
-              </option>
+      <div className="mt-6">
+        <Field title="Where you are" testId="profile-where">
+          <p className="text-[14px] text-ink" data-testid="profile-where-line">
+            {whereTheyAre(p)}
+          </p>
+          <div className="settings-flat mt-4 grid max-w-[460px] grid-cols-1 gap-4 @[32rem]:grid-cols-[1fr_1.3fr]">
+            <label className="block">
+              <span className="mb-1 block text-[12.5px] text-ink-3">Stage</span>
+              <Select
+                value={p.level}
+                onChange={(e) => {
+                  const level = e.target.value as ProfileLevel;
+                  setProfile({ level, wants: { ...p.wants, levels: levelsFor(level) } });
+                }}
+                aria-label="Where you are"
+                className="h-9 text-[14px]"
+                data-testid="profile-level"
+              >
+                {(Object.keys(PROFILE_LEVEL_WORDS) as ProfileLevel[]).map((l) => (
+                  <option key={l} value={l}>
+                    {PROFILE_LEVEL_WORDS[l]}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <div>
+              <span className="mb-1 block text-[12.5px] text-ink-3">
+                {p.level === 'student' ? 'Graduating' : 'Graduated'}
+              </span>
+              <div className="grid grid-cols-[1.4fr_1fr] gap-3">
+                <Select
+                  value={gradMonth ?? ''}
+                  onChange={(e) => setGrad(gradYear || String(thisYear), e.target.value)}
+                  aria-label="Graduation month"
+                  className="h-9 text-[14px]"
+                  data-testid="profile-graduation-month"
+                >
+                  <option value="">Month</option>
+                  {MONTHS.map((m, i) => (
+                    <option key={m} value={String(i + 1).padStart(2, '0')}>
+                      {m}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  value={gradYear ?? ''}
+                  onChange={(e) => setGrad(e.target.value || undefined, gradMonth)}
+                  aria-label="Graduation year"
+                  className="h-9 text-[14px]"
+                  data-testid="profile-graduation-year"
+                >
+                  <option value="">Year</option>
+                  {years.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+          </div>
+        </Field>
+
+        <Field title="Levels to look at" testId="profile-levels">
+          <div className="flex flex-wrap gap-1.5">
+            {ALL_LEVELS.map((l) => {
+              const picked = p.wants.levels.includes(l);
+              return (
+                <button
+                  key={l}
+                  type="button"
+                  aria-pressed={picked}
+                  onClick={() =>
+                    setProfile({
+                      wants: {
+                        ...p.wants,
+                        levels: picked ? p.wants.levels.filter((x) => x !== l) : [...p.wants.levels, l],
+                      },
+                    })
+                  }
+                  className={cx(
+                    'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors',
+                    picked
+                      ? 'border-ink bg-ink font-medium text-white'
+                      : 'border-line bg-canvas text-ink-2 hover:bg-canvas-2 hover:text-ink',
+                  )}
+                  data-testid={`profile-level-chip-${l}`}
+                >
+                  {picked && <Check size={12} strokeWidth={2.5} aria-hidden />}
+                  {LEVEL_WORDS[l]}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
+        <Field title="Skills" testId="profile-skills-field">
+          <ChipsField
+            values={p.skills.map((s) => s.name)}
+            onChange={(names) =>
+              setProfile({
+                skills: names.map(
+                  (n) => p.skills.find((s) => s.name === n) ?? { name: n, from: 'added' as const },
+                ),
+              })
+            }
+            placeholder="Add a skill"
+            testId="profile-skills"
+          />
+        </Field>
+
+        <Field
+          title="Kinds of role"
+          aside={`${kinds.filter((k) => k.on).length} searched`}
+          testId="profile-kinds"
+        >
+          <ul className="divide-y divide-line-2 overflow-hidden rounded-[12px] border border-line bg-canvas">
+            {kinds.map((k, i) => (
+              <li
+                key={`${k.title}-${i}`}
+                className="group flex items-start gap-3 px-4 py-3 transition-colors hover:bg-canvas-2/50"
+                data-testid="profile-kind"
+              >
+                <PickCircle
+                  checked={k.on}
+                  onChange={(on) => setKinds(kinds.map((x, j) => (j === i ? { ...x, on } : x)))}
+                  label={`Search ${k.title}`}
+                  size={18}
+                  testId="profile-kind-tick"
+                  className="mt-0.5"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className={cx('text-[14px] font-medium', !k.on && 'text-ink-2')}>{k.title}</p>
+                  {k.why && <p className="mt-0.5 text-[13px] text-ink-3">{k.why}</p>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setKinds(kinds.filter((_, j) => j !== i))}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-ink-3 opacity-100 transition-opacity hover:bg-canvas-2 hover:text-ink @[40rem]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  aria-label={`Remove ${k.title}`}
+                  title="Remove"
+                >
+                  <X size={14} aria-hidden />
+                </button>
+              </li>
             ))}
-          </Select>
-          <label className="inline-flex items-center gap-2 text-[13px] text-ink-2">
-            {p.level === 'student' ? 'Graduating' : 'Graduated'}
-            <Input
-              type="month"
-              value={p.graduation ?? ''}
-              onChange={(e) => setProfile({ graduation: e.target.value || undefined })}
-              className="!h-9 w-[11rem] text-[13px]"
-              aria-label="Graduation month"
-              data-testid="profile-graduation"
+            {kinds.length < MAX_KINDS && (
+              <li className="px-4 py-2">
+                <AddKind
+                  have={kinds.map((k) => k.title)}
+                  onAdd={(title) => setKinds([...kinds, { title, on: true }])}
+                />
+              </li>
+            )}
+          </ul>
+          {!kinds.some((k) => k.on) && (
+            <p className="mt-2 text-[13px] text-bad">Tick at least one kind of role to search.</p>
+          )}
+        </Field>
+
+        <Field title="Where" testId="profile-places-field">
+          <div className="grid gap-5 @[44rem]:grid-cols-2">
+            <div>
+              <span className="mb-0.5 block text-[12.5px] text-ink-3">Places you would work</span>
+              <ChipsField
+                values={p.wants.places}
+                onChange={(places) => setProfile({ wants: { ...p.wants, places } })}
+                suggest={(q) => suggestFrom(CITY_OPTIONS, q)}
+                placeholder="Anywhere"
+                testId="profile-places"
+              />
+            </div>
+            <div>
+              <span className="mb-0.5 block text-[12.5px] text-ink-3">Not these places</span>
+              <ChipsField
+                values={p.wants.notPlaces}
+                onChange={(notPlaces) => setProfile({ wants: { ...p.wants, notPlaces } })}
+                suggest={(q) => suggestFrom(CITY_OPTIONS, q)}
+                placeholder="None"
+                testId="profile-not-places"
+              />
+            </div>
+          </div>
+          <label className="mt-4 flex items-center justify-between gap-3 text-[14px]">
+            Remote roles too
+            <Switch
+              checked={p.wants.remote}
+              onChange={(remote) => setProfile({ wants: { ...p.wants, remote } })}
+              label="Remote roles too"
+              data-testid="profile-remote"
             />
           </label>
-        </div>
-      </Field>
+        </Field>
 
-      <Field
-        title="Levels to look at"
-        hint="Set from where you are. Widen it if you like."
-        testId="profile-levels"
-      >
-        <div className="flex flex-wrap gap-1.5">
-          {ALL_LEVELS.map((l) => {
-            const picked = p.wants.levels.includes(l);
-            return (
-              <button
-                key={l}
-                type="button"
-                aria-pressed={picked}
-                onClick={() =>
-                  setProfile({
-                    wants: {
-                      ...p.wants,
-                      levels: picked ? p.wants.levels.filter((x) => x !== l) : [...p.wants.levels, l],
-                    },
-                  })
-                }
-                className={cx(
-                  'h-8 px-2.5 rounded-[6px] border text-[12.5px] transition-colors',
-                  picked
-                    ? 'bg-ink border-ink text-white font-medium'
-                    : 'bg-canvas border-line text-ink-2 hover:bg-canvas-2 hover:text-ink',
-                )}
-                data-testid={`profile-level-chip-${l}`}
-              >
-                {LEVEL_WORDS[l]}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-
-      <Field title="Skills Orbit found" hint="Remove one, add one" testId="profile-skills-field">
-        <ChipsField
-          values={p.skills.map((s) => s.name)}
-          onChange={(names) =>
-            setProfile({
-              skills: names.map(
-                (n) => p.skills.find((s) => s.name === n) ?? { name: n, from: 'added' as const },
-              ),
-            })
-          }
-          placeholder="Add a skill"
-          testId="profile-skills"
-        />
-      </Field>
-
-      <Field title="Kinds of role that fit" hint="Tick the ones to search" testId="profile-kinds">
-        <ul className="divide-y divide-line-2 rounded-[10px] border border-line bg-canvas">
-          {kinds.map((k, i) => (
-            <li
-              key={`${k.title}-${i}`}
-              className="flex items-start gap-3 px-3 py-2.5"
-              data-testid="profile-kind"
-            >
-              <PickCircle
-                checked={k.on}
-                onChange={(on) => setKinds(kinds.map((x, j) => (j === i ? { ...x, on } : x)))}
-                label={`Search ${k.title}`}
-                size={18}
-                testId="profile-kind-tick"
-                className="mt-0.5"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-[14px] font-medium">{k.title}</p>
-                {k.why && <p className="text-[12.5px] text-ink-3">{k.why}</p>}
-              </div>
-              <button
-                type="button"
-                onClick={() => setKinds(kinds.filter((_, j) => j !== i))}
-                className="text-[12.5px] text-ink-3 hover:text-ink"
-                aria-label={`Remove ${k.title}`}
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-          {kinds.length < 6 && (
-            <li className="px-3 py-2">
-              <AddKind onAdd={(title) => setKinds([...kinds, { title, on: true }])} />
-            </li>
-          )}
-        </ul>
-        {!kinds.some((k) => k.on) && (
-          <p className="mt-1.5 text-[12.5px] text-bad">Tick at least one kind of role to search.</p>
-        )}
-      </Field>
-
-      <Field title="Where" testId="profile-places-field">
-        <div className="grid gap-4 @[36rem]:grid-cols-2">
-          <div>
-            <p className="mb-1 text-[12.5px] text-ink-3">Places you would work. Empty is anywhere.</p>
-            <ChipsField
-              values={p.wants.places}
-              onChange={(places) => setProfile({ wants: { ...p.wants, places } })}
-              placeholder="New York, San Francisco"
-              testId="profile-places"
+        <Field title="Work authorization" testId="profile-eligibility">
+          <div className="divide-y divide-line-2">
+            <YesNo
+              question="Will you need visa sponsorship to work in the US?"
+              value={p.eligibility.needsSponsorship}
+              onChange={(v) => setProfile({ eligibility: { ...p.eligibility, needsSponsorship: v } })}
+              testId="profile-sponsorship"
+            />
+            <YesNo
+              question="Are you a US citizen?"
+              value={p.eligibility.usCitizen}
+              onChange={(v) => setProfile({ eligibility: { ...p.eligibility, usCitizen: v } })}
+              testId="profile-citizen"
             />
           </div>
-          <div>
-            <p className="mb-1 text-[12.5px] text-ink-3">Not these places</p>
-            <ChipsField
-              values={p.wants.notPlaces}
-              onChange={(notPlaces) => setProfile({ wants: { ...p.wants, notPlaces } })}
-              placeholder="A city to leave out"
-              testId="profile-not-places"
-            />
-          </div>
-        </div>
-        <label className="mt-3 inline-flex items-center gap-2.5 text-[13.5px]">
-          <Switch
-            checked={p.wants.remote}
-            onChange={(remote) => setProfile({ wants: { ...p.wants, remote } })}
-            label="Remote roles too"
-            data-testid="profile-remote"
-          />
-          Remote roles too
-        </label>
-      </Field>
-
-      <Field title="Work authorization" hint="Asked once, never guessed" testId="profile-eligibility">
-        <YesNo
-          question="Will you need visa sponsorship to work in the US?"
-          value={p.eligibility.needsSponsorship}
-          onChange={(v) => setProfile({ eligibility: { ...p.eligibility, needsSponsorship: v } })}
-          testId="profile-sponsorship"
-        />
-        <YesNo
-          question="Are you a US citizen?"
-          value={p.eligibility.usCitizen}
-          onChange={(v) => setProfile({ eligibility: { ...p.eligibility, usCitizen: v } })}
-          testId="profile-citizen"
-        />
-      </Field>
+        </Field>
+      </div>
 
       {error && (
         <p className="mt-4 text-[13px] text-bad" role="alert" data-testid="profile-error">
           {error}
         </p>
       )}
-      <div className="mt-6 flex flex-wrap items-center gap-2 pb-6">
+      <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line-2 pb-6 pt-5">
         <Button
           variant="primary"
           onClick={() => void find()}
@@ -444,24 +483,46 @@ export function ProfileSetup({
   );
 }
 
+const MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/** The kinds of role kept with a profile (the server keeps twelve). */
+const MAX_KINDS = 12;
+
+/** One part of the profile: its name on the left, what to change on the right (stacked on a phone). */
 function Field({
   title,
-  hint,
+  aside,
   children,
   testId,
 }: {
   title: string;
-  hint?: string;
+  aside?: string;
   children: ReactNode;
   testId?: string;
 }) {
   return (
-    <section className="mt-6" data-testid={testId}>
-      <div className="mb-2 flex flex-wrap items-baseline gap-x-3">
-        <h3 className="text-[13.5px] font-medium">{title}</h3>
-        {hint && <span className="text-[12.5px] text-ink-3">{hint}</span>}
+    <section
+      className="grid gap-x-10 gap-y-3 border-t border-line-2 py-6 @[40rem]:grid-cols-[170px_minmax(0,1fr)]"
+      data-testid={testId}
+    >
+      <div>
+        <h3 className="text-[14px] font-medium">{title}</h3>
+        {aside && <p className="mt-0.5 text-[12.5px] text-ink-3">{aside}</p>}
       </div>
-      {children}
+      <div className="min-w-0">{children}</div>
     </section>
   );
 }
@@ -512,38 +573,56 @@ function ProfileLink({ label, primary }: { label: string; primary?: boolean }) {
   );
 }
 
-function AddKind({ onAdd }: { onAdd: (title: string) => void }) {
+/** Add a kind of role: suggestions from common roles as they type; Enter adds what is typed. */
+function AddKind({ have, onAdd }: { have: string[]; onAdd: (title: string) => void }) {
   const [text, setText] = useState('');
-  const add = () => {
-    const t = text.trim().replace(/\s+/g, ' ').slice(0, 60);
+  const taken = (t: string) => have.some((h) => h.toLowerCase() === t.toLowerCase());
+  const add = (raw: string) => {
+    const t = raw.trim().replace(/\s+/g, ' ').slice(0, 60);
     setText('');
-    if (t) onAdd(t.charAt(0).toUpperCase() + t.slice(1));
+    if (t && !taken(t)) onAdd(t.charAt(0).toUpperCase() + t.slice(1));
   };
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        add();
-      }}
-      className="flex items-center gap-2"
-    >
-      <input
+    <div className="flex items-center gap-2.5">
+      <Plus size={16} className="shrink-0 text-ink-3" aria-hidden />
+      <Suggest
+        className="min-w-0 flex-1"
         value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Add a kind of role, like Product analyst"
+        onChange={setText}
+        suggest={(q) =>
+          suggestFrom(
+            ROLE_KIND_OPTIONS.filter((o) => !taken(o)),
+            q,
+          )
+        }
+        onPick={(sg) => add(sg.value)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || !text.trim()) return;
+          const highlighted = (e.currentTarget.getAttribute('aria-activedescendant') ?? '') !== '';
+          if (!highlighted) {
+            e.preventDefault();
+            add(text);
+          }
+        }}
+        placeholder="Add a kind of role"
         aria-label="Add a kind of role"
-        className="h-8 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-[#a59f97]"
+        input={KindInput}
         data-testid="profile-kind-add"
       />
-      {text.trim() && (
-        <Button size="sm" type="submit">
-          Add
-        </Button>
-      )}
-    </form>
+    </div>
   );
 }
 
+function KindInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className="h-9 w-full bg-transparent text-[14px] outline-none placeholder:text-[#a59f97]"
+    />
+  );
+}
+
+/** A yes or no asked once: the question, and the answer as a two-part switch. */
 function YesNo({
   question,
   value,
@@ -561,21 +640,24 @@ function YesNo({
       aria-pressed={value === v}
       onClick={() => onChange(v)}
       className={cx(
-        'inline-flex h-8 items-center gap-1 rounded-[6px] border px-3 text-[12.5px] transition-colors',
+        'h-7 min-w-[52px] rounded-full px-3 text-[13px] transition-all',
         value === v
-          ? 'bg-ink border-ink text-white font-medium'
-          : 'bg-canvas border-line text-ink-2 hover:bg-canvas-2',
+          ? 'bg-canvas font-medium text-ink shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_rgba(0,0,0,0.04)]'
+          : 'text-ink-3 hover:text-ink',
       )}
       data-testid={`${testId}-${v ? 'yes' : 'no'}`}
     >
-      {value === v && <Check size={12} aria-hidden />}
       {label}
     </button>
   );
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 py-1.5">
-      <span className="text-[13.5px]">{question}</span>
-      <span className="flex gap-1.5">
+    <div className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
+      <span className="text-[14px]">{question}</span>
+      <span
+        className="inline-flex shrink-0 rounded-full bg-canvas-2 p-0.5"
+        role="group"
+        aria-label={question}
+      >
         {btn(true, 'Yes')}
         {btn(false, 'No')}
       </span>

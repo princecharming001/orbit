@@ -27,6 +27,7 @@ import {
   type PostingInfo,
   type ProfileLevel,
   type ProfileLines,
+  type ReachPath,
   type RoleMatch,
   type RoleProfile,
   type RolesCoverage,
@@ -915,9 +916,42 @@ export const pathOf = (paths: Map<string, RolePath> | undefined, company: string
 
 // ---- filters, order and words ---------------------------------------------------------------------------------
 
-export type RolesSort = 'fit' | 'newest' | 'warmest';
+/**
+ * Plan 45 §3: an intro to someone at the company through a person the student knows (the company page's warm route),
+ * read in the background for the companies on screen.
+ */
+export interface RoleIntro {
+  /** who the student would ask */
+  via: { id: string; name: string; photoUrl?: string };
+  /** who they would be introduced to there */
+  to: { id: string; name: string; photoUrl?: string; title?: string };
+  /** 0..1, the route's score */
+  score: number;
+  hops?: ReachPath['hops'];
+}
+
+/** The way in at a company, best first (plan 45 §3). */
+export type WayIn = 'close' | 'known' | 'intro' | 'none';
+
+export function wayInOf(path: RolePath, intros?: RoleIntro[]): WayIn {
+  if (path.known.some((k) => k.level >= 3)) return 'close';
+  if (path.known.length || path.alumni.length) return 'known';
+  if (intros?.length) return 'intro';
+  return 'none';
+}
+
+/** What a way in adds to the fit in "Best match": small enough that a strong fit with no one still ranks well. */
+export const WAY_IN_BONUS: Record<WayIn, number> = { close: 1.5, known: 1, intro: 0.75, none: 0 };
+const WAY_IN_RANK: Record<WayIn, number> = { close: 3, known: 2, intro: 1, none: 0 };
+
+export type RolesSort = 'best' | 'fit' | 'newest' | 'warmest';
+
+/** The way-in filter: anyone, someone they know (close or known), someone or an intro, or no way in yet. */
+export type WayInFilter = 'any' | 'known' | 'reach' | 'none';
 
 export interface RoleFilters {
+  /** words to find in the title, company, team, places or the skills the posting names */
+  query: string;
   /** kinds of role to show (titles from the profile); empty shows every kind */
   kinds: string[];
   level: 'any' | JobLevel;
@@ -925,19 +959,22 @@ export interface RoleFilters {
   place: string;
   remote: boolean;
   noSponsorship: boolean;
+  wayIn: WayInFilter;
   /** the least fit shown */
   minFit: number;
   sort: RolesSort;
 }
 
 export const DEFAULT_FILTERS: RoleFilters = {
+  query: '',
   kinds: [],
   level: 'any',
   place: '',
   remote: false,
   noSponsorship: false,
+  wayIn: 'any',
   minFit: 6,
-  sort: 'fit',
+  sort: 'best',
 };
 
 /** Whether a role is one of the kinds picked: same family as the kind, or the kind's words in the title. */
@@ -960,15 +997,29 @@ const roughOf = (m: RoleMatch) =>
   m.roughFit ? m.roughFit.skills + (m.roughFit.level ? 0.5 : 0) + (m.roughFit.place ? 0.3 : 0) : 0;
 const postedAt = (m: RoleMatch) => Date.parse(m.job.postedAt ?? m.job.firstSeenAt ?? '') || 0;
 
+/** Every word typed is somewhere in the role: its title, company, team, places, or a skill the posting names. */
+export function matchesQuery(m: RoleMatch, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const j = m.job;
+  const hay = [j.title, j.companyName, j.team, ...j.places, ...(m.answers?.skills.map((s) => s.name) ?? [])]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
 export function filterMatches(
   rows: RoleMatch[],
   f: RoleFilters,
   kinds: { title: string; family?: string }[] = [],
+  ways?: { paths?: Map<string, RolePath>; intros?: Map<string, RoleIntro[]> },
 ): RoleMatch[] {
   const picked = kinds.filter((k) => f.kinds.includes(k.title));
   const place = f.place.trim().toLowerCase();
   return rows.filter((m) => {
     const j = m.job;
+    if (f.query && !matchesQuery(m, f.query)) return false;
     if (picked.length && !picked.some((k) => roleOfKind(j, k))) return false;
     if (f.level !== 'any' && j.level && j.level !== f.level) return false;
     if (
@@ -980,6 +1031,12 @@ export function filterMatches(
     if (f.remote && j.remote !== 'remote') return false;
     if (f.noSponsorship && m.fit?.caps.some((c) => c.kind === 'sponsorship')) return false;
     if (f.noSponsorship && j.sponsorship === 'none') return false;
+    if (f.wayIn !== 'any') {
+      const w = wayInOf(pathOf(ways?.paths, j.companyName), introsOf(ways?.intros, j.companyName));
+      if (f.wayIn === 'known' && w !== 'close' && w !== 'known') return false;
+      if (f.wayIn === 'reach' && w === 'none') return false;
+      if (f.wayIn === 'none' && w !== 'none') return false;
+    }
     // a role not read closely has no number: it is not held back by the least fit
     const s = fitOfMatch(m);
     if (s !== undefined && s < f.minFit) return false;
@@ -987,17 +1044,61 @@ export function filterMatches(
   });
 }
 
-/** Fit, then the warmest path, then the newest (plan 44 §6.6); or newest first; or warmest first. */
-export function sortMatches(rows: RoleMatch[], sort: RolesSort, paths?: Map<string, RolePath>): RoleMatch[] {
+export const introsOf = (intros: Map<string, RoleIntro[]> | undefined, company: string): RoleIntro[] =>
+  intros?.get(normalizeCompany(company)) ?? [];
+
+/**
+ * Best match (plan 45 §3.1): the fit plus a little for the way in; best fit; newest; or the easiest way in first.
+ * Ties go to the fit, then the way in, then the newest.
+ */
+export function sortMatches(
+  rows: RoleMatch[],
+  sort: RolesSort,
+  paths?: Map<string, RolePath>,
+  intros?: Map<string, RoleIntro[]>,
+): RoleMatch[] {
+  const way = new Map(
+    rows.map((m) => [m.id, wayInOf(pathOf(paths, m.job.companyName), introsOf(intros, m.job.companyName))]),
+  );
+  const rank = (m: RoleMatch) => WAY_IN_RANK[way.get(m.id) ?? 'none'];
   const warm = (m: RoleMatch) => pathOf(paths, m.job.companyName).level;
   const score = (m: RoleMatch) => fitOfMatch(m) ?? -1;
+  const best = (m: RoleMatch) => (fitOfMatch(m) ?? roughOf(m) * 3) + WAY_IN_BONUS[way.get(m.id) ?? 'none'];
   const by: Record<RolesSort, (a: RoleMatch, b: RoleMatch) => number> = {
+    best: (a, b) =>
+      best(b) - best(a) || score(b) - score(a) || rank(b) - rank(a) || postedAt(b) - postedAt(a),
     fit: (a, b) =>
       score(b) - score(a) || roughOf(b) - roughOf(a) || warm(b) - warm(a) || postedAt(b) - postedAt(a),
     newest: (a, b) => postedAt(b) - postedAt(a) || score(b) - score(a),
-    warmest: (a, b) => warm(b) - warm(a) || score(b) - score(a) || postedAt(b) - postedAt(a),
+    warmest: (a, b) =>
+      rank(b) - rank(a) || warm(b) - warm(a) || score(b) - score(a) || postedAt(b) - postedAt(a),
   };
   return [...rows].sort(by[sort]);
+}
+
+const BOARD_WORDS: Partial<Record<Job['source'], string>> = {
+  greenhouse: 'Greenhouse',
+  lever: 'Lever',
+  ashby: 'Ashby',
+  workday: 'Workday',
+  smartrecruiters: 'SmartRecruiters',
+  workable: 'Workable',
+  recruitee: 'Recruitee',
+};
+
+/** Where the Apply button goes, in words: "Company site, on Greenhouse", "LinkedIn", "jobs.example.com". */
+export function applyWhere(job: Job): { href: string; words: string } {
+  const href = job.applyUrl || job.url;
+  if (job.source === 'linkedin') return { href, words: 'LinkedIn' };
+  const board = BOARD_WORDS[job.source];
+  if (board) return { href, words: `${job.companyName} careers, on ${board}` };
+  let host = '';
+  try {
+    host = new URL(href).hostname.replace(/^www\./, '');
+  } catch {
+    // a posting with no link has nowhere to apply but the company itself
+  }
+  return { href, words: host ? `${job.companyName} careers, ${host}` : `${job.companyName} careers` };
 }
 
 /** When nothing scores 6 or more: the best five anyway, marked as stretches. */

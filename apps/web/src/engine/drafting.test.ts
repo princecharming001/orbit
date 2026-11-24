@@ -447,6 +447,35 @@ describe('drafting against the demo data', () => {
     expect(note.bodyDraft).toMatch(/^Hey Chloe, (we traded (emails|messages)|following up on my note)/);
   });
 
+  it('every kind of draft to someone the student has talked to carries what they said, oldest first', async () => {
+    // the demo's recruiter: she sent the process email and the student answered, with no chat on the board
+    const chloe = (await people((p) => p.displayName === 'Chloe Dubois'))[0]!;
+    for (const kind of ['outreach', 'nurture', 'referral_ask', 'bump'] as MessageKind[]) {
+      const ctx = await buildDraftContext(user, chloe, kind, 'gmail');
+      const said = ctx.conversation ?? [];
+      expect(said.length, kind).toBeGreaterThanOrEqual(2);
+      expect(said.some((m) => m.from === 'them') && said.some((m) => m.from === 'student'), kind).toBe(true);
+      expect(
+        [...said].sort((a, b) => a.at.localeCompare(b.at)),
+        kind,
+      ).toEqual(said);
+      expect(
+        said.every((m) => m.text.length <= 601 && !/\n\s*On .+ wrote:/.test(m.text)),
+        kind,
+      ).toBe(true);
+      // what she said counts as context: a draft that builds on it is not thrown out as made up
+      const line = said
+        .at(-1)!
+        .text.split('\n')
+        .find((l) => l.trim().length > 25)!
+        .trim();
+      expect(contextText(ctx)).toContain(line.slice(0, 30));
+    }
+    // someone the student has never written to: nothing
+    const stranger = (await people((p) => p.isHuman && !p.interactionCount))[0]!;
+    expect((await buildDraftContext(user, stranger, 'outreach', 'gmail')).conversation).toBeUndefined();
+  });
+
   it('a reply asking for the resume and the teams gets both before any times (EG-03)', async () => {
     const chatted = await chattedIds();
     const p = (await people((x) => !!x.primaryEmail && !chatted.has(x.id) && !x.hiddenAt)).find(

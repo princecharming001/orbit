@@ -4,7 +4,7 @@
  * range pick, keyboard, keeps its place on return), the panel (parts, quotes, gaps, the way in), every state in §2.5,
  * the narrow layout, and the chat's card and the posting card's score.
  */
-import type { User } from '@orbit/core';
+import type { Person, User } from '@orbit/core';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -33,9 +33,11 @@ import { PlanFit } from '../../chat/ui/cards/PlanFit';
 import { RolesCard } from '../../chat/ui/cards/RolesCard';
 import { db, wipeDatabase } from '../../db/schema';
 import { setFeatureForTests } from '../../engine/features';
+import { reachCompany } from '../../engine/graph';
 import { keptMatches, keptProfile, keptSearch, resetRolesForTests, tableMatches } from '../../engine/roles';
 import { SAMPLE_JOBS } from '../../engine/rolesSample';
 import { createRolesSim, NOT_READ_NOTE } from '../../engine/rolesSim';
+import { forgetIntros } from '../../engine/rolesWayIn';
 import { refreshAccount, setOrbitApiFetchForTests } from '../../integrations/orbitApi';
 import { RolesPage } from '../../pages/Roles';
 import { forgetViews } from '../../state/viewState';
@@ -123,6 +125,7 @@ beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   await wipeDatabase();
   resetRolesForTests();
+  forgetIntros();
   ({ api, user } = await signInToFakeApi());
   api.state.features = ['roles'];
   // four a step, so the sample roles take several steps as the server's sixty would
@@ -135,7 +138,9 @@ beforeEach(async () => {
   document.body.append(host);
   root = createRoot(host);
 });
+const NO_REACH = async () => ({ people: [], direct: [], saved: [], former: [], alumni: [], twoHop: [] });
 afterEach(async () => {
+  vi.mocked(reachCompany).mockImplementation(NO_REACH);
   act(() => root.unmount());
   host.remove();
   document.body.innerHTML = '';
@@ -341,66 +346,112 @@ describe('the first visit and the profile screen', () => {
   });
 });
 
-describe('the Roles table', () => {
-  it('lists every read role best fit first, with its columns; sort and filters change it', async () => {
+/** Someone the student knows, at a company with open roles (a close tie unless said otherwise). */
+async function knows(userId: string, id: string, name: string, org: string, extra: Partial<Person> = {}) {
+  const now = new Date().toISOString();
+  await db.people.put({
+    id,
+    userId,
+    displayName: name,
+    firstName: name.split(' ')[0]!,
+    lastName: name.split(' ')[1] ?? '',
+    nameNormalized: name.toLowerCase(),
+    emails: [],
+    primaryEmail: `${id}@example.com`,
+    currentOrganizationRaw: org,
+    currentTitle: 'Engineer',
+    relationshipType: 'friend',
+    strength: 0.7,
+    tieScore: 80,
+    interactionCount: 5,
+    sources: ['manual'],
+    isHuman: true,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+    ...extra,
+  } as Person);
+}
+
+const BONUS: Record<string, number> = { close: 1.5, known: 1, intro: 0.75 };
+
+describe('the roles, as cards', () => {
+  it('lists every read role best match first, with its facts; search, sort and filters change it', async () => {
     await buildAndSearch();
-    const heads = [...document.querySelectorAll('[data-testid="roles-table"] thead th')].map((th) =>
-      th.textContent?.trim(),
-    );
-    expect(heads).toEqual(['Role', 'Company', 'Fit', 'Why', 'Path', 'Where', 'Posted', 'Actions']);
     const scores = $$('role-fit').map((f) => Number(f.dataset.score));
     expect(scores.length).toBeGreaterThan(3);
+    // no one known anywhere: best match is the fit
     expect([...scores].sort((a, b) => b - a)).toEqual(scores);
     // the least fit shown is 6 by default
     expect(scores.every((s) => s >= 6)).toBe(true);
-    // a company the student has no page for links to the map's reach view
-    const company = $('role-company', $$('role-row')[0]!)!;
-    expect(company.getAttribute('href')).toMatch(/^\/map\?reach=1&company=/);
-    expect($$('role-path')[0]!.dataset.kind).toBe('none');
+    for (const r of $$('role-row')) {
+      expect($('role-company', r)!.textContent!.length).toBeGreaterThan(1);
+      expect($('role-facts', r)!.textContent).toMatch(/\w/);
+    }
+    // no way in anywhere: no way-in line, never "No one yet"
+    expect($$('role-path')).toHaveLength(0);
+    expect(document.body.textContent).not.toContain('No one yet');
     // newest first
     await choose($('roles-sort'), 'newest');
-    const posted = $$('role-row').map((r) => r.querySelectorAll('td')[6]!.textContent);
-    expect(posted[0]).toMatch(/^(Today|Yesterday)$/);
+    expect($('role-posted', $$('role-row')[0]!)!.textContent).toMatch(/Today|1d/);
     // remote only
     await click($('roles-remote'));
     expect($$('role-row').length).toBeGreaterThan(0);
-    for (const r of $$('role-row')) expect(r.textContent).toContain('Remote');
+    for (const r of $$('role-row')) expect($('role-facts', r)!.textContent).toContain('Remote');
     await click($('roles-filters-clear'));
-    // a kind of role as a chip
+    // search by company
+    await type($('roles-search') as HTMLInputElement, 'stripe');
+    expect($$('role-row').length).toBeGreaterThan(0);
+    for (const r of $$('role-row')) expect($('role-company', r)!.textContent).toBe('Stripe');
+    await click($('roles-filters-clear'));
     const n = $$('role-row').length;
     await choose($('roles-min-fit'), '8');
     expect($$('role-row').length).toBeLessThan(n);
     expect($$('role-fit').every((f) => Number(f.dataset.score) >= 8)).toBe(true);
   });
 
-  it('Shift picks a range, as in Find people, and the picked ones can be saved together', async () => {
+  it('the way in: someone they know lifts a role in Best match, shows on the card, and the filter keeps only those', async () => {
+    await knows(user.id, 'p_dana', 'Dana Whitfield', 'Stripe');
     await buildAndSearch();
-    const rows = $$('role-row');
-    await click($('role-pick', rows[0]!));
-    await click($('role-pick', rows[3]!), { shiftKey: true });
-    expect($$('role-pick').filter((p) => (p as HTMLInputElement).checked)).toHaveLength(4);
-    expect($('roles-picked')!.textContent).toContain('4 picked');
-    await click($('roles-save-picked'));
-    await until(
-      () => Object.values(api.state.roles.state().matches).filter((m) => m.status === 'saved').length === 4,
-    );
+    await choose($('roles-min-fit'), '1');
+    // who they know at each company is read just after the roles show
+    await until(() => $$('role-path').length > 0);
+    const stripe = $$('role-row').filter((r) => $('role-company', r)!.textContent === 'Stripe');
+    expect(stripe.length).toBeGreaterThan(0);
+    const line = $('role-path', stripe[0]!)!;
+    expect(line.dataset.way).toBe('close');
+    expect(line.textContent).toContain('You know Dana Whitfield');
+    // best match is the fit plus the way in: never out of order
+    const best = $$('role-row').map((r) => {
+      const fit = Number($('role-fit', r)?.dataset.score ?? 0);
+      return fit + (BONUS[$('role-path', r)?.dataset.way ?? ''] ?? 0);
+    });
+    expect([...best].sort((a, b) => b - a)).toEqual(best);
+    // easiest way in first: Stripe leads
+    await choose($('roles-sort'), 'warmest');
+    expect($('role-company', $$('role-row')[0]!)!.textContent).toBe('Stripe');
+    // only where they know someone
+    await choose($('roles-way-in-filter'), 'known');
+    expect($$('role-row').every((r) => $('role-company', r)!.textContent === 'Stripe')).toBe(true);
+    await choose($('roles-way-in-filter'), 'none');
+    expect($$('role-row').some((r) => $('role-company', r)!.textContent === 'Stripe')).toBe(false);
   });
 
   it('works from the keyboard: arrows move, Enter opens, S saves, X says not for me', async () => {
     await buildAndSearch();
-    const table = $('roles-table')!;
-    await key(table, 'ArrowDown');
-    await key(table, 'ArrowDown');
+    const list = $('roles-list')!;
+    await key(list, 'ArrowDown');
+    await key(list, 'ArrowDown');
     const second = $$('role-row')[1]!;
     expect(second.dataset.active).toBe('true');
     const id = second.dataset.id!;
-    await key(table, 's');
+    await key(list, 's');
     await until(() => api.state.roles.state().matches[id]?.status === 'saved');
-    await key(table, 'Enter');
+    await key(list, 'Enter');
     await until(() => $('role-panel'));
     expect(where).toContain(`role=${id}`);
     await click($('role-drawer-close'));
-    await key($('roles-table'), 'x');
+    await key($('roles-list'), 'x');
     await until(() => api.state.roles.state().matches[id]?.status === 'dismissed');
     await until(() => !$$('role-row').some((r) => r.dataset.id === id));
   });
@@ -409,7 +460,7 @@ describe('the Roles table', () => {
     await buildAndSearch();
     await click($('roles-remote'));
     const remote = $$('role-row').length;
-    await click(document.querySelectorAll('[role="tab"]')[1]!);
+    await click(document.querySelectorAll('[role="tab"]')[3]!);
     expect($('roles-companies')).toBeTruthy();
     act(() => root.unmount());
     root = createRoot(host);
@@ -422,11 +473,12 @@ describe('the Roles table', () => {
 });
 
 describe('one role, opened', () => {
-  it('shows the score and its four parts, the quotes, the gaps, and Find a way in lands on the plan', async () => {
+  it('shows where to apply, the fit and its parts, the requirements, the gaps, and Find people lands on the plan', async () => {
     await buildAndSearch();
     const stripe = $$('role-row').find((r) => r.textContent?.includes('Stripe'))!;
     await click($('role-title', stripe));
     await until(() => $('role-panel'));
+    expect($('role-apply-where')!.textContent).toBe('Applies on Stripe careers, on Greenhouse');
     expect($$('role-panel-part').map((p) => p.dataset.part)).toEqual([
       'skills',
       'experience',
@@ -434,12 +486,15 @@ describe('one role, opened', () => {
       'level',
     ]);
     expect($$('role-panel-part')[0]!.textContent).toContain('the posting asks for');
-    expect($('role-panel-from-posting')!.textContent).toContain('Experience with Go, Java or Ruby');
-    expect($('role-panel-from-you')!.textContent).toContain('Built a reconciliation service in Go');
+    const reqs = $$('role-panel-req');
+    expect(reqs.length).toBeGreaterThan(0);
+    expect(reqs.some((r) => r.dataset.have === 'have')).toBe(true);
     expect($('role-panel-gaps')!.textContent).toMatch(
       /Payments is asked for and not on your resume|Distributed systems/,
     );
-    expect($('role-panel-fit')!.textContent).toContain('Not a chance of an offer'.replace('Not a', 'not a'));
+    expect($('role-fit', $('role-panel-fit')!)!.title).toContain('not a chance of an offer');
+    // no one there: the way in says so, and finds people
+    await until(() => $('role-panel-way-none'));
     await click($('role-way-in'));
     await until(() => where.startsWith('/companies/'));
     expect(where).toMatch(/\?plan=tp/);
@@ -448,6 +503,92 @@ describe('one role, opened', () => {
     const log = (await db.audit.where('userId').equals(user.id).toArray()).map((e) => e.action);
     expect(log).toEqual(expect.arrayContaining(['roles.opened', 'roles.way_in']));
   });
+
+  it('Apply, then "Yes, I applied": the role moves to Applied', async () => {
+    await buildAndSearch();
+    const first = $$('role-row')[0]!;
+    const id = first.dataset.id!;
+    await click($('role-title', first));
+    await until(() => $('role-panel'));
+    const apply = $('role-panel-open-posting') as HTMLAnchorElement;
+    expect(apply.href).toMatch(/^https?:/);
+    expect(apply.target).toBe('_blank');
+    await click(apply);
+    await until(() => $('role-applied-ask'));
+    await click($('role-applied-yes'));
+    await until(() => api.state.roles.state().matches[id]?.status === 'applied');
+    await click($('role-drawer-close'));
+    await click(document.querySelectorAll('[role="tab"]')[2]!);
+    await until(() => $$('role-row').some((r) => r.dataset.id === id));
+    expect($('role-status', $$('role-row')[0]!)!.textContent).toBe('Applied');
+  });
+
+  it('someone they know there: Ask for a referral writes the ask in place, naming the role', async () => {
+    await knows(user.id, 'p_dana', 'Dana Whitfield', 'Stripe');
+    await buildAndSearch();
+    const stripe = $$('role-row').find((r) => $('role-company', r)!.textContent === 'Stripe')!;
+    const title = $('role-title', stripe)!.textContent!;
+    await click($('role-title', stripe));
+    await until(() => $('role-panel-known') && $('role-panel-tip'));
+    expect($('role-panel-tip')!.textContent).toBe('Ask Dana for a referral before you apply.');
+    await click($('role-ask-referral'));
+    await until(() => $('role-way-draft'), 8000);
+    const drafts = await db.outbound.where('personId').equals('p_dana').toArray();
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.kind).toBe('referral_ask');
+    expect(drafts[0]!.bodyDraft).toContain(title);
+    // the student never left Roles
+    expect(where.startsWith('/roles')).toBe(true);
+  }, 12_000);
+
+  it('no one there, but a friend knows someone: the card says Intro via, and the ask is written in place', async () => {
+    await knows(user.id, 'p_kenji', 'Kenji Mori', 'Acme');
+    await knows(user.id, 'p_priya', 'Priya Shah', 'Ramp', {
+      tieScore: 0,
+      strength: 0,
+      interactionCount: 0,
+      relationshipType: 'unknown',
+    });
+    const priya = (await db.people.get('p_priya'))!;
+    vi.mocked(reachCompany).mockImplementation(async (_u, company) => ({
+      people:
+        company === 'Ramp'
+          ? [
+              {
+                person: priya,
+                team: 'engineering',
+                alum: false,
+                action: 'ask',
+                route: {
+                  kind: 'warm',
+                  score: 0.6,
+                  line: 'via Kenji',
+                  via: { id: 'p_kenji', name: 'Kenji Mori' },
+                },
+              },
+            ]
+          : [],
+      direct: [],
+      saved: [],
+      former: [],
+      alumni: [],
+      twoHop: [],
+    }));
+    await buildAndSearch();
+    await choose($('roles-min-fit'), '1');
+    await until(() => $$('role-path').some((p) => p.dataset.way === 'intro'));
+    const ramp = $$('role-row').find((r) => $('role-path', r)?.dataset.way === 'intro')!;
+    expect($('role-company', ramp)!.textContent).toBe('Ramp');
+    expect($('role-path', ramp)!.textContent).toContain('Intro via Kenji');
+    await click($('role-title', ramp));
+    await until(() => $('role-panel-intro'));
+    expect($('role-panel-intro')!.textContent).toContain('Priya Shah');
+    await click($('role-ask-intro'));
+    await until(() => $('role-way-draft') || /Drafts/.test($('role-panel-intro')?.textContent ?? ''), 8000);
+    const ask = await db.suggestions.where('personId').equals('p_kenji').first();
+    expect(ask).toMatchObject({ kind: 'intro_request' });
+    expect(where.startsWith('/roles')).toBe(true);
+  }, 12_000);
 
   it('Not for me asks why, and the reason reaches the server', async () => {
     await buildAndSearch();
@@ -459,6 +600,15 @@ describe('one role, opened', () => {
     await click($('role-dismiss-company'));
     await until(() => api.state.roles.state().matches[id]?.status === 'dismissed');
     expect(api.state.roles.state().matches[id]?.dismissReason).toBe('company');
+  });
+
+  it('the three-dot menu on a card says not for me, with a reason', async () => {
+    await buildAndSearch();
+    const first = $$('role-row')[0]!;
+    const id = first.dataset.id!;
+    await click($('role-card-menu', first));
+    await click($('role-card-dismiss-level', first));
+    await until(() => api.state.roles.state().matches[id]?.dismissReason === 'level');
   });
 });
 
@@ -513,7 +663,7 @@ describe('every state in plan 44 §2.5', () => {
     await buildAndSearch();
     expect($('roles-no-strong')!.textContent).toContain('No strong fits yet');
     expect($$('role-row')).toHaveLength(5);
-    expect($$('role-fit').every((f) => f.textContent?.includes('Stretch'))).toBe(true);
+    expect($$('role-fit').every((f) => f.title.includes('a stretch'))).toBe(true);
     expect($$('role-why')[0]!.textContent).toBe('Asks for 5 years');
   });
 
@@ -529,9 +679,10 @@ describe('every state in plan 44 §2.5', () => {
     resetRolesForTests();
     await show();
     await until(() => $$('role-row').length > 0 && !$$('role-row').some((r) => r.dataset.id === id));
-    await click(document.querySelectorAll('[role="tab"]')[2]!);
-    await until(() => $('roles-saved'));
-    expect($('roles-saved-closed', $$('roles-saved-row')[0]!)!.textContent).toBe('No longer listed');
+    await click(document.querySelectorAll('[role="tab"]')[1]!);
+    await until(() => $$('role-row').some((r) => r.dataset.id === id));
+    const card = $$('role-row').find((r) => r.dataset.id === id)!;
+    expect($('role-closed', card)!.textContent).toBe('No longer listed');
   });
 
   it('the model unavailable: "Not read closely yet", never a number, and a line that says why', async () => {
@@ -630,15 +781,16 @@ describe('narrow: Role, Company and Fit stay; Why and Path fold under the role',
     expect(shown).toEqual(['Role', 'Company', 'Fit', 'Actions']);
     const fold = $('role-fold', host)!;
     expect(fold.className).not.toContain('@[64rem]:hidden');
-    expect(fold.textContent).toContain(whyWords(rows[0]!).text);
+    // no Why: the reason is in the open role, not on the row
+    const why = whyWords(rows[0]!).text;
+    if (why) expect(host.textContent).not.toContain(why);
     expect($('role-path', fold)).toBeTruthy();
   });
 
-  it('on the page the same columns fold by the box it is in (a container query), not by the window', async () => {
+  it('on the page the roles are cards, not the table', async () => {
     await buildAndSearch();
-    const why = [...document.querySelectorAll('thead th')].find((th) => th.textContent === 'Why')!;
-    expect(why.className).toContain('@[64rem]:table-cell');
-    expect($$('role-fold')[0]!.className).toContain('@[64rem]:hidden');
+    expect($('roles-table')).toBeNull();
+    expect($('roles-list')).toBeTruthy();
   });
 });
 

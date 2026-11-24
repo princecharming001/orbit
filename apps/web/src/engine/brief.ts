@@ -642,6 +642,38 @@ function pickWords(
   };
 }
 
+/** The messages with them a draft reads: the last eight, each cut to 600 characters. */
+export const DRAFT_CONVERSATION = { messages: 8, chars: 600 };
+
+/**
+ * The last few messages between the student and this person, oldest first, on any channel (email, LinkedIn, texts):
+ * only what passed directly between them, never sent-but-pending ones, quoted text and long signatures cut.
+ */
+export async function recentConversation(
+  userId: string,
+  personId: string,
+): Promise<DraftContext['conversation']> {
+  const said = (await conversationWith(userId, personId))
+    .filter((m) => !m.pending && !m.group && m.text.trim())
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(-DRAFT_CONVERSATION.messages);
+  if (!said.length) return undefined;
+  return said.map((m) => {
+    // a reply's quoted history ("On Mon, ... wrote:") is the message before it, already in the list
+    const own = m.text
+      .split(/\n\s*On .{4,120} wrote:\s*\n/)[0]!
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return {
+      at: m.at,
+      from: m.out ? ('student' as const) : ('them' as const),
+      channel: m.channel === 'gmail' ? ('email' as const) : m.channel,
+      text:
+        own.length > DRAFT_CONVERSATION.chars ? `${own.slice(0, DRAFT_CONVERSATION.chars).trimEnd()}…` : own,
+    };
+  });
+}
+
 function oneLinerFor(user: User, summary: string | undefined): string | undefined {
   if (user.school && user.graduationYear) return undefined;
   const clause = resumeOneLiner(summary)?.split(/,\s*/)[0]?.trim();
@@ -809,6 +841,9 @@ export async function buildDraftContext(
       }
     }
   }
+  // what was said between them so far, on any channel and for every kind of message (a check-in, a follow-up, a
+  // referral ask, one of many drafted at once from the chat): the last few messages, so the draft builds on them
+  const conversation = await recentConversation(user.id, person.id);
   // promises the student made to this person in the conversation, kept in the thank-you
   const promises =
     kind === 'thank_you'
@@ -1086,6 +1121,7 @@ export async function buildDraftContext(
     takeaway: inputs.takeaway?.trim() || undefined,
     reengage: s?.payload.reengage as DraftContext['reengage'] | undefined,
     history,
+    conversation,
     promises: promises?.length ? promises : undefined,
     newAffiliation,
     researchOpener,

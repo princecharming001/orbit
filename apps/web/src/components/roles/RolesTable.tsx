@@ -1,9 +1,9 @@
 /**
  * Plan 44 §2.3: the Roles table, the same sheet the student knows from Find people (ui/table, PickCircle, Shift for a
- * range, the action cell riding the right edge). Role, Company, Fit, Why, Path, Where, Posted, then Save, Not for me
+ * range, the action cell riding the right edge). Role, Company, Fit, Path, Where, Posted, then Save, Not for me
  * and Open posting.
  *
- * Narrow (a small window, the chat's side panel, a phone, a chat card): Role, Company and Fit stay; Why and Path fold
+ * Narrow (a small window, the chat's side panel, a phone, a chat card): Role, Company and Fit stay; Path folds
  * under the role; Where and Posted open with the row. The page's own box decides (a container query), so the same
  * table fits the side panel; `compact` folds it always.
  *
@@ -131,7 +131,6 @@ export function RolesTable({
             </Th>
             <Th>Company</Th>
             <Th aria-sort="descending">Fit</Th>
-            <Th className={wide}>Why</Th>
             <Th className={cx(wide, 'min-w-[170px]')}>Path</Th>
             <Th className={mid}>Where</Th>
             <Th className={mid}>Posted</Th>
@@ -143,7 +142,6 @@ export function RolesTable({
         <tbody>
           {rows.map((m) => {
             const j = m.job;
-            const why = whyWords(m);
             const path = pathOf(paths, j.companyName);
             const where = whereWords(j);
             const saved = m.status === 'saved' || m.status === 'applied' || m.status === 'interviewing';
@@ -197,19 +195,8 @@ export function RolesTable({
                           {j.team}
                         </span>
                       )}
-                      {/* narrow: the reason and the way in, under the role */}
+                      {/* narrow: the way in, under the role */}
                       <span className={cx('mt-1 flex flex-col gap-0.5', fold)} data-testid="role-fold">
-                        {why.text && (
-                          <span
-                            className={cx(
-                              'truncate text-[12px] max-w-[150px] @[36rem]:max-w-[300px]',
-                              why.capped ? 'text-bad' : 'text-ink-2',
-                            )}
-                            title={why.text}
-                          >
-                            {why.text}
-                          </span>
-                        )}
                         <span className="text-[12px] max-w-[150px] @[36rem]:max-w-[300px]">
                           <PathCell path={path} compact />
                         </span>
@@ -236,11 +223,6 @@ export function RolesTable({
                 </Td>
                 <Td className="tabular-nums">
                   <FitCell match={m} stretch={stretch?.has(m.id)} />
-                </Td>
-                <Td className={wide} data-testid="role-why">
-                  <Clip title={why.text} max={220} className={why.capped ? 'text-bad' : 'text-ink-2'}>
-                    {why.text}
-                  </Clip>
                 </Td>
                 <Td className={wide}>
                   <PathCell path={path} />

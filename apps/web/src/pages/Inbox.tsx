@@ -41,6 +41,7 @@ import {
   useWorking,
   Working,
 } from '../ui';
+import { RowMenu } from '../ui/RowMenu';
 
 const IN_FLIGHT: OutboundMessage['status'][] = ['queued', 'sending', 'handed_off', 'failed'];
 
@@ -209,7 +210,14 @@ export function InboxPage() {
   const otherCards = cards.filter((s) => !isMessageSuggestion(s.kind) && !own(s) && elsewhere(s));
   const otherMore = more.filter((s) => !isMessageSuggestion(s.kind) && !own(s) && elsewhere(s));
   // someone added by hand and not written to yet: the next step is to write to them
-  const toWrite = notYetWritten(people, chats, outbound, suggestions, now).slice(0, 3);
+  // the ones put away from the card (its menu: Not now, Hide this card) stay away
+  const skipped = useLiveQuery(async () => {
+    const row = userId ? await db.kv.get(TO_WRITE_SKIP(userId)) : undefined;
+    return new Set((row?.value as string[] | undefined) ?? []);
+  }, [userId]);
+  const toWrite = notYetWritten(people, chats, outbound, suggestions, now)
+    .filter((p) => !skipped?.has(p.id))
+    .slice(0, 3);
   const undrafted = pending
     .filter((s) => !s.outboundMessageId)
     .map((s) => s.id)
@@ -387,7 +395,9 @@ export function InboxPage() {
             ].filter((t) => t.value === 'pending' || t.value === shown || t.count !== 0)}
           />
           {shown === 'pending' && <TomorrowBatch view={autopilot} />}
-          {shown === 'pending' && toWrite.length > 0 && <ToWrite people={toWrite} />}
+          {shown === 'pending' && toWrite.length > 0 && userId && (
+            <ToWrite people={toWrite} userId={userId} />
+          )}
           {shown === 'pending' &&
             split &&
             (pending.length > 0 || messages.length > 0 || otherCards.length + otherMore.length > 0) && (
@@ -700,17 +710,48 @@ function ComingUp({
   );
 }
 
-/** People the student added by hand and has not written to: a button opens the first message on their page. */
-function ToWrite({ people }: { people: Person[] }) {
+/** Where the people put away from the "write to the people you added" card are kept. */
+const TO_WRITE_SKIP = (userId: string) => `drafts:toWrite:skip:${userId}`;
+
+async function skipToWrite(userId: string, ids: string[]): Promise<void> {
+  const row = await db.kv.get(TO_WRITE_SKIP(userId));
+  const kept = new Set((row?.value as string[] | undefined) ?? []);
+  for (const id of ids) kept.add(id);
+  await db.kv.put({ key: TO_WRITE_SKIP(userId), value: [...kept].slice(-500) });
+}
+
+/**
+ * People the student added by hand and has not written to: a button opens the first message on their page. Each row
+ * and the card itself have a three-dot menu to put them away.
+ */
+function ToWrite({ people, userId }: { people: Person[]; userId: string }) {
   return (
     <div
       className="mb-5 bg-canvas border border-line rounded-[var(--radius-card)] p-4 shadow-[var(--shadow-card)]"
       data-testid="drafts-to-write"
     >
-      <p className="font-medium">Next: write to the people you added</p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-medium">Next: write to the people you added</p>
+        <RowMenu
+          label="More for this card"
+          className="-my-1.5 -mr-1.5"
+          items={[
+            {
+              label: 'Hide this card',
+              onSelect: () =>
+                void skipToWrite(
+                  userId,
+                  people.map((p) => p.id),
+                ),
+              testId: 'drafts-to-write-hide',
+            },
+          ]}
+          testId="drafts-to-write-menu"
+        />
+      </div>
       <ul className="mt-3 space-y-2">
         {people.map((p) => (
-          <li key={p.id} className="flex flex-wrap items-center gap-3">
+          <li key={p.id} className="flex flex-wrap items-center gap-3" data-testid="drafts-to-write-row">
             <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={30} />
             <div className="min-w-0 flex-1">
               <Link to={`/people/${p.id}`} className="text-[13.5px] font-medium hover:underline">
@@ -725,6 +766,17 @@ function ToWrite({ people }: { people: Person[] }) {
                 Write to {p.firstName}
               </Button>
             </Link>
+            <RowMenu
+              label={`More for ${p.displayName}`}
+              items={[
+                {
+                  label: 'Not now',
+                  onSelect: () => void skipToWrite(userId, [p.id]),
+                  testId: 'drafts-to-write-skip',
+                },
+              ]}
+              testId="drafts-to-write-row-menu"
+            />
           </li>
         ))}
       </ul>

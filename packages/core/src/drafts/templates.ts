@@ -294,6 +294,17 @@ export interface DraftContext {
     /** where the last of it passed: an email, a LinkedIn chat or texts (an email when unset) */
     channel?: 'email' | 'linkedin' | 'text';
   };
+  /**
+   * The last messages that passed between the student and this person on any channel, oldest first (their words and
+   * the student's), so a draft to someone they have talked to builds on what was said instead of starting over. The
+   * templates do not read it; the model does, and its words count as context when the draft is checked.
+   */
+  conversation?: {
+    at: string;
+    from: 'student' | 'them';
+    channel: 'email' | 'linkedin' | 'text';
+    text: string;
+  }[];
   /** open promises the student made to this person ("I will send my resume by Friday"), kept in the thank-you */
   promises?: string[];
   /** the one thing the student took away from the conversation, when no note facts exist (thank-you) */

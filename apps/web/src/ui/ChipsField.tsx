@@ -4,7 +4,7 @@
  * suggestions leave out what is already chosen. Used for target roles, industries and locations.
  */
 import { X } from 'lucide-react';
-import { useState } from 'react';
+import { type InputHTMLAttributes, useState } from 'react';
 import { cx } from './index';
 import { Suggest, type Suggestion } from './Suggest';
 
@@ -28,11 +28,9 @@ export function ChipsField({
 }) {
   const [draft, setDraft] = useState('');
   const has = (v: string) => values.some((x) => x.toLowerCase() === v.toLowerCase());
-  const add = (raw: string) => {
-    const parts = raw
-      .split(',')
-      .map((p) => p.trim())
-      .filter(Boolean);
+  // what is typed splits at commas; a suggestion picked is one entry, commas and all ("New York, NY")
+  const add = (raw: string, whole = false) => {
+    const parts = (whole ? [raw] : raw.split(',')).map((p) => p.trim()).filter(Boolean);
     const next = [...values];
     for (const p of parts) if (!next.some((x) => x.toLowerCase() === p.toLowerCase())) next.push(p);
     if (next.length !== values.length) onChange(next);
@@ -74,9 +72,9 @@ export function ChipsField({
         id={id}
         className="min-w-[140px] flex-1"
         value={draft}
-        onChange={(v) => (v.includes(',') ? add(v) : setDraft(v))}
+        onChange={(v) => (v.endsWith(',') ? add(v) : setDraft(v))}
         suggest={find}
-        onPick={(s) => add(s.value)}
+        onPick={(s) => add(s.value, true)}
         minChars={0}
         placeholder={values.length ? 'Add another' : placeholder}
         onKeyDown={(e) => {
@@ -92,18 +90,26 @@ export function ChipsField({
             remove(values[values.length - 1]!);
           }
         }}
-        input={(props) => (
-          <input
-            {...props}
-            className={cx(
-              'h-8 w-full bg-transparent text-[14px] outline-none placeholder:text-[#a59f97]',
-              // the settings page's flat style is for whole fields; this box sits inside one
-              'settings-chip-input',
-            )}
-          />
-        )}
+        input={ChipInput}
         data-testid={testId ? `${testId}-input` : undefined}
       />
     </div>
+  );
+}
+
+/**
+ * The bare text box after the chips. A component of its own, defined once: a new function on every render would be a
+ * new kind of element to React, which would throw the box away on each keystroke and take the cursor with it.
+ */
+function ChipInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={cx(
+        'h-8 w-full bg-transparent text-[14px] outline-none placeholder:text-[#a59f97]',
+        // the settings page's flat style is for whole fields; this box sits inside one
+        'settings-chip-input',
+      )}
+    />
   );
 }

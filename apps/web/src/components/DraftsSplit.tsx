@@ -82,7 +82,7 @@ export function DraftsSplit({
           .filter((g) => g.items.length + (g.messages?.length ?? 0))
           .map((g) => (
             <section key={g.label}>
-              <div className="text-[11.5px] uppercase tracking-wide text-ink-3 mb-1.5 px-1 flex items-center gap-2">
+              <div className="flex h-[18px] items-center gap-2 mb-1.5 px-1 text-[11.5px] leading-[18px] uppercase tracking-wide text-ink-3">
                 {g.label}
                 <span className="tabular">{g.items.length + (g.messages?.length ?? 0)}</span>
               </div>
@@ -119,8 +119,9 @@ export function DraftsSplit({
         className="self-stretch"
       />
       <div
-        // the open card stays in view while the list scrolls
-        className="min-w-0 sticky top-4"
+        // the open card stays in view while the list scrolls; its top lines up with the first row, under the group's
+        // 18px heading and its 6px gap
+        className="min-w-0 sticky top-4 mt-6"
         data-testid="drafts-reading"
       >
         {selected?.s && <SuggestionCard key={selected.id} s={selected.s} defaultOpen />}

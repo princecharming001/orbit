@@ -187,6 +187,101 @@ test.describe('Roles (plan 44, fake orbit-api)', () => {
     expect(await page.getByTestId('roles-page').innerText()).not.toMatch(/[—–!]/);
   });
 
+  test('the profile screen: typing a place keeps the cursor and offers cities; a kind of role is added from suggestions', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await signedIn(page);
+    await seedResume(page);
+    await page.goto('roles');
+    await page.getByTestId('profile-read').click();
+    await expect(page.getByTestId('roles-profile')).toBeVisible({ timeout: 15_000 });
+    const where = page.getByTestId('profile-places-input');
+    await where.click();
+    await page.keyboard.type('San Fr', { delay: 40 });
+    // the field kept the cursor through every key (a field made anew on each key lost it)
+    await expect(where).toBeFocused();
+    await expect(where).toHaveValue('San Fr');
+    await page
+      .getByTestId('suggest-option')
+      .filter({ hasText: /^San Francisco, CA$/ })
+      .click();
+    await expect(page.getByTestId('profile-places-chip')).toHaveText(['San Francisco, CA']);
+    const before = await page.getByTestId('profile-kind').count();
+    await page.getByTestId('profile-kind-add').click();
+    await page.keyboard.type('quant', { delay: 30 });
+    await page.getByTestId('suggest-option').filter({ hasText: 'Quantitative researcher' }).click();
+    await expect(page.getByTestId('profile-kind')).toHaveCount(before + 1);
+    await expect(page.getByTestId('profile-kind').last()).toContainText('Quantitative researcher');
+    await page.getByTestId('profile-sponsorship-no').click();
+    await expect(page.getByTestId('profile-sponsorship-no')).toHaveAttribute('aria-pressed', 'true');
+    expect(await page.getByTestId('roles-profile').innerText()).not.toMatch(/[—–!]/);
+  });
+
+  test('the list and the open role side by side: the way in first, a referral ask written in place', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signedIn(page);
+    await seedResume(page);
+    await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: Record<
+            string,
+            { put(x: unknown): Promise<unknown>; toArray(): Promise<{ id: string }[]> }
+          >;
+        }
+      ).__orbitDb;
+      const [u] = await db.users!.toArray();
+      const now = new Date().toISOString();
+      await db.people!.put({
+        id: 'p_dana',
+        userId: u!.id,
+        displayName: 'Dana Whitfield',
+        firstName: 'Dana',
+        lastName: 'Whitfield',
+        nameNormalized: 'dana whitfield',
+        emails: [],
+        primaryEmail: 'dana@example.com',
+        currentOrganizationRaw: 'Stripe',
+        currentTitle: 'Software Engineer',
+        relationshipType: 'friend',
+        strength: 0.7,
+        tieScore: 80,
+        interactionCount: 5,
+        sources: ['manual'],
+        isHuman: true,
+        tags: [],
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    await page.goto('roles');
+    await findRoles(page);
+    await expect(page.getByTestId('roles-split')).toBeVisible();
+    // the first role is open beside the list at once
+    await expect(page.getByTestId('roles-open').getByTestId('role-panel')).toBeVisible();
+    const stripe = page.getByTestId('role-row').filter({ hasText: 'Stripe' }).first();
+    await expect(stripe.getByTestId('role-path')).toHaveText(/You know Dana Whitfield/);
+    await stripe.click();
+    const pane = page.getByTestId('roles-open');
+    await expect(pane.getByTestId('role-panel-title')).toHaveText(/Stripe|Intern|Engineer/);
+    await expect(pane.getByTestId('role-panel-tip')).toHaveText('Ask Dana for a referral before you apply.');
+    await expect(pane.getByTestId('role-apply-where')).toHaveText('Applies on Stripe careers, on Greenhouse');
+    await pane.getByTestId('role-ask-referral').click();
+    await expect(pane.getByTestId('role-way-draft')).toBeVisible({ timeout: 20_000 });
+    await expect(pane.getByTestId('role-way-draft')).toContainText('Dana');
+    // the student never left Roles
+    await expect(page).toHaveURL(/\/roles/);
+    // the way-in filter keeps only where they know someone
+    await page.getByTestId('roles-min-fit').selectOption('1');
+    await page.getByTestId('roles-way-in-filter').selectOption('known');
+    for (const c of await page.getByTestId('role-company').allTextContents()) expect(c).toBe('Stripe');
+    expect(await page.getByTestId('roles-page').innerText()).not.toMatch(/[—–!]/);
+  });
+
   test('first visit with LinkedIn only: it reads, and says the profile lists roles but not what was done', async ({
     page,
   }) => {
@@ -213,7 +308,6 @@ test.describe('Roles (plan 44, fake orbit-api)', () => {
     await page.goto('roles');
     await expect(page.getByTestId('profile-use-linkedin')).toBeChecked();
     await expect(page.getByTestId('profile-use-resume')).toBeChecked();
-    await expect(page.getByTestId('roles-first-visit')).toContainText('Using both');
     await findRoles(page);
     const read = api.state.roleCalls.find((c) => c.route === '/roles/profile' && 'read' in c.body)!.body as {
       read: { resume?: unknown; linkedin?: { positions: { description?: string }[] } };
@@ -253,7 +347,8 @@ test.describe('Roles (plan 44, fake orbit-api)', () => {
     await expect(first.getByTestId('role-save')).toHaveAttribute('aria-pressed', 'true');
     await expect.poll(() => api.state.roles.state().matches[id!]?.status).toBe('saved');
     await page.getByRole('tab', { name: /Saved/ }).click();
-    await expect(page.getByTestId('roles-saved-row')).toHaveCount(1);
+    await expect(page.getByTestId('role-row')).toHaveCount(1);
+    await expect(page.getByTestId('role-row')).toHaveAttribute('data-id', id!);
   });
 
   test('Find a way in lands on the target plan, with the role filled', async ({ page }) => {
@@ -267,7 +362,7 @@ test.describe('Roles (plan 44, fake orbit-api)', () => {
     const panel = page.getByTestId('role-panel');
     await expect(panel).toBeVisible();
     await expect(panel.getByTestId('role-panel-part')).toHaveCount(4);
-    await expect(panel.getByTestId('role-panel-from-posting')).toBeVisible();
+    await expect(panel.getByTestId('role-panel-req').first()).toBeVisible();
     await panel.getByTestId('role-way-in').click();
     await expect(page).toHaveURL(/\/companies\/[^/?]+\?plan=/, { timeout: 20_000 });
     await expect(page.getByTestId('company-plan-card').getByTestId('target-plan-title')).toContainText(

@@ -1694,6 +1694,30 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     await expect(page.getByText('Coming up').locator('..').getByText(name)).toBeVisible();
   });
 
+  test('the next-step card puts people away: Not now on one, Hide this card for all, and it stays put', async ({
+    page,
+  }) => {
+    await newStudent(page);
+    await addByHand(page, 'Daniel Kim', 'Goldman Sachs', {
+      linkedin: 'https://www.linkedin.com/in/daniel-kim-gs',
+    });
+    await addByHand(page, 'Rhea Kapoor', 'Ramp', { linkedin: 'https://www.linkedin.com/in/rhea-kapoor-r' });
+    await openDrafts(page);
+    const next = page.getByTestId('drafts-to-write');
+    await expect(next.getByTestId('drafts-to-write-row')).toHaveCount(2);
+    const daniel = next.getByTestId('drafts-to-write-row').filter({ hasText: 'Daniel Kim' });
+    await daniel.getByTestId('drafts-to-write-row-menu').click();
+    await page.getByTestId('drafts-to-write-skip').click();
+    await expect(next.getByTestId('drafts-to-write-row')).toHaveCount(1);
+    await expect(next).not.toContainText('Daniel Kim');
+    await next.getByTestId('drafts-to-write-menu').click();
+    await page.getByTestId('drafts-to-write-hide').click();
+    await expect(page.getByTestId('drafts-to-write')).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('tab', { name: /^to send/i })).toBeVisible();
+    await expect(page.getByTestId('drafts-to-write')).toHaveCount(0);
+  });
+
   test('a first message started on a person page survives leaving it, and is findable on Drafts', async ({
     page,
   }) => {
