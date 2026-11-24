@@ -3823,6 +3823,28 @@ function blockKeys(n) {
 }
 for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
 
+// packages/core/src/entity/social.ts
+var PUBLIC_FIGURE_FOLLOWERS = 5e4;
+var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
+function accountKind(a) {
+  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
+  const name = (a.name ?? "").trim();
+  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
+  if (name && BRAND_WORDS.test(name)) return "brand";
+  const words = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
+  if (words.length >= 2) return "person";
+  if (a.business) return "brand";
+  return "unknown";
+}
+var tokensOf = (s) => s.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").split(/[^a-z0-9]+/).filter(Boolean);
+var COMMON_SURNAMES = new Set(
+  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
+);
+var isRareName = (last) => {
+  const l = tokensOf(last).join("");
+  return l.length >= 3 && !COMMON_SURNAMES.has(l);
+};
+
 // packages/core/src/entity/resolve.ts
 var RESOLVE_WEIGHTS = {
   name_sim: 3,
@@ -4152,6 +4174,36 @@ function scorePair(inc, cand, ctx) {
   if (f.org_match > 0 && !independent) score = Math.min(score, NAME_ORG_ONLY_CAP);
   return { score, features: f };
 }
+var hasLinkedIn = (x) => !!(x.linkedinMemberId || x.linkedinSlug || linkedInSlug(x.linkedinUrl));
+var addressesOf = (p) => [p.primaryEmail, ...p.emails].filter((e) => !!e);
+var sameFolded = (a, b) => a.given === b.given && a.surnames.join(" ") === b.surnames.join(" ");
+function assumeSamePerson(inc, cand, f, ctx) {
+  if (!cand.isHuman) return false;
+  const email = inc.email ? normalizeEmail(inc.email) : void 0;
+  if (hasLinkedIn(inc) && hasLinkedIn(cand)) return false;
+  const addresses = [...addressesOf(cand), ...email ? [email] : []];
+  if (addresses.some(numberedAddress)) return false;
+  const incName = incomingName(inc);
+  if (!incName.full || isPlaceholderName(cand)) {
+    return f.email_name_sim >= 0.95 && f.domain_org_match > 0;
+  }
+  const names = namesOf(inc, cand);
+  if (names.given !== "same" || names.surname !== "same" || names.swapped) return false;
+  const mine = foldName(incName);
+  if (!mine.given || !mine.surnames.length) return false;
+  if (!mine.surnames.every((x) => isRareName(x))) return false;
+  const others = ctx.people.filter(
+    (p) => p.id !== cand.id && p.id !== inc.personId && p.isHuman && !isPlaceholderName(p)
+  );
+  if (others.some((p) => sameFolded(foldName(p.displayName), mine))) return false;
+  if (f.org_match < 0 || employerConflict(inc, cand, ctx, f)) return false;
+  if (f.domain_org_match === 0 && f.email_name_sim < 0.3) {
+    const work = addresses.some((e) => !isPersonalEmailDomain(emailDomain(e)));
+    const employer = normalizeCompany(inc.companyRaw) || normalizeCompany(cand.currentOrganizationRaw);
+    if (work && employer) return false;
+  }
+  return true;
+}
 function differentLinkedInProfiles(a, b) {
   const slugOf2 = (p) => p.linkedinSlug ?? linkedInSlug(p.linkedinUrl) ?? void 0;
   const sa = slugOf2(a);
@@ -4240,13 +4292,16 @@ function resolveIdentity(inc, ctx) {
   const tied = (scored[1]?.score ?? 0) >= AUTO_MERGE_THRESHOLD;
   if (best.score >= AUTO_MERGE_THRESHOLD && !tied)
     return { kind: "probable", personId: best.p.id, score: best.score, features: best.features };
-  if (best.score >= SUGGEST_THRESHOLD)
+  if (best.score >= SUGGEST_THRESHOLD) {
+    if (!tied && assumeSamePerson(inc, best.p, best.features, { ...ctx, people }))
+      return { kind: "probable", personId: best.p.id, score: best.score, features: best.features };
     return {
       kind: "suggest",
       personId: best.p.id,
       score: Math.min(best.score, AUTO_MERGE_THRESHOLD - 0.01),
       features: best.features
     };
+  }
   return { kind: "new" };
 }
 function sameMailboxOtherName(owner, incName, people, ctx) {
@@ -4396,23 +4451,6 @@ function sqlQueue(db2) {
   };
 }
 for (const table of [KIND_QUEUE]) Object.setPrototypeOf(table, null);
-
-// packages/core/src/entity/social.ts
-var PUBLIC_FIGURE_FOLLOWERS = 5e4;
-var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
-function accountKind(a) {
-  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
-  const name = (a.name ?? "").trim();
-  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
-  if (name && BRAND_WORDS.test(name)) return "brand";
-  const words = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
-  if (words.length >= 2) return "person";
-  if (a.business) return "brand";
-  return "unknown";
-}
-var COMMON_SURNAMES = new Set(
-  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
-);
 
 // supabase/functions/_shared/social/keys.ts
 var identityKind = (p) => `${p}_id`;
@@ -4795,15 +4833,21 @@ function nameOf(i) {
   if (!i.name || isHandle(i.name, i.email)) return parseName("");
   return parseName(i.name);
 }
-async function upsertOrganization(db2, userId, name) {
+async function upsertOrganization(db2, userId, name, known) {
   const norm = normalizeCompany(name);
   if (!name || !norm) return null;
-  const [row] = await db2.sql`
-    insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, ${name.trim()}, ${norm})
-    on conflict (user_id, name_norm) do update set name = orbit.organizations.name
-    returning id`;
+  const cached = known?.get(norm);
+  if (cached) return cached;
+  const [have] = await db2.sql`
+    select id from orbit.organizations where user_id = ${userId}::uuid and name_norm = ${norm}`;
+  const [row] = have ? [have] : await db2.sql`
+        insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, ${name.trim()}, ${norm})
+        on conflict (user_id, name_norm) do update set name = orbit.organizations.name
+        returning id`;
+  if (row?.id) known?.set(norm, row.id);
   return row?.id ?? null;
 }
+var peopleLockKey = (userId) => `orbit.people:${userId}`;
 async function resolvePeople(db2, userId, input, opts) {
   const result = { byKey: /* @__PURE__ */ new Map(), created: /* @__PURE__ */ new Set(), merged: /* @__PURE__ */ new Map() };
   const create = opts.create ?? true;
@@ -4815,26 +4859,36 @@ async function resolvePeople(db2, userId, input, opts) {
     items.push(raw);
   }
   if (!items.length) return result;
+  return db2.begin(async (tx) => {
+    await tx.sql`select pg_advisory_xact_lock(hashtextextended(${peopleLockKey(userId)}, 0))`;
+    return resolveLocked(tx, userId, items, { now: opts.now, create }, result);
+  });
+}
+async function resolveLocked(db2, userId, items, opts, result) {
+  const { create } = opts;
   const emails = [...new Set(items.filter((i) => i.email).map((i) => normalizeEmail(i.email)))];
   const members = [...new Set(items.map((i) => i.linkedinMemberId).filter((x) => !!x))];
   const slugs = [...new Set(items.map(slugOf).filter((x) => !!x))];
+  const attendees = [...new Set(items.map((i) => i.unipileAttendeeId).filter((x) => !!x))];
   const hits = await db2.sql`
-    select pi.kind, pi.value_norm as value, coalesce(p.merged_into, p.id) as person_id
+    select pi.kind, pi.value_norm as value, coalesce(p.merged_into, p.id) as person_id, true as stored
       from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
      where pi.user_id = ${userId}::uuid and p.deleted_at is null
        and ((pi.kind = 'email' and pi.value_norm = any(${emails}::text[]))
          or (pi.kind = 'linkedin_member' and pi.value_norm = any(${members}::text[]))
-         or (pi.kind = 'linkedin_slug' and pi.value_norm = any(${slugs}::text[])))
+         or (pi.kind = 'linkedin_slug' and pi.value_norm = any(${slugs}::text[]))
+         or (pi.kind = 'unipile_attendee' and pi.value_norm = any(${attendees}::text[])))
     union all
-    select 'email', p.primary_email, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'email', p.primary_email, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.primary_email = any(${emails}::text[])
     union all
-    select 'linkedin_member', p.linkedin_member_id, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'linkedin_member', p.linkedin_member_id, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_member_id = any(${members}::text[])
     union all
-    select 'linkedin_slug', p.linkedin_slug, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'linkedin_slug', p.linkedin_slug, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_slug = any(${slugs}::text[])`;
   const byIdentity = new Map(hits.map((h) => [`${h.kind}:${h.value}`, h.person_id]));
+  const identities = new Set(hits.filter((h) => h.stored).map((h) => `${h.kind}:${h.value}`));
   const found = (i) => i.linkedinMemberId && byIdentity.get(`linkedin_member:${i.linkedinMemberId}`) || i.email && byIdentity.get(`email:${normalizeEmail(i.email)}`) || slugOf(i) && byIdentity.get(`linkedin_slug:${slugOf(i)}`) || void 0;
   const misses = [];
   const known = [];
@@ -4888,7 +4942,9 @@ async function resolvePeople(db2, userId, input, opts) {
     people,
     doNotMerge: new Set(dnm.map((d) => doNotMergeKey(d.person_a, d.person_b))),
     orgDomains: new Map(orgs.map((o) => [o.id, o.domains])),
-    result
+    result,
+    identities,
+    orgIds: /* @__PURE__ */ new Map()
   };
   for (const k of known) {
     result.byKey.set(k.item.key, k.personId);
@@ -4968,11 +5024,14 @@ async function insertIdentities(ctx, personId, i) {
   const slug = slugOf(i);
   if (slug) rows.push(["linkedin_slug", slug, urlOf(i) ?? slug]);
   if (i.unipileAttendeeId) rows.push(["unipile_attendee", i.unipileAttendeeId, i.unipileAttendeeId]);
-  for (const [kind, norm, raw] of rows)
+  for (const [kind, norm, raw] of rows) {
+    if (ctx.identities.has(`${kind}:${norm}`)) continue;
     await ctx.db.sql`
       insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, created_at)
       values (${ctx.userId}::uuid, ${personId}::uuid, ${kind}, ${norm}, ${raw}, ${src}, ${at}::timestamptz)
       on conflict (user_id, kind, value_norm) do nothing`;
+    ctx.identities.add(`${kind}:${norm}`);
+  }
 }
 var REPLACEABLE_PHOTO = "^https?://([a-z0-9-]+\\.)*(licdn\\.com|gravatar\\.com)/";
 function linkedInPhotoExpiry(url) {
@@ -4991,15 +5050,23 @@ async function attach(ctx, personId, i) {
   const p = ctx.people.find((x) => x.id === personId);
   const n = nameOf(i);
   const rename = !!p && !!n.full && isPlaceholderName(p);
-  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw, ctx.orgIds) : null;
   const slug = slugOf(i) ?? null;
+  const email = i.email ? normalizeEmail(i.email) : null;
   await ctx.db.sql`
     update orbit.people set
       display_name = case when ${rename}::boolean then ${n.full} else display_name end,
       first_name = case when ${rename}::boolean then ${n.first || null} else first_name end,
       last_name = case when ${rename}::boolean then ${n.last || null} else last_name end,
       name_norm = case when ${rename}::boolean then ${n.normalized || null} else name_norm end,
-      primary_email = coalesce(primary_email, ${i.email ? normalizeEmail(i.email) : null}),
+      primary_email = case
+        when ${email}::text is not null
+             and (primary_email is null or email_confidence in ('pattern', 'guess', 'invalid'))
+          then ${email}
+        else primary_email end,
+      email_confidence = case
+        when ${email}::text is not null and email_confidence in ('pattern', 'guess', 'invalid') then null
+        else email_confidence end,
       linkedin_member_id = coalesce(linkedin_member_id, ${i.linkedinMemberId ?? null}),
       linkedin_slug = coalesce(linkedin_slug, ${slug}),
       linkedin_url = coalesce(linkedin_url, ${urlOf(i) ?? null}),
@@ -5041,7 +5108,7 @@ async function createPerson(ctx, i) {
     ""
   ) : "";
   const display = n.full || handle || slugOf(i) || "Unknown";
-  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw, ctx.orgIds) : null;
   const slug = slugOf(i) ?? null;
   const [row] = await ctx.db.sql`
     insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, primary_email, headline, title,
@@ -5363,13 +5430,7 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
   const res = await resolvePeople(db2, userId, items, { now });
   const personOf = (providerId) => providerId ? res.byKey.get(`li:${providerId}`) : void 0;
   const otherIds = [...new Set(others.map((a) => personOf(a.providerId)).filter((x) => !!x))];
-  const [thread] = await db2.sql`
-    insert into orbit.threads (user_id, provider, external_id, category, is_networking)
-    values (${userId}::uuid, 'linkedin', ${chat.id}, 'networking', true)
-    on conflict (user_id, provider, external_id) do update set is_networking = true
-    returning id`;
-  const threadId = thread.id;
-  const out = { threadId, inbound: [], inserted: 0, personIds: otherIds };
+  const wanted = [];
   for (const m of messages) {
     if (m.skip) continue;
     const text2 = (m.text ?? "").trim();
@@ -5377,6 +5438,37 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
     if (!text2 || !sentAt) continue;
     const own = isOwnMessage(m, ownIds);
     const from = own ? null : personOf(m.senderId) ?? (otherIds.length === 1 ? otherIds[0] : null);
+    wanted.push({ m, text: text2, sentAt, own, from });
+  }
+  const twins = wanted.length ? await db2.sql`
+        select r.i, x.thread_id
+          from unnest(${wanted.map((w) => w.m.id)}::text[], ${wanted.map((w) => w.sentAt)}::timestamptz[],
+                      ${wanted.map((w) => w.own)}::boolean[], ${wanted.map((w) => w.from)}::uuid[],
+                      ${wanted.map((w) => w.text)}::text[], ${wanted.map((w) => w.text.slice(0, 200))}::text[])
+               with ordinality as r(id, at, own, from_id, body, snip, i)
+          join orbit.messages x
+            on x.user_id = ${userId}::uuid and x.provider = 'linkedin' and x.sent_at = r.at
+           and x.external_id <> r.id and x.direction = case when r.own then 'out' else 'in' end
+           and x.from_person_id is not distinct from r.from_id
+           and x.to_person_ids @> (case when r.own then ${otherIds}::uuid[] else '{}'::uuid[] end)
+           and x.to_person_ids <@ (case when r.own then ${otherIds}::uuid[] else '{}'::uuid[] end)
+           and (x.body_text = r.body or (x.body_text is null and x.snippet = r.snip))` : [];
+  const already = new Set(twins.map((t) => Number(t.i) - 1));
+  const fresh = wanted.filter((_, i) => !already.has(i));
+  if (!fresh.length && twins.length) {
+    const [known] = await db2.sql`
+      select id from orbit.threads
+       where user_id = ${userId}::uuid and provider = 'linkedin' and external_id = ${chat.id}`;
+    if (!known) return { threadId: twins[0].thread_id, inbound: [], inserted: 0, personIds: otherIds };
+  }
+  const [thread] = await db2.sql`
+    insert into orbit.threads (user_id, provider, external_id, category, is_networking)
+    values (${userId}::uuid, 'linkedin', ${chat.id}, 'networking', true)
+    on conflict (user_id, provider, external_id) do update set is_networking = true
+    returning id`;
+  const threadId = thread.id;
+  const out = { threadId, inbound: [], inserted: 0, personIds: otherIds };
+  for (const { m, text: text2, sentAt, own, from } of fresh) {
     const to = own ? otherIds : [];
     const [row] = await db2.sql`
       insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,
@@ -6052,6 +6144,9 @@ function unparkState(li) {
   const parked = li.parked;
   const since = typeof parked?.since === "string" && parked.since ? parked.since : void 0;
   if (!since) return void 0;
+  return { ...resumeFrom(li, since), unparkedAt: (/* @__PURE__ */ new Date()).toISOString() };
+}
+function resumeFrom(li, since) {
   const { parked: _drop, ...rest } = li;
   return {
     ...rest,
@@ -6062,8 +6157,22 @@ function unparkState(li) {
     short: true,
     chatsAfter: since,
     resume: true,
-    floor: typeof li.floor === "string" && li.floor > since ? li.floor : since,
-    unparkedAt: (/* @__PURE__ */ new Date()).toISOString()
+    floor: typeof li.floor === "string" && li.floor > since ? li.floor : since
+  };
+}
+function reconnectState(li) {
+  if (!Object.keys(li).length) return void 0;
+  const since = [li.syncedAt, li.recentAt].filter((d) => typeof d === "string" && !!d).sort().at(-1);
+  if (since) return { ...resumeFrom(li, since), reconnectedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  const { parked: _drop, chatsAfter: _after, ...rest } = li;
+  return {
+    ...rest,
+    stage: "relations",
+    cursor: null,
+    chatsCursor: null,
+    chatIndex: 0,
+    short: false,
+    resume: false
   };
 }
 async function unipileAccount(db2, queue, body2, provider = "linkedin", offered = []) {
@@ -6083,14 +6192,16 @@ async function unipileAccount(db2, queue, body2, provider = "linkedin", offered 
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
   if (taken.length) return { result: "account_in_use", userId };
   const [prior] = await db2.sql`
-    select status, sync_state -> 'linkedin' as linkedin from orbit.integration_accounts
+    select status, external_account_id, sync_state -> 'linkedin' as linkedin from orbit.integration_accounts
      where user_id = ${userId}::uuid and provider = 'linkedin'`;
   await db2.sql`
     insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
     values (${userId}::uuid, 'linkedin', ${accountId}, 'active', null)
     on conflict (user_id, provider) do update set
       external_account_id = excluded.external_account_id, status = 'active', last_error = null`;
-  const resumed = prior?.status === "parked" ? unparkState(prior.linkedin ?? {}) : void 0;
+  const unparked = prior?.status === "parked" ? unparkState(prior.linkedin ?? {}) : void 0;
+  const moved = !!prior && prior.external_account_id !== accountId;
+  const resumed = unparked ?? (moved ? reconnectState(prior.linkedin ?? {}) : void 0);
   if (resumed)
     await db2.sql`
       update orbit.integration_accounts
@@ -6098,8 +6209,8 @@ async function unipileAccount(db2, queue, body2, provider = "linkedin", offered 
        where user_id = ${userId}::uuid and provider = 'linkedin'`;
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, details)
-    values (${userId}::uuid, 'system', ${resumed ? "linkedin.unparked" : "linkedin.connected"}, 'integration_accounts',
-            ${{ status, ...resumed ? { since: resumed.floor } : {} }}::jsonb)`;
+    values (${userId}::uuid, 'system', ${unparked ? "linkedin.unparked" : "linkedin.connected"}, 'integration_accounts',
+            ${{ status, ...typeof resumed?.floor === "string" ? { since: resumed.floor } : {} }}::jsonb)`;
   await queue.enqueue({
     kind: "sync.linkedin",
     userId,

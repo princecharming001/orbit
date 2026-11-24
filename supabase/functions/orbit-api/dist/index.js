@@ -537,20 +537,27 @@ async function settleUsage(db2, id, actual) {
      where id = ${id}::bigint`;
 }
 async function reserveUsage(db2, entry, now = /* @__PURE__ */ new Date()) {
-  if (entry.userId) {
-    const v = await checkBudget(
-      db2,
-      entry.userId,
-      { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
-      now
-    );
-    if (!v.ok) return { ok: false, verdict: v };
-  }
-  const id = await recordUsage(db2, entry);
+  const userId = entry.userId;
+  const held2 = await db2.begin(async (tx) => {
+    if (userId) {
+      await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.reserve:user:${userId}`}, 0))`;
+      if (CAPS.some((c) => c.provider === entry.provider && c.scope === "global"))
+        await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.reserve:provider:${entry.provider}`}, 0))`;
+      const v = await checkBudget(
+        tx,
+        userId,
+        { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
+        now
+      );
+      if (!v.ok) return v;
+    }
+    return { id: await recordUsage(tx, entry) };
+  });
+  if ("ok" in held2) return { ok: false, verdict: held2 };
   return {
     ok: true,
     async settle(actual) {
-      if (id) await settleUsage(db2, id, actual);
+      if (held2.id) await settleUsage(db2, held2.id, actual);
     }
   };
 }
@@ -1110,9 +1117,9 @@ async function requestJson(opts, spec) {
   let last = { ok: false, kind: "network", provider: spec.provider, message: "not attempted" };
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const ctrl = new AbortController();
-    let timedOut = false;
+    let timedOut3 = false;
     const timer = setTimeout(() => {
-      timedOut = true;
+      timedOut3 = true;
       ctrl.abort();
     }, timeoutMs);
     let res;
@@ -1125,7 +1132,7 @@ async function requestJson(opts, spec) {
       });
     } catch (e) {
       clearTimeout(timer);
-      last = timedOut ? { ok: false, kind: "timeout", provider: spec.provider, message: `${spec.provider}: timed out` } : {
+      last = timedOut3 ? { ok: false, kind: "timeout", provider: spec.provider, message: `${spec.provider}: timed out` } : {
         ok: false,
         kind: "network",
         provider: spec.provider,
@@ -8372,15 +8379,27 @@ function freeWindows(busy, opts) {
   }
   return out;
 }
+var GOOGLE_TIMEOUT_MS = 2e4;
+var timedOut = (e) => {
+  const name = e?.name;
+  return name === "TimeoutError" || name === "AbortError";
+};
 async function googleCall(s, userId, url, body2) {
   if (!s.tokens) throw new HttpError(503, "unconfigured", "Google is not configured");
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await s.tokens.accessToken(userId);
-    const res = await s.fetch(url, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body2)
-    });
+    let res;
+    try {
+      res = await s.fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body2),
+        signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS)
+      });
+    } catch (e) {
+      if (timedOut(e)) throw new HttpError(504, "upstream_timeout", "calendar timed out");
+      throw e;
+    }
     if (res.status === 401 && attempt === 0) {
       s.tokens.invalidate(userId);
       await res.body?.cancel();
@@ -8389,7 +8408,8 @@ async function googleCall(s, userId, url, body2) {
     let json2 = {};
     try {
       json2 = await res.json();
-    } catch {
+    } catch (e) {
+      if (timedOut(e)) throw new HttpError(504, "upstream_timeout", "calendar timed out");
       json2 = {};
     }
     return { status: res.status, json: json2 };
@@ -10010,9 +10030,110 @@ var EAST_ASIAN_SURNAMES = {
 };
 for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
 
+// packages/core/src/entity/social.ts
+var PUBLIC_FIGURE_FOLLOWERS = 5e4;
+var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
+function accountKind(a) {
+  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
+  const name = (a.name ?? "").trim();
+  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
+  if (name && BRAND_WORDS.test(name)) return "brand";
+  const words3 = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
+  if (words3.length >= 2) return "person";
+  if (a.business) return "brand";
+  return "unknown";
+}
+var COMMON_SURNAMES = new Set(
+  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
+);
+
 // packages/core/src/entity/resolve.ts
 function normalizeEmailForMatch(raw) {
   return normalizeEmail(raw);
+}
+var PERSONAL_EMAIL_DOMAINS = /* @__PURE__ */ new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "ymail.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+  "gmx.com",
+  "fastmail.com",
+  "hey.com",
+  "qq.com",
+  "163.com",
+  // internet providers and regional mail: an address there says nothing about an employer either
+  "126.com",
+  "att.net",
+  "bellsouth.net",
+  "bigpond.com",
+  "btinternet.com",
+  "charter.net",
+  "comcast.net",
+  "cox.net",
+  "duck.com",
+  "earthlink.net",
+  "free.fr",
+  "frontier.com",
+  "hushmail.com",
+  "juno.com",
+  "laposte.net",
+  "libero.it",
+  "mail.com",
+  "mail.ru",
+  "naver.com",
+  "optonline.net",
+  "optusnet.com.au",
+  "orange.fr",
+  "rediffmail.com",
+  "rocketmail.com",
+  "rogers.com",
+  "sbcglobal.net",
+  "shaw.ca",
+  "sina.com",
+  "sky.com",
+  "sympatico.ca",
+  "t-online.de",
+  "telus.net",
+  "tuta.io",
+  "tutanota.com",
+  "verizon.net",
+  "web.de",
+  "windstream.net",
+  "yandex.com",
+  "yandex.ru",
+  "zoho.com",
+  "zohomail.com"
+]);
+var PERSONAL_MAIL_BRANDS = /* @__PURE__ */ new Set([
+  "yahoo",
+  "hotmail",
+  "outlook",
+  "live",
+  "msn",
+  "gmx",
+  "aol",
+  "ymail",
+  "yandex"
+]);
+function isPersonalEmailDomain(domain) {
+  const d = (domain ?? "").trim().toLowerCase();
+  if (!d) return false;
+  if (PERSONAL_EMAIL_DOMAINS.has(d)) return true;
+  const registrable2 = getDomain(d) ?? d;
+  if (PERSONAL_EMAIL_DOMAINS.has(registrable2)) return true;
+  const brand = getDomainWithoutSuffix(d);
+  return !!brand && PERSONAL_MAIL_BRANDS.has(brand);
 }
 
 // supabase/functions/_shared/research/guards.ts
@@ -14790,6 +14911,108 @@ function withPatterns(model, pattern) {
 
 // supabase/functions/_shared/search/reading.ts
 import { z as z6 } from "npm:zod@3.25.76/v4";
+
+// supabase/functions/_shared/search/census.ts
+var SEARCH_LEDGER_TOTAL = 100;
+var CENSUS_SHARE = 0.4;
+var LINKEDIN_TIMEOUT_MS = 15e3;
+var timedOut2 = (e) => {
+  const name = e?.name;
+  return name === "TimeoutError" || name === "AbortError";
+};
+var txt = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : void 0;
+function censusPeople(items) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== "object") continue;
+    const p = raw;
+    const memberId = txt(p.id, 120);
+    const name = txt(p.name, 160);
+    if (!memberId || !name) continue;
+    if (typeof p.network_distance === "string" && p.network_distance !== "DISTANCE_1") continue;
+    const companies = [];
+    const companyIds = {};
+    for (const x of Array.isArray(p.current_positions) ? p.current_positions : []) {
+      if (!x || typeof x !== "object" || companies.length >= 3) continue;
+      const pos = x;
+      const c = txt(pos.company, 160);
+      if (!c) continue;
+      companies.push(c);
+      const id = pos.company_id == null ? void 0 : txt(String(pos.company_id), 60);
+      if (id && /^\d+$/.test(id)) companyIds[c] = id;
+    }
+    out.push({
+      memberId,
+      name,
+      headline: txt(p.headline, 220),
+      location: txt(p.location, 160),
+      companies,
+      ...Object.keys(companyIds).length ? { companyIds } : {}
+    });
+  }
+  return out;
+}
+function ledgerBucket(accountId, now, share) {
+  const day3 = now.toISOString().slice(0, 10);
+  const end2 = /* @__PURE__ */ new Date(`${day3}T00:00:00Z`);
+  end2.setUTCDate(end2.getUTCDate() + 1);
+  return {
+    key: `connectors:li:search:${day3}:${accountId}`,
+    limit: Math.round(SEARCH_LEDGER_TOTAL * share),
+    expires: end2.toISOString()
+  };
+}
+async function spendCensus(db2, accountId, now, share = CENSUS_SHARE) {
+  const b = ledgerBucket(accountId, now, share);
+  const [used] = await db2.sql`
+    select count from public.orbit_proxy_counters where bucket = ${b.key} and expires_at >= now()`;
+  if ((used?.count ?? 0) + 1 > b.limit) return false;
+  const [row] = await db2.sql`
+    select allowed from public.orbit_proxy_take(${[b.key]}::text[], ${[b.limit]}::int[], ${[b.expires]}::timestamptz[])`;
+  return !!row?.allowed;
+}
+async function filePage(db2, userId, people, now) {
+  if (!people.length) return 0;
+  const ids = people.map((p) => p.memberId);
+  const known = await db2.sql`
+    select p.id, p.linkedin_member_id as member from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+       and p.linkedin_member_id = any(${ids}::text[])
+    union
+    select i.person_id as id, i.value_norm as member from orbit.person_identities i
+      join orbit.people p on p.id = i.person_id and p.deleted_at is null and p.merged_into is null
+     where i.user_id = ${userId}::uuid and i.kind = 'linkedin_member' and i.value_norm = any(${ids}::text[])`;
+  const byMember = /* @__PURE__ */ new Map();
+  for (const k of known) if (!byMember.has(k.member)) byMember.set(k.member, k.id);
+  const rows = [];
+  const places = [];
+  for (const p of people) {
+    const id = byMember.get(p.memberId);
+    if (!id) continue;
+    if (p.location) {
+      rows.push({ person_id: id, kind: "place", value: p.location, ref: null });
+      places.push({ id, location: p.location });
+    }
+    for (const c of p.companies)
+      rows.push({ person_id: id, kind: "company", value: c, ref: p.companyIds?.[c] ?? null });
+  }
+  if (rows.length)
+    await db2.sql`
+      insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source, at, ref)
+      select ${userId}::uuid, r.person_id, r.kind, r.value, true, 'census', ${now.toISOString()}::timestamptz, r.ref
+        from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as r(person_id uuid, kind text, value text, ref text)
+      on conflict (user_id, person_id, kind, value, source) do update set at = excluded.at, positive = true,
+        ref = coalesce(excluded.ref, facet_assertions.ref)`;
+  if (places.length)
+    await db2.sql`
+      update orbit.people p set location = r.location, updated_at = now()
+        from jsonb_to_recordset(${JSON.stringify(places)}::jsonb) as r(id uuid, location text)
+       where p.id = r.id and p.user_id = ${userId}::uuid and (p.location is null or p.location = '')`;
+  return byMember.size;
+}
+
+// supabase/functions/_shared/search/reading.ts
 var LEDGER_TOTAL = { profile: 100, company: 150 };
 var SHARES = {
   background: { profile: 0.3, company: 0.6 },
@@ -14806,14 +15029,14 @@ function profileOrgs(raw) {
   const list10 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
   return [
     ...list10(raw.work_experience).map((x) => ({
-      company: txt(x.company, 160),
-      companyId: x.company_id == null ? void 0 : txt(String(x.company_id), 60),
-      logoUrl: txt(x.company_picture_url, 1e3)
+      company: txt2(x.company, 160),
+      companyId: x.company_id == null ? void 0 : txt2(String(x.company_id), 60),
+      logoUrl: txt2(x.company_picture_url, 1e3)
     })),
     ...list10(raw.education).map((x) => ({
-      school: txt(x.school, 160),
-      schoolId: x.school_id == null ? void 0 : txt(String(x.school_id), 60),
-      logoUrl: txt(x.school_picture_url, 1e3)
+      school: txt2(x.school, 160),
+      schoolId: x.school_id == null ? void 0 : txt2(String(x.school_id), 60),
+      logoUrl: txt2(x.school_picture_url, 1e3)
     }))
   ].filter((o) => o.logoUrl);
 }
@@ -14839,7 +15062,7 @@ async function spendShare(db2, kind, accountId, now, share) {
     select allowed from public.orbit_proxy_take(${[b.key]}::text[], ${[b.limit]}::int[], ${[b.expires]}::timestamptz[])`;
   return !!row?.allowed;
 }
-var txt = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : typeof v === "number" ? String(v) : void 0;
+var txt2 = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : typeof v === "number" ? String(v) : void 0;
 function dateOf(v) {
   if (v && typeof v === "object") {
     const o = v;
@@ -14863,8 +15086,8 @@ function experienceOf(raw) {
   for (const x of raw) {
     if (!x || typeof x !== "object") continue;
     const e = x;
-    const title = txt(e.position, 160);
-    const company = txt(e.company, 160);
+    const title = txt2(e.position, 160);
+    const company = txt2(e.company, 160);
     if (!title && !company) continue;
     const end2 = dateOf(e.end);
     const job = {
@@ -14872,12 +15095,12 @@ function experienceOf(raw) {
     };
     if (title) job.title = title;
     if (company) job.company = company;
-    const cid = txt(e.company_id, 60);
+    const cid = txt2(e.company_id, 60);
     if (cid && /^\d+$/.test(cid)) job.companyId = cid;
     const start = dateOf(e.start);
     if (start) job.start = start;
     if (end2) job.end = end2;
-    const desc = txt(e.description, JOB_CHARS);
+    const desc = txt2(e.description, JOB_CHARS);
     if (desc) job.description = desc;
     out.push(job);
     if (out.length >= 12) break;
@@ -14885,7 +15108,7 @@ function experienceOf(raw) {
   return out;
 }
 function pageOf(id, raw) {
-  const name = txt(raw.name, 160);
+  const name = txt2(raw.name, 160);
   if (!name) return void 0;
   const ins = raw.insights?.employeesCount;
   const growth = Array.isArray(ins?.growthGraph) ? ins.growthGraph : [];
@@ -14897,33 +15120,39 @@ function pageOf(id, raw) {
   const count2 = typeof raw.employee_count === "number" ? raw.employee_count : Number(ins?.totalCount) || void 0;
   const founded = /(\d{4})/.exec(String(raw.foundation_date ?? ""))?.[1];
   const loc = Array.isArray(raw.locations) ? raw.locations.find((l) => l.is_headquarter) ?? raw.locations[0] : void 0;
-  const industries = (Array.isArray(raw.industry) ? raw.industry : [raw.industry]).map((x) => txt(x, 80)).filter((x) => !!x).slice(0, 4);
+  const industries = (Array.isArray(raw.industry) ? raw.industry : [raw.industry]).map((x) => txt2(x, 80)).filter((x) => !!x).slice(0, 4);
   return {
     linkedinId: id,
-    publicIdentifier: txt(raw.public_identifier, 160),
+    publicIdentifier: txt2(raw.public_identifier, 160),
     name,
-    website: txt(raw.website, 300),
+    website: txt2(raw.website, 300),
     industries,
-    tagline: txt(raw.tagline, 300),
-    description: txt(raw.description, COMPANY_ABOUT_CHARS),
+    tagline: txt2(raw.tagline, 300),
+    description: txt2(raw.description, COMPANY_ABOUT_CHARS),
     employeeCount: count2 && count2 > 0 ? Math.round(count2) : void 0,
     employeeRange: range?.from ? `${range.from}-${range.to ?? ""}` : void 0,
     growth6m: g(6),
     growth12m: g(12),
     growth24m: g(24),
     foundedYear: founded ? Number(founded) : void 0,
-    hq: loc ? [txt(loc.city, 80), txt(loc.area, 80), txt(loc.country, 40)].filter(Boolean).join(", ") : void 0
+    hq: loc ? [txt2(loc.city, 80), txt2(loc.area, 80), txt2(loc.country, 40)].filter(Boolean).join(", ") : void 0
   };
 }
 async function getJson(deps, path) {
-  const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, "")}${path}`, {
-    headers: { "X-API-KEY": deps.apiKey, accept: "application/json" }
-  });
-  if (res.status === 404 || res.status === 422) return { ok: false, status: "not_found" };
-  if (res.status === 429) return { ok: false, status: "throttled" };
-  if (res.status >= 400 && res.status < 500) return { ok: false, status: "refused" };
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  return { ok: true, value: await res.json() };
+  try {
+    const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, "")}${path}`, {
+      headers: { "X-API-KEY": deps.apiKey, accept: "application/json" },
+      signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS)
+    });
+    if (res.status === 404 || res.status === 422) return { ok: false, status: "not_found" };
+    if (res.status === 429) return { ok: false, status: "throttled" };
+    if (res.status >= 400 && res.status < 500) return { ok: false, status: "refused" };
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    return { ok: true, value: await res.json() };
+  } catch (e) {
+    if (timedOut2(e)) return { ok: false, status: "timeout" };
+    throw e;
+  }
 }
 function profilePath(accountId, identifier) {
   const q = new URLSearchParams({ account_id: accountId, notify: "false" });
@@ -14981,7 +15210,7 @@ async function projectFact(db2, page2, reading, now) {
        where source = 'linkedin' and source_id = ${page2.linkedinId}`;
 }
 async function saveProfile(db2, userId, personId, memberId, raw, mode2, now) {
-  const about = txt(raw.summary, ABOUT_CHARS) ?? null;
+  const about = txt2(raw.summary, ABOUT_CHARS) ?? null;
   const experience = experienceOf(raw.work_experience);
   await db2.sql`
     insert into orbit.profile_reads (user_id, person_id, member_id, about, experience, status, read_by, read_at,
@@ -15347,8 +15576,8 @@ async function readCompanyIds(db2, deps, accountId, ids, now, mode2, step, start
       `/api/v1/linkedin/company/${encodeURIComponent(id)}?account_id=${encodeURIComponent(accountId)}`
     );
     if (!got.ok) {
-      if (got.status === "throttled") {
-        step.stopped = "throttled";
+      if (got.status === "throttled" || got.status === "timeout") {
+        step.stopped = got.status;
         return;
       }
       await markCompany(db2, id, got.status, now);
@@ -15383,8 +15612,8 @@ async function readProfiles(db2, deps, userId, accountId, people, now, mode2, st
     if (fetched++ > 0) await deps.sleep((mode2 === "ask" ? 300 : 2500) + Math.floor(deps.random() * 2500));
     const got = await getJson(deps, profilePath(accountId, p.member));
     if (!got.ok) {
-      if (got.status === "throttled") {
-        step.stopped = "throttled";
+      if (got.status === "throttled" || got.status === "timeout") {
+        step.stopped = got.status;
         return;
       }
       await markProfile(db2, userId, p.id, p.member, got.status, mode2, now);
@@ -15407,7 +15636,7 @@ async function runReadingStep(db2, deps, userId, accountId, now, opts = {}) {
     step.readIds.push(...fresh);
     await readProfiles(db2, deps, userId, accountId, todo, now, mode2, step, started, budgetMs * 0.6);
     const companies2 = await wantedCompanies(db2, userId, ASK_MAX, ids);
-    if (step.stopped !== "throttled")
+    if (step.stopped !== "throttled" && step.stopped !== "timeout")
       await readCompanyIds(db2, deps, accountId, companies2, now, mode2, step, started, budgetMs * 0.8);
     step.readPeople = await readPeople(db2, deps.claude, userId, ASK_MAX, ids);
     step.readCompanies = await readCompanies(db2, deps.claude, userId, ASK_MAX, now);
@@ -15417,7 +15646,7 @@ async function runReadingStep(db2, deps, userId, accountId, now, opts = {}) {
   await readCompanyIds(db2, deps, accountId, companies, now, mode2, step, started, budgetMs * 0.4);
   const stoppedAtCompanies = step.stopped;
   step.stopped = void 0;
-  if (stoppedAtCompanies !== "throttled") {
+  if (stoppedAtCompanies !== "throttled" && stoppedAtCompanies !== "timeout") {
     const people = await pickPeople(db2, userId, PROFILES_PER_STEP);
     await readProfiles(db2, deps, userId, accountId, people, now, mode2, step, started, budgetMs * 0.75);
   }
@@ -15698,7 +15927,11 @@ async function upsertTie(db2, userId, t, now) {
                             last_seen_at)
     values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
             coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
-            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
+            coalesce(${t.lastSeenAt ?? null}::timestamptz,
+                     (select x.last_seen_at from orbit.ties x
+                       where x.user_id = ${userId}::uuid and x.a_person_id = ${a}::uuid and x.b_person_id = ${b}::uuid
+                         and x.kind = ${t.kind}),
+                     ${now}::timestamptz))
     on conflict (user_id, a_person_id, b_person_id, kind) do update set
       weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
       first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
@@ -16139,7 +16372,9 @@ async function resolvePersonRef(db2, userId, p) {
 }
 async function ensurePerson(db2, userId, p, source) {
   const found = await resolvePersonRef(db2, userId, p);
-  if (found) return found;
+  return found ?? createPerson(db2, userId, p, source);
+}
+async function createPerson(db2, userId, p, source) {
   const url = cleanLinkedInUrl(p.linkedinUrl);
   const slug = linkedInSlugOf(url);
   const name = p.name.trim() || slug || "Unknown";
@@ -16620,23 +16855,6 @@ var SocialBudgetSpent = class extends Error {
     this.retryAt = retryAt;
   }
 };
-
-// packages/core/src/entity/social.ts
-var PUBLIC_FIGURE_FOLLOWERS = 5e4;
-var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
-function accountKind(a) {
-  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
-  const name = (a.name ?? "").trim();
-  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
-  if (name && BRAND_WORDS.test(name)) return "brand";
-  const words3 = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
-  if (words3.length >= 2) return "person";
-  if (a.business) return "brand";
-  return "unknown";
-}
-var COMMON_SURNAMES = new Set(
-  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
-);
 
 // supabase/functions/_shared/social/graph.ts
 var DAY9 = 864e5;
@@ -19113,6 +19331,30 @@ function patternOf(local, f2, l) {
 }
 var ROLE_LOCAL = /^(info|hello|hi|team|founders?|support|admin|contact|office|admissions|housing|careers|jobs|hr|sales|press|media|noreply|no-reply|help|events|marketing|billing|accounts?|ops|legal|security|partners?|investors?|community|reshall|mailroom)\b/;
 var ROLE_NAME2 = /\b(team|founders|office|services|housing|support|admissions|corps|mailroom|invitational|department|committee|club|association|council|center|centre|newsletter|notifications?)\b/i;
+function isRoleAddress(email2) {
+  const local = email2?.trim().toLowerCase().split("@")[0];
+  return !!local && ROLE_LOCAL.test(local);
+}
+function isEvidence(confidence) {
+  return !confidence || confidence === "verified" || confidence === "page";
+}
+function domainNamesOrg(domain, org) {
+  const label2 = domain?.toLowerCase().split(".")[0] ?? "";
+  const k = normOrg(org).replace(/[^a-z0-9]/g, "");
+  return label2.length >= 3 && k.length >= 3 && (k.includes(label2) || label2.includes(k));
+}
+function isCompanyDomain(domain, org, o) {
+  if (isPersonalEmailDomain(domain)) return false;
+  if (o.facts?.has(domain)) return true;
+  if (domainNamesOrg(domain, org)) return true;
+  if (isUniversity(domain) && !isSchoolOrg(org)) return false;
+  return o.count >= 2;
+}
+function ownSiteDomain(c) {
+  const page2 = siteDomain(c.url);
+  const orgs = [...c.org ? [c.org] : [], ...orgsOf(c)];
+  return page2 && orgs.some((o) => domainNamesOrg(page2, o)) ? page2 : void 0;
+}
 function domainPattern(known, domain) {
   const counts = /* @__PURE__ */ new Map();
   let people = 0;
@@ -19176,11 +19418,16 @@ function domainsOf(c, orgDomains) {
   };
   add4(workDomain(c.email));
   for (const d of orgDomainsOf(c, orgDomains)) add4(d);
-  add4(siteDomain(c.url));
+  add4(ownSiteDomain(c));
   return out;
 }
 var isUniversity = (d) => /\.(edu|ac\.[a-z]{2})$/.test(d);
 async function fillEmails(cands, opts) {
+  for (const c of cands)
+    if (c.entity === "person" && c.email && isRoleAddress(c.email)) {
+      c.email = void 0;
+      c.emailConfidence = void 0;
+    }
   if (opts.lookup) {
     const want = cands.filter((c) => c.entity === "person" && !c.email && !c.lastNameObfuscated).slice(0, opts.maxLookups ?? MAX_LOOKUPS);
     const got = await Promise.all(want.map((c) => opts.lookup(c).catch(() => void 0)));
@@ -19193,7 +19440,7 @@ async function fillEmails(cands, opts) {
   }
   const known = [
     ...opts.known,
-    ...cands.filter((c) => c.email).map((c) => ({ name: c.name, email: c.email }))
+    ...cands.filter((c) => c.email && isEvidence(c.emailConfidence)).map((c) => ({ name: c.name, email: c.email }))
   ];
   const patterns = /* @__PURE__ */ new Map();
   const patternAt = (d) => {
@@ -19270,46 +19517,71 @@ async function take(d, provider, operation, units, usdPerUnit = 0) {
   };
 }
 function emailLookup(d) {
-  return async (c) => {
+  return async (c, note2) => {
     const slug = linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl));
     const n = c.lastNameObfuscated ? void 0 : nameParts(c.name, c.firstName, c.lastName);
     const domain = d.domainOf?.(c);
-    const mine = await fromLinkedIn(d, c, slug);
+    const li = { failed: false };
+    const mine = await fromLinkedIn(d, c, slug, li);
     if (mine) return mine;
+    const miss = (failed) => {
+      if (note2 && (failed || li.failed)) note2.unchecked = true;
+      return void 0;
+    };
     const finder = d.enrow?.configured ? "e" : d.icypeas?.configured ? "i" : "";
     const asked = `${finder}${d.hunter?.configured ? "h" : ""}${d.apollo?.configured ? "a" : ""}`;
-    if (!asked) return void 0;
+    if (!asked) return miss(false);
     const who = slug ? `li:${slug}` : c.memberId ? `mid:${c.memberId}` : n && domain ? `nd:${n.f}.${n.l}@${domain}` : n && orgsOf(c)[0] ? `nc:${n.f}.${n.l}@${orgsOf(c)[0].toLowerCase()}` : void 0;
-    if (!who) return void 0;
+    if (!who) return miss(false);
     const key = `email:${asked}:${who}`;
     const hit = await d.cache.get(key).catch(() => void 0);
-    if (hit) return "none" in hit ? void 0 : hit;
-    const found = await fromFinder(d, c, n, domain) ?? await fromHunter(d, c, slug, n, domain) ?? await fromApollo(d, c, domain);
-    await d.cache.put(key, "email_lookup", found ?? { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
-    return found;
+    if (hit) return "none" in hit || isRoleAddress(hit.email) ? miss(false) : hit;
+    const paid = { failed: false };
+    const found = await fromFinder(d, c, n, domain, paid) ?? await fromHunter(d, c, slug, n, domain, paid) ?? await fromApollo(d, c, domain, paid);
+    if (found || !paid.failed)
+      await d.cache.put(key, "email_lookup", found ?? { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
+    return found ?? miss(paid.failed);
   };
 }
-async function fromLinkedIn(d, c, slug) {
+function linkedInEmail(d) {
+  return async (c, note2) => {
+    const t = { failed: false };
+    const mine = await fromLinkedIn(d, c, linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl)), t);
+    if (!mine && t.failed && note2) note2.unchecked = true;
+    return mine;
+  };
+}
+async function fromLinkedIn(d, c, slug, t) {
   if (c.networkDistance !== 1 || !d.unipile?.configured || !d.unipileAccountId) return void 0;
   const id = c.memberId ?? slug;
   if (!id) return void 0;
-  if (d.budget && !(await d.budget.check(d.userId, "unipile_profile", 1)).ok) return void 0;
+  const fail = () => {
+    t.failed = true;
+    return void 0;
+  };
+  if (d.budget && !(await d.budget.check(d.userId, "unipile_profile", 1)).ok) return fail();
   const r = await d.unipile.profile(d.unipileAccountId, id, { sections: [] });
-  if (!r.ok) return void 0;
+  if (!r.ok) return fail();
   await d.budget?.record(d.userId, {
     provider: "unipile_profile",
     operation: "profile_view",
     units: 1,
     costUsd: 0
   });
-  const email2 = r.value.contact_info?.emails?.find((e) => typeof e === "string" && e.includes("@"));
+  const email2 = r.value.contact_info?.emails?.find(
+    (e) => typeof e === "string" && e.includes("@") && !isRoleAddress(e)
+  );
   return email2 ? { email: email2.trim().toLowerCase(), source: "linkedin", status: "verified" } : void 0;
 }
-async function fromFinder(d, c, n, domain) {
+async function fromFinder(d, c, n, domain, t) {
   if (!n || !domain) return void 0;
+  const fail = () => {
+    t.failed = true;
+    return void 0;
+  };
   if (d.enrow?.configured) {
     const slot2 = await take(d, "enrow", "find", 1, CREDIT_USD.enrow);
-    if (!slot2) return void 0;
+    if (!slot2) return fail();
     const r = await d.enrow.findEmail({
       fullname: `${n.f} ${n.l}`,
       domain,
@@ -19318,23 +19590,29 @@ async function fromFinder(d, c, n, domain) {
     const email2 = r.ok ? r.value.email?.trim().toLowerCase() : void 0;
     const valid = r.ok && (r.value.qualification ?? "").toLowerCase() === "valid";
     await slot2.settle(email2?.includes("@") ? Math.max(1, r.ok ? r.value.credits_used ?? 1 : 1) : 0);
-    if (email2?.includes("@") && valid && email2.endsWith(`@${domain}`))
+    if (!r.ok) return fail();
+    if (email2?.includes("@") && valid && email2.endsWith(`@${domain}`) && !isRoleAddress(email2))
       return { email: email2, source: "enrow", status: "verified" };
     return void 0;
   }
   if (d.icypeas?.configured) {
     const slot2 = await take(d, "icypeas", "find", 1, CREDIT_USD.icypeas);
-    if (!slot2) return void 0;
+    if (!slot2) return fail();
     const r = await d.icypeas.findEmail({ firstname: n.f, lastname: n.l, domainOrCompany: domain });
     await slot2.settle(r.ok && r.value.debited ? 1 : 0);
-    if (!r.ok || !r.value.email?.includes("@")) return void 0;
+    if (!r.ok) return fail();
+    if (!r.value.email?.includes("@") || isRoleAddress(r.value.email)) return void 0;
     const sure = /^(ultra_sure|very_sure)$/i.test(r.value.certainty ?? "");
     return { email: r.value.email, source: "icypeas", status: sure ? "verified" : "guess" };
   }
   return void 0;
 }
-async function fromHunter(d, c, slug, n, domain) {
+async function fromHunter(d, c, slug, n, domain, t) {
   if (!d.hunter?.configured) return void 0;
+  const fail = () => {
+    t.failed = true;
+    return void 0;
+  };
   const asks2 = [];
   if (slug) asks2.push({ by: "handle", params: { linkedin_handle: slug } });
   if (n && domain) asks2.push({ by: "name", params: { first_name: n.f, last_name: n.l, domain } });
@@ -19342,16 +19620,16 @@ async function fromHunter(d, c, slug, n, domain) {
   if (n && company) asks2.push({ by: "name", params: { first_name: n.f, last_name: n.l, company } });
   for (const ask3 of asks2) {
     const slot2 = await take(d, "hunter", "find", 1);
-    if (!slot2) return void 0;
+    if (!slot2) return fail();
     const r = await d.hunter.findEmail(ask3.params);
     if (!r.ok) {
       await slot2.settle(0);
-      return void 0;
+      return fail();
     }
     const h = r.value.data;
     const email2 = h?.email?.trim().toLowerCase();
     await slot2.settle(h && email2?.includes("@") ? 1 : 0);
-    if (!h || !email2?.includes("@")) continue;
+    if (!h || !email2?.includes("@") || isRoleAddress(email2)) continue;
     const theirs = linkedInSlugOf(cleanLinkedInUrl(h.linkedin_url));
     if (slug && theirs && theirs !== slug) continue;
     const v = deliverability(h.verification?.status);
@@ -19377,15 +19655,20 @@ function domainTemplate(d) {
   const hunter = d.hunter;
   if (!hunter?.configured) return void 0;
   const asked = /* @__PURE__ */ new Map();
+  const failed = /* @__PURE__ */ new Set();
   const ask3 = async (domain) => {
     const key = `pattern:${domain}`;
     const hit = await d.cache.get(key).catch(() => void 0);
     if (hit) return hit.t;
     const slot2 = await take(d, "hunter", "domain", 1);
-    if (!slot2) return void 0;
+    if (!slot2) {
+      failed.add(domain);
+      return void 0;
+    }
     const r = await hunter.domainPattern(domain);
     if (!r.ok) {
       await slot2.settle(0);
+      failed.add(domain);
       return void 0;
     }
     const t = r.value.data?.pattern ?? void 0;
@@ -19393,14 +19676,16 @@ function domainTemplate(d) {
     await d.cache.put(key, "email_pattern", t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
     return t;
   };
-  return (domain) => {
+  return async (domain, note2) => {
     const k = domain.toLowerCase();
     let p = asked.get(k);
     if (!p) {
       p = ask3(k);
       asked.set(k, p);
     }
-    return p;
+    const t = await p;
+    if (!t && note2 && failed.has(k)) note2.unchecked = true;
+    return t;
   };
 }
 function emailVerifier(d) {
@@ -19441,7 +19726,8 @@ function cachedTemplate(cache2) {
     return hit?.t;
   };
 }
-async function fromApollo(d, c, domain) {
+var APOLLO_LOCKED = /not_unlocked|^email_not|@domain\.com$/;
+async function fromApollo(d, c, domain, t) {
   if (!d.apollo?.configured) return void 0;
   const url = cleanLinkedInUrl(c.linkedinUrl);
   const [first = "", ...rest] = c.name.trim().split(/\s+/);
@@ -19450,16 +19736,26 @@ async function fromApollo(d, c, domain) {
   const params = url ? { linkedin_url: url } : firstName && lastName && domain && !c.lastNameObfuscated ? { first_name: firstName, last_name: lastName, domain } : void 0;
   if (!params) return void 0;
   const slot2 = await take(d, "apollo_match", "match", 1);
-  if (!slot2) return void 0;
+  if (!slot2) {
+    t.failed = true;
+    return void 0;
+  }
   const r = await d.apollo.matchPerson({ ...params, reveal_personal_emails: false });
   await slot2.settle(r.ok ? 1 : 0);
-  if (!r.ok) return void 0;
+  if (!r.ok) {
+    t.failed = true;
+    return void 0;
+  }
   const p = r.value.person;
   const email2 = p?.email?.trim().toLowerCase();
-  if (!email2?.includes("@")) return void 0;
-  const status4 = (p?.email_status ?? "").toLowerCase();
+  if (!email2?.includes("@") || APOLLO_LOCKED.test(email2) || isRoleAddress(email2)) return void 0;
+  const status4 = (p?.email_status ?? "").trim().toLowerCase();
   if (/unavailable|bounced|invalid/.test(status4)) return void 0;
-  return { email: email2, source: "apollo", status: /guess|extrapolat/.test(status4) ? "guess" : "verified" };
+  const at = email2.split("@")[1] ?? "";
+  const orgs = [...c.org ? [c.org] : [], ...orgsOf(c)];
+  const apolloDomain = (p?.organization?.primary_domain ?? siteDomain(p?.organization?.website_url ?? void 0))?.toLowerCase();
+  const theirCompany = at === domain?.toLowerCase() || orgs.some((o) => domainNamesOrg(at, o)) || !orgs.length && !domain && !!url && at === apolloDomain;
+  return { email: email2, source: "apollo", status: status4 === "verified" && theirCompany ? "verified" : "guess" };
 }
 
 // supabase/functions/_shared/sourcing/ondemand.ts
@@ -19490,6 +19786,7 @@ function emailToolsFor(s, userId, unipileAccountId) {
     template: domainTemplate(deps),
     verify: emailVerifier(deps),
     lookup: (domainOf) => emailLookup({ ...deps, domainOf }),
+    linkedin: linkedInEmail(deps),
     mx: dnsMx(s.fetch)
   };
 }
@@ -19499,36 +19796,38 @@ async function domainsFor(db2, userId, c) {
     const k = d?.toLowerCase();
     if (k && !out.includes(k)) out.push(k);
   };
-  for (const d of c.domains ?? []) add4(d);
+  const page2 = siteDomain(c.url);
+  const own = ownSiteDomain(c);
+  for (const d of c.domains ?? []) if (d.toLowerCase() !== page2 || own) add4(d);
   add4(workDomain(c.email));
   const orgs = orgsOf(c);
   if (orgs.length) {
     const names = orgs.map((o) => norm(o));
-    const rows = await db2.sql`
-      select primary_email as email from orbit.people
-       where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
-         and lower(org_raw) = any(${orgs.map((o) => o.toLowerCase())}::text[])
-       limit 200`;
+    const keys = [.../* @__PURE__ */ new Set([...names, ...orgs.map((o) => normOrg(o))])].filter((k) => k.length >= 2);
+    const [rows, facts] = await Promise.all([
+      // only addresses that are evidence: one Orbit built at a domain says nothing about whose domain it is
+      db2.sql`
+        select primary_email as email from orbit.people
+         where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
+           and (email_confidence is null or email_confidence in ('verified', 'page'))
+           and lower(org_raw) = any(${orgs.map((o) => o.toLowerCase())}::text[])
+         limit 200`,
+      db2.sql`
+        select website from orbit_private.company_facts
+         where website is not null and not coalesce(ambiguous_name, false) and key = any(${keys}::text[])
+         order by (source = 'linkedin') desc limit 3`
+    ]);
+    const known = new Set(facts.map((f2) => siteDomain(f2.website)).filter((d) => !!d));
     const tally = /* @__PURE__ */ new Map();
     for (const r of rows) {
       const d = workDomain(r.email);
       if (d) tally.set(d, (tally.get(d) ?? 0) + 1);
     }
-    for (const [d] of [...tally].sort((a, b) => b[1] - a[1])) add4(d);
-    const keys = [.../* @__PURE__ */ new Set([...names, ...orgs.map((o) => normOrg(o))])].filter((k) => k.length >= 2);
-    const facts = await db2.sql`
-      select website from orbit_private.company_facts
-       where website is not null and not coalesce(ambiguous_name, false) and key = any(${keys}::text[])
-       order by (source = 'linkedin') desc limit 3`;
-    for (const f2 of facts) add4(siteDomain(f2.website));
+    for (const [d, count2] of [...tally].sort((a, b) => b[1] - a[1]))
+      if (orgs.some((o) => isCompanyDomain(d, o, { count: count2, facts: known }))) add4(d);
+    for (const d of known) add4(d);
   }
-  const page2 = siteDomain(c.url);
-  const label2 = page2?.split(".")[0] ?? "";
-  if (page2 && label2.length >= 3 && orgs.some((o) => {
-    const k = normOrg(o).replace(/[^a-z0-9]/g, "");
-    return k.length >= 3 && (k.includes(label2) || label2.includes(k));
-  }))
-    add4(page2);
+  add4(own);
   return out.slice(0, 4);
 }
 async function knownAt(db2, userId, domains) {
@@ -19536,47 +19835,86 @@ async function knownAt(db2, userId, domains) {
   const rows = await db2.sql`
     select display_name as name, primary_email as email from orbit.people
      where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
+       and (email_confidence is null or email_confidence in ('verified', 'page'))
        and lower(split_part(primary_email, '@', 2)) = any(${domains}::text[])
      limit 500`;
   return rows;
 }
 async function findEmailFor(s, userId, c, opts = {}) {
-  if (c.email) return { email: c.email, confidence: c.emailConfidence ?? "page" };
+  if (c.email && !isRoleAddress(c.email)) return { email: c.email, confidence: c.emailConfidence ?? "page" };
   if (c.entity !== "person") return void 0;
   const tools = opts.tools ?? emailToolsFor(s, userId);
+  const note2 = opts.note ?? {};
+  const avoid = opts.avoid?.trim().toLowerCase();
+  const failed = () => {
+    note2.unchecked = true;
+    return void 0;
+  };
+  const connection = !opts.freeOnly && c.networkDistance === 1;
+  if (connection) {
+    const mine = await tools.linkedin(c, note2).catch(failed);
+    if (mine && mine.email !== avoid) return { email: mine.email, confidence: "verified" };
+  }
   const domains = opts.domains ?? await domainsFor(s.db, userId, c);
   const n = c.lastNameObfuscated ? void 0 : nameParts(c.name, c.firstName, c.lastName);
   if (n) {
     const known = await knownAt(s.db, userId, domains);
     for (const d of domains) {
       const p = domainPattern(known, d);
-      if (p)
-        return { email: `${PATTERNS[p.pattern](n.f, n.l)}@${d}`, confidence: p.sure ? "pattern" : "guess" };
+      const built = p ? `${PATTERNS[p.pattern](n.f, n.l)}@${d}` : void 0;
+      if (p && built && built !== avoid) return { email: built, confidence: p.sure ? "pattern" : "guess" };
       if (isUniversity(d)) continue;
       const t = await tools.cached(d).catch(() => void 0);
       const local = t ? fromTemplate(t, n.f, n.l) : void 0;
-      if (local) return { email: `${local}@${d}`, confidence: "pattern" };
+      if (local && `${local}@${d}` !== avoid) return { email: `${local}@${d}`, confidence: "pattern" };
     }
   }
   if (opts.freeOnly) return void 0;
-  const looked = await tools.lookup(() => domains[0])(c).catch(() => void 0);
-  if (looked) return { email: looked.email, confidence: looked.status === "verified" ? "verified" : "guess" };
+  const looked = await tools.lookup(() => domains[0])(connection ? { ...c, networkDistance: void 0 } : c, note2).catch(failed);
+  if (looked && looked.email !== avoid)
+    return { email: looked.email, confidence: looked.status === "verified" ? "verified" : "guess" };
   if (!n || !tools.template) return void 0;
   for (const d of domains) {
     if (isUniversity(d) || !await tools.mx(d)) continue;
-    const t = await tools.template(d).catch(() => void 0);
+    const t = await tools.template(d, note2).catch(failed);
     const local = t ? fromTemplate(t, n.f, n.l) : void 0;
-    if (local) return { email: `${local}@${d}`, confidence: "pattern" };
+    if (local && `${local}@${d}` !== avoid) return { email: `${local}@${d}`, confidence: "pattern" };
   }
   return void 0;
 }
 async function keepEmail(db2, userId, personId, found, opts = {}) {
   const email2 = normalizeEmail(found.email);
+  const better = found.confidence === "verified" || found.confidence === "page";
   await db2.sql`
-    update orbit.people set primary_email = coalesce(primary_email, ${email2}), email_confidence = ${found.confidence}
-     where id = ${personId}::uuid and user_id = ${userId}::uuid
-       and (primary_email is null
-            or (${opts.fresh === true}::boolean and lower(primary_email) = ${email2} and email_confidence is null))`;
+    update orbit.people p set
+           primary_email = case when p.email_confidence in ('pattern', 'guess', 'invalid') then ${email2}
+                                else coalesce(p.primary_email, ${email2}) end,
+           email_confidence = ${found.confidence},
+           email_checked_at = case when lower(p.primary_email) = ${email2} then p.email_checked_at end
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid
+       and (p.primary_email is null
+            or (${opts.fresh === true}::boolean and lower(p.primary_email) = ${email2} and p.email_confidence is null)
+            or (p.email_confidence = 'invalid' and lower(p.primary_email) <> ${email2})
+            or (p.email_confidence in ('pattern', 'guess') and ${better}::boolean))`;
+}
+async function keepRealEmail(db2, userId, personId, address2) {
+  const email2 = normalizeEmail(address2);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email2)) return false;
+  const rows = await db2.sql`
+    update orbit.people set primary_email = ${email2}, email_confidence = null, email_checked_at = null
+     where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null and not is_self
+       and (primary_email is null or email_confidence in ('pattern', 'guess', 'invalid'))
+    returning id`;
+  return rows.length > 0;
+}
+var EMAIL_LOOKUP_DEADLINE_MS = 2e4;
+function lookupWithin(work, ms = EMAIL_LOOKUP_DEADLINE_MS) {
+  let timer;
+  const late = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ emailStatus: "could not check" }), ms);
+  });
+  work.catch(() => void 0);
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
 }
 async function lookupRecommendationEmail(s, userId, recommendationId) {
   const db2 = s.db;
@@ -19585,9 +19923,12 @@ async function lookupRecommendationEmail(s, userId, recommendationId) {
      where id = ${recommendationId}::uuid and user_id = ${userId}::uuid`;
   if (!rec) throw new HttpError(404, "not_found", "no such recommendation");
   const c = rec.candidate;
+  const note2 = {};
   const found = await findEmailFor(s, userId, c, {
-    tools: emailToolsFor(s, userId, await linkedinAccount(db2, userId))
+    tools: emailToolsFor(s, userId, await linkedinAccount(db2, userId)),
+    note: note2
   });
+  if (!found && note2.unchecked) return { emailStatus: "could not check" };
   const next = found ? { ...c, email: found.email, emailConfidence: found.confidence, emailLookedUp: true } : { ...c, emailLookedUp: true };
   await db2.sql`update orbit.recommendations set candidate = ${next}::jsonb where id = ${rec.id}::uuid`;
   if (found && rec.person_id) await keepEmail(db2, userId, rec.person_id, found);
@@ -19597,14 +19938,15 @@ async function lookupPersonEmail(s, userId, personId) {
   const db2 = s.db;
   const [p] = await db2.sql`
     select display_name, first_name, last_name, primary_email, email_confidence, org_raw, title, headline,
-           linkedin_slug, linkedin_member_id, do_not_contact
+           linkedin_slug, linkedin_member_id, linkedin_connected_on, do_not_contact
       from orbit.people
      where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null and not is_self`;
   if (!p) throw new HttpError(404, "not_found", "no such person");
-  if (p.primary_email)
+  const failed = p.email_confidence === "invalid" ? p.primary_email : null;
+  if (p.primary_email && !failed)
     return {
       email: p.primary_email,
-      ...p.email_confidence && p.email_confidence !== "invalid" ? { emailConfidence: p.email_confidence } : {},
+      ...p.email_confidence ? { emailConfidence: p.email_confidence } : {},
       emailStatus: "found"
     };
   if (p.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
@@ -19619,13 +19961,18 @@ async function lookupPersonEmail(s, userId, personId) {
     ...p.headline ? { headline: p.headline } : {},
     ...p.linkedin_slug ? { linkedinUrl: cleanLinkedInUrl(`https://www.linkedin.com/in/${p.linkedin_slug}`) } : {},
     ...p.linkedin_member_id ? { memberId: p.linkedin_member_id } : {},
+    // a connection of the student's: LinkedIn shows them the contact email this person chose to share
+    ...p.linkedin_connected_on ? { networkDistance: 1 } : {},
     sources: [],
     externalIds: {}
   };
+  const note2 = {};
   const found = await findEmailFor(s, userId, c, {
-    tools: emailToolsFor(s, userId, await linkedinAccount(db2, userId))
+    tools: emailToolsFor(s, userId, await linkedinAccount(db2, userId)),
+    note: note2,
+    ...failed ? { avoid: failed } : {}
   });
-  if (!found) return { emailStatus: "not found" };
+  if (!found) return { emailStatus: note2.unchecked ? "could not check" : "not found" };
   await keepEmail(db2, userId, personId, found);
   return { email: found.email, emailConfidence: found.confidence, emailStatus: "found" };
 }
@@ -19638,15 +19985,16 @@ async function linkedinAccount(db2, userId) {
 var UNCHECKED = /* @__PURE__ */ new Set(["pattern", "guess"]);
 async function checkBuiltAddress(s, userId, person2) {
   if (person2.confidence === "invalid") return "invalid";
-  if (!person2.confidence || !UNCHECKED.has(person2.confidence) || person2.checkedAt) return "ok";
+  if (!person2.confidence || !UNCHECKED.has(person2.confidence)) return "ok";
+  if (person2.checkedAt) return "unconfirmed";
   const verify = emailToolsFor(s, userId).verify;
   const v = verify ? await verify(person2.email).catch(() => void 0) : void 0;
-  if (!v) return "ok";
+  if (!v) return "unconfirmed";
   const next = v === "valid" ? "verified" : v === "invalid" ? "invalid" : person2.confidence;
   await s.db.sql`
     update orbit.people set email_confidence = ${next}, email_checked_at = ${s.now()}::timestamptz
      where id = ${person2.id}::uuid and user_id = ${userId}::uuid`;
-  return v === "invalid" ? "invalid" : "ok";
+  return v === "valid" ? "ok" : v === "invalid" ? "invalid" : "unconfirmed";
 }
 
 // supabase/functions/_shared/sending/files.ts
@@ -19802,6 +20150,9 @@ ${parts.map((p) => `--${boundary}\r
 ${p}\r
 `).join("")}--${boundary}--\r
 `;
+}
+function rawMessage(m) {
+  return base64url(new TextEncoder().encode(buildMime(m)));
 }
 
 // supabase/functions/_shared/sending/transport.ts
@@ -20184,16 +20535,17 @@ async function keepWrittenDraft(db2, userId, req) {
   if (typeof body2 !== "string" || !body2.trim() || body2.length > 2e4)
     throw new HttpError(400, "bad_request", "body must be the message, at most 20,000 characters");
   const [p] = await db2.sql`
-    select coalesce(merged_into, id) as id,
-           (select primary_email from orbit.people q where q.id = coalesce(p.merged_into, p.id)) as primary_email
-      from orbit.people p
-     where id = ${w.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    select q.id, q.primary_email, q.email_confidence
+      from orbit.people p join orbit.people q on q.id = coalesce(p.merged_into, p.id)
+     where p.id = ${w.personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
   if (!p) throw new HttpError(404, "person_not_found", "Orbit does not have this person on your account yet");
   let subject = null;
   if (email2) {
     const to = w.to?.trim().toLowerCase();
     const theirs = p.primary_email?.trim().toLowerCase();
-    if (to && theirs && to !== theirs)
+    const replaceable = !!to && !!theirs && to !== theirs && BUILT_OR_BAD.has(p.email_confidence ?? "");
+    if (replaceable) await keepRealEmail(db2, userId, p.id, w.to);
+    else if (to && theirs && to !== theirs)
       throw new HttpError(
         409,
         "recipient_differs",
@@ -20259,6 +20611,7 @@ async function discardDraft(db2, userId, draftId) {
   if (row) await audit2(db2, userId, "user", "draft.discard", d.id, {});
   return toServerDraft(row ?? await draftById(db2, d.id));
 }
+var BUILT_OR_BAD = /* @__PURE__ */ new Set(["pattern", "guess", "invalid"]);
 var SendRetry = class extends Error {
   constructor(code) {
     super(code);
@@ -20469,6 +20822,7 @@ ${d.body}`)) {
     return { status: "held", reason: cap };
   }
   let out;
+  let guessedAddress = false;
   if (d.channel === "gmail") {
     if (!person2.primary_email) {
       await settle("failed", { error: "no_email" });
@@ -20485,6 +20839,7 @@ ${d.body}`)) {
       await audit2(db2, userId, "system", "draft.hold", d.id, { reason: "email_invalid" });
       return { status: "held", reason: "email_invalid" };
     }
+    guessedAddress = address2 === "unconfirmed";
     const copy = unconfirmed ? await gmailSentCopy(s, userId, {
       to: person2.primary_email,
       draftId: d.id,
@@ -20623,7 +20978,11 @@ ${d.body}`)) {
       update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
              answered_at = coalesce(answered_at, ${now}::timestamptz)
        where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
-  return { status: "sent", providerMessageId: out.providerMessageId };
+  return {
+    status: "sent",
+    providerMessageId: out.providerMessageId,
+    ...guessedAddress ? { addressUnconfirmed: true } : {}
+  };
 }
 async function afterSend(db2, userId, d, now) {
   const [c] = await db2.sql`
@@ -21872,8 +22231,12 @@ async function compose(ctx) {
   if (b.channel === "instagram" || b.channel === "x") return composeSocial(ctx, b.channel, kind, personId, b);
   if (b.channel === "gmail" && kind !== "reply") {
     const [p] = await ctx.db.sql`
-      select primary_email from orbit.people where id = ${personId}::uuid and user_id = ${ctx.userId}::uuid`;
-    if (p && !p.primary_email) await lookupPersonEmail(s, ctx.userId, personId).catch(() => void 0);
+      select primary_email, email_confidence from orbit.people
+       where id = ${personId}::uuid and user_id = ${ctx.userId}::uuid`;
+    if (p && (!p.primary_email || p.email_confidence === "invalid"))
+      await lookupWithin(lookupPersonEmail(s, ctx.userId, personId), EMAIL_DEADLINE_MS).catch(
+        () => void 0
+      );
   }
   const r = await composeDraft(s, {
     userId: ctx.userId,
@@ -22187,10 +22550,12 @@ async function list2(ctx) {
     }
   }
   const invites = await db2.sql`
-    select id, to_email, status, created_at from orbit.friend_invites
+    select distinct on (to_email) id, to_email, status, created_at, emailed_at from orbit.friend_invites
      where from_user_id = ${me2}::uuid and status = 'pending' and to_email is not null
+       and expires_at > ${ctx.now()}::timestamptz
        and not exists (select 1 from orbit.users u where lower(u.email) = to_email and u.deleted_at is null)
-     order by created_at`;
+     order by to_email, created_at desc`;
+  invites.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   for (const i of invites)
     pending.push({
       id: i.id,
@@ -22198,10 +22563,55 @@ async function list2(ctx) {
       email: i.to_email,
       name: null,
       status: i.status,
-      createdAt: iso(i.created_at)
+      createdAt: iso(i.created_at),
+      emailed: !!i.emailed_at
     });
   const out = { friends, pending };
   return json(200, out);
+}
+async function mailInvite(ctx, u2, inviteId, to, link2) {
+  const subject = `${firstOf2(u2)} wants to pool networks with you on Orbit`;
+  const text3 = [
+    `${nameOf(u2)} invited you to be friends on Orbit.`,
+    "Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.",
+    `Open this link to sign in and accept: ${link2}`,
+    `It stops working in ${INVITE_DAYS} days.`
+  ].join("\n\n");
+  const s = ctx.services();
+  let tried = false;
+  let error;
+  if (s.tokens) {
+    const sent = await gmailSend(
+      s,
+      u2.id,
+      rawMessage({
+        from: u2.email,
+        fromName: u2.full_name ?? void 0,
+        to,
+        subject,
+        body: text3,
+        draftId: `invite-${inviteId}`,
+        date: ctx.now()
+      }),
+      null
+    ).catch((e) => ({
+      ok: false,
+      error: e instanceof Error ? e.message : "gmail"
+    }));
+    if (sent.ok) return { via: "gmail" };
+    if (!["needs_reauth", "google_unconfigured", "no_account", "token_error"].includes(sent.error)) {
+      tried = true;
+      error = `gmail ${sent.error}`;
+    }
+  }
+  const mailer = s.mailer;
+  if (mailer?.configured) {
+    tried = true;
+    const r = await mailer.send({ to, subject, text: text3 }).catch(() => ({ ok: false, error: "mailer" }));
+    if (r.ok) return { via: "orbit" };
+    error = r.error ?? error;
+  }
+  return { via: null, why: tried ? "failed" : "none", error };
 }
 async function requestFriendship(db2, from, otherId, now) {
   const me2 = from.id;
@@ -22258,22 +22668,43 @@ async function invite(ctx) {
   if (email2 && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email2)) throw badRequest("that is not an email address");
   const u2 = await userLite(db2, me2);
   if (email2 && email2 === normalizeEmail(u2.email)) throw badRequest("that is your own address");
-  const [today] = await db2.sql`
-    select count(*)::int as n from orbit.friend_invites
-     where from_user_id = ${me2}::uuid and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
-  if ((today?.n ?? 0) >= INVITES_PER_DAY)
-    throw new HttpError(429, "rate_limited", `at most ${INVITES_PER_DAY} invites a day`);
-  const code = inviteCode();
-  const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
-  const [row] = await db2.sql`
-    insert into orbit.friend_invites (from_user_id, to_email, to_person_id, code, status, created_at, expires_at)
-    values (${me2}::uuid, ${email2}, ${viaLinkedIn ? personId : null}::uuid, ${code}, 'pending', ${now}::timestamptz,
-            ${expires}::timestamptz)
-    returning id, created_at`;
+  const linkedInTo = viaLinkedIn ? personId : null;
+  const waiting = async () => email2 || linkedInTo ? (await db2.sql`
+            select id, code, created_at, emailed_at from orbit.friend_invites
+             where from_user_id = ${me2}::uuid and status = 'pending' and expires_at > ${now}::timestamptz
+               and (to_email = ${email2} or to_person_id = ${linkedInTo}::uuid)
+             order by created_at desc limit 1`)[0] : void 0;
+  let row = await waiting();
+  const already = !!row;
+  if (!row) {
+    if (email2 || linkedInTo)
+      await db2.sql`
+        update orbit.friend_invites set status = 'expired', answered_at = ${now}::timestamptz
+         where from_user_id = ${me2}::uuid and status = 'pending' and expires_at <= ${now}::timestamptz
+           and (to_email = ${email2} or to_person_id = ${linkedInTo}::uuid)`;
+    const [today] = await db2.sql`
+      select count(*)::int as n from orbit.friend_invites
+       where from_user_id = ${me2}::uuid and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
+    if ((today?.n ?? 0) >= INVITES_PER_DAY)
+      throw new HttpError(429, "rate_limited", `at most ${INVITES_PER_DAY} invites a day`);
+    const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
+    [row] = await db2.sql`
+      insert into orbit.friend_invites (from_user_id, to_email, to_person_id, code, status, created_at, expires_at)
+      values (${me2}::uuid, ${email2}, ${linkedInTo}::uuid, ${inviteCode()}, 'pending',
+              ${now}::timestamptz, ${expires}::timestamptz)
+      on conflict do nothing
+      returning id, code, created_at, emailed_at`;
+    row ??= await waiting();
+    if (!row) throw new HttpError(409, "conflict", "that invite is being sent already");
+  }
+  const code = row.code;
   const link2 = `${ctx.env.appUrl}/friends/join/${code}`;
   let status4 = "link";
   let name = null;
-  if (viaLinkedIn) {
+  let via;
+  let notSent;
+  if (viaLinkedIn && already) status4 = "linkedin";
+  else if (viaLinkedIn) {
     const sent = await linkedinSend(ctx.services(), {
       accountId: viaLinkedIn.accountId,
       attendeeId: viaLinkedIn.member,
@@ -22298,35 +22729,51 @@ async function invite(ctx) {
       await requestFriendship(db2, u2, other.id, now);
       status4 = "requested";
       name = nameOf(other);
+    } else if (row.emailed_at) {
+      status4 = "sent";
     } else {
-      const mailer = ctx.services().mailer;
-      if (mailer?.configured) {
-        const r = await mailer.send({
-          to: email2,
-          subject: `${firstOf2(u2)} wants to pool networks with you on Orbit`,
-          text: [
-            `${nameOf(u2)} invited you to be friends on Orbit.`,
-            "Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.",
-            `Open this link to sign in and accept: ${link2}`,
-            `It stops working in ${INVITE_DAYS} days.`
-          ].join("\n\n")
-        });
-        if (r.ok) status4 = "sent";
+      const [mine] = await db2.sql`
+        update orbit.friend_invites set emailed_at = ${now}::timestamptz
+         where id = ${row.id}::uuid and emailed_at is null returning id`;
+      if (!mine) status4 = "sent";
+      else {
+        const sent = await mailInvite(ctx, u2, row.id, email2, link2);
+        if (sent.via) {
+          status4 = "sent";
+          via = sent.via;
+          await db2.sql`update orbit.friend_invites set emailed_via = ${sent.via} where id = ${row.id}::uuid`;
+        } else {
+          await db2.sql`update orbit.friend_invites set emailed_at = null where id = ${row.id}::uuid`;
+          notSent = sent.why;
+          await logAudit(ctx, "friends.invite_not_sent", "friend_invites", row.id, {
+            why: sent.why,
+            error: sent.error ?? null
+          });
+        }
       }
     }
   }
-  await logAudit(ctx, "friends.invite", "friend_invites", row.id, { status: status4, byEmail: !!email2 });
+  await logAudit(ctx, "friends.invite", "friend_invites", row.id, {
+    status: status4,
+    byEmail: !!email2,
+    ...already ? { already: true } : {},
+    ...via ? { via } : {}
+  });
   const out = {
     code,
     link: link2,
     status: status4,
+    ...already ? { already: true } : {},
+    ...via ? { via } : {},
+    ...notSent ? { notSent } : {},
     invite: {
       id: row.id,
       direction: "out",
       email: email2,
       name,
       status: "pending",
-      createdAt: iso(row.created_at)
+      createdAt: iso(row.created_at),
+      ...email2 ? { emailed: status4 === "sent" } : {}
     }
   };
   return json(200, out);
@@ -25380,101 +25827,6 @@ async function loadCompanyFacts(db2, since2) {
   return { facts, at };
 }
 
-// supabase/functions/_shared/search/census.ts
-var SEARCH_LEDGER_TOTAL = 100;
-var CENSUS_SHARE = 0.4;
-var txt2 = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : void 0;
-function censusPeople(items) {
-  if (!Array.isArray(items)) return [];
-  const out = [];
-  for (const raw of items) {
-    if (!raw || typeof raw !== "object") continue;
-    const p = raw;
-    const memberId = txt2(p.id, 120);
-    const name = txt2(p.name, 160);
-    if (!memberId || !name) continue;
-    if (typeof p.network_distance === "string" && p.network_distance !== "DISTANCE_1") continue;
-    const companies = [];
-    const companyIds = {};
-    for (const x of Array.isArray(p.current_positions) ? p.current_positions : []) {
-      if (!x || typeof x !== "object" || companies.length >= 3) continue;
-      const pos = x;
-      const c = txt2(pos.company, 160);
-      if (!c) continue;
-      companies.push(c);
-      const id = pos.company_id == null ? void 0 : txt2(String(pos.company_id), 60);
-      if (id && /^\d+$/.test(id)) companyIds[c] = id;
-    }
-    out.push({
-      memberId,
-      name,
-      headline: txt2(p.headline, 220),
-      location: txt2(p.location, 160),
-      companies,
-      ...Object.keys(companyIds).length ? { companyIds } : {}
-    });
-  }
-  return out;
-}
-function ledgerBucket(accountId, now, share) {
-  const day3 = now.toISOString().slice(0, 10);
-  const end2 = /* @__PURE__ */ new Date(`${day3}T00:00:00Z`);
-  end2.setUTCDate(end2.getUTCDate() + 1);
-  return {
-    key: `connectors:li:search:${day3}:${accountId}`,
-    limit: Math.round(SEARCH_LEDGER_TOTAL * share),
-    expires: end2.toISOString()
-  };
-}
-async function spendCensus(db2, accountId, now, share = CENSUS_SHARE) {
-  const b = ledgerBucket(accountId, now, share);
-  const [used] = await db2.sql`
-    select count from public.orbit_proxy_counters where bucket = ${b.key} and expires_at >= now()`;
-  if ((used?.count ?? 0) + 1 > b.limit) return false;
-  const [row] = await db2.sql`
-    select allowed from public.orbit_proxy_take(${[b.key]}::text[], ${[b.limit]}::int[], ${[b.expires]}::timestamptz[])`;
-  return !!row?.allowed;
-}
-async function filePage(db2, userId, people, now) {
-  if (!people.length) return 0;
-  const ids = people.map((p) => p.memberId);
-  const known = await db2.sql`
-    select p.id, p.linkedin_member_id as member from orbit.people p
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
-       and p.linkedin_member_id = any(${ids}::text[])
-    union
-    select i.person_id as id, i.value_norm as member from orbit.person_identities i
-      join orbit.people p on p.id = i.person_id and p.deleted_at is null and p.merged_into is null
-     where i.user_id = ${userId}::uuid and i.kind = 'linkedin_member' and i.value_norm = any(${ids}::text[])`;
-  const byMember = /* @__PURE__ */ new Map();
-  for (const k of known) if (!byMember.has(k.member)) byMember.set(k.member, k.id);
-  const rows = [];
-  const places = [];
-  for (const p of people) {
-    const id = byMember.get(p.memberId);
-    if (!id) continue;
-    if (p.location) {
-      rows.push({ person_id: id, kind: "place", value: p.location, ref: null });
-      places.push({ id, location: p.location });
-    }
-    for (const c of p.companies)
-      rows.push({ person_id: id, kind: "company", value: c, ref: p.companyIds?.[c] ?? null });
-  }
-  if (rows.length)
-    await db2.sql`
-      insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source, at, ref)
-      select ${userId}::uuid, r.person_id, r.kind, r.value, true, 'census', ${now.toISOString()}::timestamptz, r.ref
-        from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as r(person_id uuid, kind text, value text, ref text)
-      on conflict (user_id, person_id, kind, value, source) do update set at = excluded.at, positive = true,
-        ref = coalesce(excluded.ref, facet_assertions.ref)`;
-  if (places.length)
-    await db2.sql`
-      update orbit.people p set location = r.location, updated_at = now()
-        from jsonb_to_recordset(${JSON.stringify(places)}::jsonb) as r(id uuid, location text)
-       where p.id = r.id and p.user_id = ${userId}::uuid and (p.location is null or p.location = '')`;
-  return byMember.size;
-}
-
 // supabase/functions/_shared/search/lookup.ts
 var FACETS_SHARE = 0.7;
 var LOOKUP_PAGES = 3;
@@ -25489,7 +25841,8 @@ async function parameterId(deps, accountId, kind, value) {
     limit: "1"
   });
   const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, "")}/api/v1/linkedin/search/parameters?${q}`, {
-    headers: { "X-API-KEY": deps.apiKey, accept: "application/json" }
+    headers: { "X-API-KEY": deps.apiKey, accept: "application/json" },
+    signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS)
   });
   if (!res.ok) return void 0;
   const b = await res.json();
@@ -25523,7 +25876,13 @@ async function runFacetLookup(db2, deps, userId, accountId, kind, value, now) {
     complete: false,
     reason: reason2
   });
-  const id = await parameterId(deps, accountId, kind, value);
+  let id;
+  try {
+    id = await parameterId(deps, accountId, kind, value);
+  } catch (e) {
+    if (!timedOut2(e)) throw e;
+    return fail("timeout");
+  }
   if (!id) return fail("unknown");
   const base = deps.baseUrl.replace(/\/+$/, "");
   const found = /* @__PURE__ */ new Set();
@@ -25537,22 +25896,30 @@ async function runFacetLookup(db2, deps, userId, accountId, kind, value, now) {
     }
     const q = new URLSearchParams({ account_id: accountId, limit: "10" });
     if (cursor) q.set("cursor", cursor);
-    const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
-      method: "POST",
-      headers: { "X-API-KEY": deps.apiKey, "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        api: "classic",
-        category: "people",
-        network_distance: [1],
-        [FILTER_KEY[kind]]: [id]
-      })
-    });
-    if (res.status >= 400 && res.status < 500) {
-      if (!pages) return fail("refused");
+    let body2;
+    try {
+      const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
+        method: "POST",
+        headers: { "X-API-KEY": deps.apiKey, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({
+          api: "classic",
+          category: "people",
+          network_distance: [1],
+          [FILTER_KEY[kind]]: [id]
+        }),
+        signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS)
+      });
+      if (res.status >= 400 && res.status < 500) {
+        if (!pages) return fail("refused");
+        break;
+      }
+      if (!res.ok) throw new Error(`unipile ${res.status}`);
+      body2 = await res.json();
+    } catch (e) {
+      if (!timedOut2(e)) throw e;
+      if (!pages) return fail("timeout");
       break;
     }
-    if (!res.ok) throw new Error(`unipile ${res.status}`);
-    const body2 = await res.json();
     pages++;
     const people = censusPeople(body2.items);
     await filePage(db2, userId, people, now);
@@ -27437,6 +27804,21 @@ function pageAnchors(html, base) {
   return out;
 }
 var nameTokens = (name) => name.toLowerCase().replace(/[^a-z\s'-]/g, " ").split(/\s+/).filter((w) => w.length >= 2 && !["dr", "prof", "professor", "phd", "md"].includes(w));
+function mailtoFit(local, first, last) {
+  const f2 = first.replace(/[^a-z]/g, "");
+  const l = last.replace(/[^a-z]/g, "");
+  if (l.length < 3 || !f2) return 0;
+  const rests = [
+    ...local.startsWith(l) ? [local.slice(l.length)] : [],
+    ...local.endsWith(l) ? [local.slice(0, local.length - l.length)] : []
+  ];
+  let best = 0;
+  for (const rest of rests) {
+    const fit = rest === "" ? 1 : rest === f2 ? 3 : rest.length >= 2 && (f2.startsWith(rest) || rest.startsWith(f2)) ? 2 : rest.length <= 2 && rest[0] === f2[0] ? 1 : 0;
+    best = Math.max(best, fit);
+  }
+  return best;
+}
 function linksFor(anchors, people, base) {
   const out = /* @__PURE__ */ new Map();
   let host = "";
@@ -27446,6 +27828,8 @@ function linksFor(anchors, people, base) {
     host = "";
   }
   const mailtos = anchors.filter((a) => /^mailto:/i.test(a.href)).map((a) => cleanEmail(a.href.replace(/^mailto:/i, "").split("?")[0])).filter((e) => !!e);
+  const named = people.map((p) => ({ name: p.name, toks: nameTokens(p.name) })).filter((p) => p.toks.length >= 2).map((p) => ({ name: p.name, first: p.toks[0], last: p.toks[p.toks.length - 1] }));
+  const fitOf = (e, who) => mailtoFit(e.split("@")[0].replace(/[^a-z]/g, ""), who.first, who.last);
   const social = /linkedin\.com|twitter\.com|x\.com|facebook\.com|scholar\.google/i;
   for (const p of people) {
     const toks = nameTokens(p.name);
@@ -27474,10 +27858,7 @@ function linksFor(anchors, people, base) {
       });
       if (byPath) entry.profile = byPath.href;
     }
-    const mine = mailtos.find((e) => {
-      const local = e.split("@")[0].replace(/[^a-z]/g, "");
-      return lastKey.length >= 3 && (local.startsWith(lastKey) || local.endsWith(lastKey) || local === `${first[0]}${lastKey}` || local === `${first}${lastKey}`);
-    });
+    const mine = mailtos.map((e) => ({ e, fit: fitOf(e, { first, last }) })).filter((m) => m.fit > 0 && !named.some((o) => o.name !== p.name && fitOf(m.e, o) >= m.fit)).sort((a, b) => b.fit - a.fit)[0]?.e;
     if (mine) entry.email = mine;
     if (entry.profile || entry.email) out.set(p.name, entry);
   }
@@ -27688,7 +28069,7 @@ function fill(into, from) {
 function cleanEmail(e) {
   if (!e) return void 0;
   const s = e.trim().replace(/\s*[[(]\s*at\s*[\])]\s*/i, "@").replace(/\s*[[(]\s*dot\s*[\])]\s*/gi, ".").replace(/^mailto:/i, "").toLowerCase();
-  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(s) ? s : void 0;
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(s) && !isRoleAddress(s) ? s : void 0;
 }
 var titleCase2 = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -28826,10 +29207,17 @@ async function runSourcing(s, userId, req) {
     budget,
     cache: cache2
   };
-  const lookup2 = emailLookup({
+  const paidLookup = emailLookup({
     ...emailDeps,
-    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url)
+    // the page they were found on only when it is their company's own site, never a news or directory page's
+    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? ownSiteDomain(c)
   });
+  const lookup2 = async (c) => {
+    const note2 = {};
+    const found = await paidLookup(c, note2);
+    if (found || !note2.unchecked) c.emailLookedUp = true;
+    return found;
+  };
   const template = domainTemplate(emailDeps);
   const cached = cachedTemplate(cache2);
   const emailsFor = async (cands) => {
@@ -28843,7 +29231,6 @@ async function runSourcing(s, userId, req) {
     if (!wantsEmails) return;
     const top = cands.filter((c) => c.entity === "person").slice(0, ASKED_LOOKUPS);
     const todo = top.filter((c) => !c.email && !c.lastNameObfuscated);
-    for (const c of todo) c.emailLookedUp = true;
     await fillEmails(todo, {
       known: ctx.known,
       orgDomains: ctx.orgDomains,
@@ -28985,7 +29372,12 @@ async function addSourced(s, userId, ids) {
     await withDeadline(
       Promise.all(
         needs.map(async (r) => {
-          const found = await findEmailFor(s, userId, r.candidate, { tools }).catch(() => void 0);
+          const note2 = {};
+          const found = await findEmailFor(s, userId, r.candidate, { tools, note: note2 }).catch(() => {
+            note2.unchecked = true;
+            return void 0;
+          });
+          if (!found && note2.unchecked) return;
           r.candidate = found ? { ...r.candidate, email: found.email, emailConfidence: found.confidence, emailLookedUp: true } : { ...r.candidate, emailLookedUp: true };
           await db2.sql`update orbit.recommendations set candidate = ${r.candidate}::jsonb where id = ${r.id}::uuid`;
         })
@@ -28995,7 +29387,7 @@ async function addSourced(s, userId, ids) {
   }
   for (const rec of recs) {
     const c = rec.candidate;
-    const personId = rec.person_id ?? await ensurePerson(
+    const personId = rec.person_id ?? await knownPersonFor(db2, userId, c) ?? await createPerson(
       db2,
       userId,
       {
@@ -29039,6 +29431,33 @@ async function addSourced(s, userId, ids) {
   }
   return { people: out };
 }
+async function knownPersonFor(db2, userId, c) {
+  const byProfile = await resolvePersonRef(db2, userId, {
+    name: "",
+    linkedinUrl: c.linkedinUrl,
+    memberId: c.memberId
+  });
+  if (byProfile) return byProfile;
+  const email2 = c.email ? normalizeEmail(c.email) : null;
+  const name = c.name.trim().toLowerCase();
+  if (!email2 && !name) return null;
+  const rows = await db2.sql`
+    select p.id, p.display_name, p.org_raw, p.headline, p.primary_email, p.linkedin_slug, p.linkedin_member_id,
+           coalesce((select array_agg(i.value_norm) from orbit.person_identities i
+                      where i.person_id = p.id and i.kind = 'email'), '{}') as emails,
+           '{}'::text[] as linkedin_ids
+      from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+       and (lower(p.display_name) = ${name} or lower(p.primary_email) = ${email2}
+         or exists (select 1 from orbit.person_identities i
+                     where i.person_id = p.id and i.kind = 'email' and i.value_norm = ${email2}))
+     order by p.id limit 50`;
+  const hit = matchKnown(indexKnown(rows), c, {
+    email: email2 ?? void 0,
+    orgDomain: c.domains?.[0]
+  });
+  return hit?.id ?? null;
+}
 async function ensureChat(db2, userId, personId, goalId, now) {
   const [c] = await db2.sql`
     select id from orbit.chats
@@ -29081,7 +29500,7 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
       select parsed from orbit.uploads
        where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`,
     db2.sql`
-      select id, display_name, org_raw, primary_email as email from orbit.people
+      select id, display_name, org_raw, primary_email as email, email_confidence from orbit.people
        where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
        limit 5000`,
     graph(),
@@ -29098,19 +29517,23 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
     gradYear: u2?.grad_year,
     homeCity: typeof homeCity === "string" ? homeCity.slice(0, 80) : void 0
   });
-  const known = emails.map((e) => ({ name: e.display_name, email: e.email }));
+  const real = emails.filter((e) => isEvidence(e.email_confidence));
+  const known = real.map((e) => ({ name: e.display_name, email: e.email }));
   const emailOf = new Map(emails.map((e) => [e.id, e.email]));
   const tally = /* @__PURE__ */ new Map();
-  for (const e of emails) {
+  for (const e of real) {
     const d = workDomain(e.email);
     if (!d || !e.org_raw) continue;
     const k = norm(e.org_raw);
-    const m = tally.get(k) ?? /* @__PURE__ */ new Map();
-    m.set(d, (m.get(d) ?? 0) + 1);
-    tally.set(k, m);
+    const t = tally.get(k) ?? { org: e.org_raw, domains: /* @__PURE__ */ new Map() };
+    t.domains.set(d, (t.domains.get(d) ?? 0) + 1);
+    tally.set(k, t);
   }
   const orgDomains = /* @__PURE__ */ new Map();
-  for (const [k, m] of tally) orgDomains.set(k, [...m].sort((a, b) => b[1] - a[1])[0][0]);
+  for (const [k, t] of tally) {
+    const best = [...t.domains].sort((a, b) => b[1] - a[1]).find(([d, count2]) => isCompanyDomain(d, t.org, { count: count2 }));
+    if (best) orgDomains.set(k, best[0]);
+  }
   const warm = [...gr.people.values()].filter((p) => p.score >= WARM_SCORE && !p.hidden && !p.doNotContact).sort((a, b) => b.score - a.score).map((p) => ({
     personId: p.id,
     name: p.displayName,
@@ -29211,7 +29634,9 @@ async function email(ctx) {
   const s = ctx.services();
   return json(
     200,
-    recommendationId ? await lookupRecommendationEmail(s, ctx.userId, recommendationId) : await lookupPersonEmail(s, ctx.userId, personId)
+    await lookupWithin(
+      recommendationId ? lookupRecommendationEmail(s, ctx.userId, recommendationId) : lookupPersonEmail(s, ctx.userId, personId)
+    )
   );
 }
 var sourceRoutes = {

@@ -260,20 +260,27 @@ async function settleUsage(db2, id, actual) {
      where id = ${id}::bigint`;
 }
 async function reserveUsage(db2, entry, now = /* @__PURE__ */ new Date()) {
-  if (entry.userId) {
-    const v = await checkBudget(
-      db2,
-      entry.userId,
-      { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
-      now
-    );
-    if (!v.ok) return { ok: false, verdict: v };
-  }
-  const id = await recordUsage(db2, entry);
+  const userId = entry.userId;
+  const held = await db2.begin(async (tx) => {
+    if (userId) {
+      await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.reserve:user:${userId}`}, 0))`;
+      if (CAPS.some((c) => c.provider === entry.provider && c.scope === "global"))
+        await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.reserve:provider:${entry.provider}`}, 0))`;
+      const v = await checkBudget(
+        tx,
+        userId,
+        { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
+        now
+      );
+      if (!v.ok) return v;
+    }
+    return { id: await recordUsage(tx, entry) };
+  });
+  if ("ok" in held) return { ok: false, verdict: held };
   return {
     ok: true,
     async settle(actual) {
-      if (id) await settleUsage(db2, id, actual);
+      if (held.id) await settleUsage(db2, held.id, actual);
     }
   };
 }
@@ -986,9 +993,9 @@ async function requestJson(opts, spec) {
   let last = { ok: false, kind: "network", provider: spec.provider, message: "not attempted" };
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const ctrl = new AbortController();
-    let timedOut = false;
+    let timedOut3 = false;
     const timer = setTimeout(() => {
-      timedOut = true;
+      timedOut3 = true;
       ctrl.abort();
     }, timeoutMs);
     let res;
@@ -1001,7 +1008,7 @@ async function requestJson(opts, spec) {
       });
     } catch (e) {
       clearTimeout(timer);
-      last = timedOut ? { ok: false, kind: "timeout", provider: spec.provider, message: `${spec.provider}: timed out` } : {
+      last = timedOut3 ? { ok: false, kind: "timeout", provider: spec.provider, message: `${spec.provider}: timed out` } : {
         ok: false,
         kind: "network",
         provider: spec.provider,
@@ -8902,15 +8909,27 @@ function freeWindows(busy, opts) {
   }
   return out;
 }
+var GOOGLE_TIMEOUT_MS = 2e4;
+var timedOut = (e) => {
+  const name = e?.name;
+  return name === "TimeoutError" || name === "AbortError";
+};
 async function googleCall(s, userId, url, body) {
   if (!s.tokens) throw new HttpError(503, "unconfigured", "Google is not configured");
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await s.tokens.accessToken(userId);
-    const res = await s.fetch(url, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(body)
-    });
+    let res;
+    try {
+      res = await s.fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS)
+      });
+    } catch (e) {
+      if (timedOut(e)) throw new HttpError(504, "upstream_timeout", "calendar timed out");
+      throw e;
+    }
     if (res.status === 401 && attempt === 0) {
       s.tokens.invalidate(userId);
       await res.body?.cancel();
@@ -8919,7 +8938,8 @@ async function googleCall(s, userId, url, body) {
     let json2 = {};
     try {
       json2 = await res.json();
-    } catch {
+    } catch (e) {
+      if (timedOut(e)) throw new HttpError(504, "upstream_timeout", "calendar timed out");
       json2 = {};
     }
     return { status: res.status, json: json2 };
@@ -11580,6 +11600,278 @@ function blockKeys(n) {
 }
 for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
 
+// packages/core/src/entity/social.ts
+var PUBLIC_FIGURE_FOLLOWERS = 5e4;
+var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
+function accountKind(a) {
+  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
+  const name = (a.name ?? "").trim();
+  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
+  if (name && BRAND_WORDS.test(name)) return "brand";
+  const words6 = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
+  if (words6.length >= 2) return "person";
+  if (a.business) return "brand";
+  return "unknown";
+}
+var HUBS = [
+  "linktr.ee",
+  "linktree.com",
+  "beacons.ai",
+  "bio.link",
+  "lnk.bio",
+  "carrd.co",
+  "campsite.bio",
+  "hoo.be"
+];
+function normalizeLink(raw) {
+  const s = raw.trim().toLowerCase();
+  if (!s) return void 0;
+  const m = s.match(/^(?:https?:\/\/)?(?:www\.)?([^\s?#]+?)\/?(?:[?#].*)?$/);
+  return m?.[1];
+}
+function handleFromLink(raw, platform) {
+  const l = normalizeLink(raw);
+  if (!l) return void 0;
+  const hosts = platform === "instagram" ? ["instagram.com", "instagr.am"] : ["x.com", "twitter.com", "mobile.twitter.com"];
+  for (const h of hosts) {
+    if (!l.startsWith(`${h}/`)) continue;
+    const seg = l.slice(h.length + 1).split("/")[0];
+    if (!seg || ["p", "reel", "stories", "explore", "i", "home", "intent", "share", "search"].includes(seg))
+      return void 0;
+    return seg.replace(/^@/, "");
+  }
+  return void 0;
+}
+var normalizeHandle = (h) => h.trim().replace(/^@/, "").toLowerCase();
+function handlesIn(text3, platform) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of text3.matchAll(
+    /\b(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am|x\.com|twitter\.com)\/[\w.@-]+/gi
+  )) {
+    const h = handleFromLink(m[0], platform);
+    if (h) out.add(normalizeHandle(h));
+  }
+  const label = platform === "instagram" ? /\b(?:ig|insta|instagram)\s*[:-]?\s*@([\w.]{2,30})/gi : /\b(?:x|twitter)\s*[:-]?\s*@(\w{2,15})/gi;
+  for (const m of text3.matchAll(label)) out.add(normalizeHandle(m[1]));
+  return [...out];
+}
+var tokensOf2 = (s) => s.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").split(/[^a-z0-9]+/).filter(Boolean);
+var GENERIC_ORG_WORDS = /* @__PURE__ */ new Set([
+  "the",
+  "of",
+  "at",
+  "and",
+  "university",
+  "college",
+  "inc",
+  "llc",
+  "ltd",
+  "co",
+  "corp",
+  "corporation",
+  "company",
+  "group",
+  "hq"
+]);
+function bioMentions(bio, org) {
+  if (!bio || !org) return false;
+  const norm2 = normalizeCompany(org);
+  const words6 = tokensOf2(norm2).filter((w) => w.length >= 2 && !GENERIC_ORG_WORDS.has(w));
+  if (!words6.length || words6.length === 1 && words6[0].length < 3) return false;
+  const bioTokens = tokensOf2(bio);
+  const joined = ` ${bioTokens.join(" ")} `;
+  if (joined.includes(` ${words6.join(" ")} `)) return true;
+  const squashed = words6.join("");
+  return bioTokens.some((t) => t === squashed || t === `${squashed}hq`);
+}
+function bioYear(bio) {
+  if (!bio) return void 0;
+  const m = bio.match(/(?:'|’|\bclass of\s*|\b)(20\d{2}|\d{2})\b/i);
+  if (!m) return void 0;
+  const n = Number(m[1]);
+  if (m[1].length === 2) return n >= 10 && n <= 40 ? 2e3 + n : void 0;
+  return n >= 2e3 && n <= 2040 ? n : void 0;
+}
+function handleSpellsName(handle, first, last) {
+  const h = normalizeHandle(handle);
+  if (/\d/.test(h)) return 0;
+  const f = tokensOf2(first).join("");
+  const l = tokensOf2(last).join("");
+  if (!f || !l) return 0;
+  const bare3 = h.replace(/[._-]/g, "");
+  if (bare3 === `${f}${l}` || bare3 === `${l}${f}`) return 1;
+  if (bare3 === `${f[0]}${l}` || bare3 === `${f}${l[0]}`) return 0.7;
+  if (bare3.includes(f) && bare3.includes(l)) return 0.8;
+  if (bare3 === f || bare3 === l) return 0.3;
+  return 0;
+}
+var COMMON_SURNAMES = new Set(
+  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
+);
+var isRareName = (last) => {
+  const l = tokensOf2(last).join("");
+  return l.length >= 3 && !COMMON_SURNAMES.has(l);
+};
+var PERSON_SPECIFIC = /* @__PURE__ */ new Set([
+  "employer_role_small",
+  "school_year",
+  "same_link",
+  "same_picture"
+]);
+var SOCIAL_WEIGHTS = {
+  bias: -3.5,
+  name: 4,
+  handle: 0.8,
+  employer: 1,
+  employer_role_small: 3,
+  school: 0.8,
+  school_year: 2.5,
+  same_link: 4,
+  same_picture: 3.5,
+  place: 0.4,
+  rare_name: 0.8,
+  neighbours: 0.6,
+  public_figure: -5,
+  other_handle: -1.5
+};
+var AUTO_SOCIAL = 0.95;
+var ASK_SOCIAL = 0.6;
+var MIN_NAME = 0.5;
+var sigmoid = (x) => 1 / (1 + Math.exp(-x));
+function socialProof(a, c) {
+  const handle = normalizeHandle(a.username);
+  for (const l of c.links ?? []) {
+    const h = handleFromLink(l, a.platform);
+    if (h && normalizeHandle(h) === handle) return "own_links";
+  }
+  const slug = c.person.linkedinSlug ?? linkedInSlug(c.person.linkedinUrl);
+  if (slug) {
+    for (const l of [
+      ...a.links ?? [],
+      ...a.bio ? a.bio.match(/\S*linkedin\.com\/in\/[\w%-]+/gi) ?? [] : []
+    ]) {
+      if (linkedInSlug(l.startsWith("http") ? l : `https://${l}`) === slug) return "links_back";
+    }
+  }
+  if (a.email) {
+    const e = normalizeEmail(a.email);
+    if ([c.person.primaryEmail, ...c.person.emails ?? []].some((x) => x && normalizeEmail(x) === e))
+      return "contact";
+  }
+  if (a.phone && c.person.phones?.length) {
+    const digits = (p) => p.replace(/\D/g, "").slice(-10);
+    if (c.person.phones.some((p) => digits(p) === digits(a.phone) && digits(p).length >= 10))
+      return "contact";
+  }
+  if ((c.contactHandles ?? []).some((h) => normalizeHandle(h) === handle)) return "address_book";
+  return void 0;
+}
+function socialSignals(a, c) {
+  const p = c.person;
+  const s = {};
+  const name = compareNames(a.name ?? "", p.displayName || `${p.firstName} ${p.lastName}`);
+  s.name = name.score;
+  const handle = handleSpellsName(a.username, p.firstName, p.lastName);
+  if (handle) s.handle = handle;
+  const employer = bioMentions(a.bio, p.currentOrganizationRaw);
+  if (employer) {
+    const titleWords = tokensOf2(p.currentTitle ?? "").filter((w) => w.length >= 3);
+    const bio = tokensOf2(a.bio ?? "");
+    const role = titleWords.some((w) => bio.includes(w));
+    const small = typeof c.employerSize === "number" && c.employerSize < 1e3;
+    if (role && small) s.employer_role_small = 1;
+    else s.employer = 1;
+  }
+  if (bioMentions(a.bio, p.school)) {
+    const y = bioYear(a.bio);
+    if (y && c.schoolYear && y === c.schoolYear) s.school_year = 1;
+    else s.school = 1;
+  }
+  const theirs = new Set(
+    (c.links ?? []).map(normalizeLink).filter((l) => !!l && !HUBS.some((h) => l.startsWith(h)))
+  );
+  if ((a.links ?? []).some((l) => {
+    const n = normalizeLink(l);
+    return !!n && theirs.has(n);
+  }))
+    s.same_link = 1;
+  if (a.pictureHash && !a.defaultPicture && c.pictureHash && a.pictureHash === c.pictureHash)
+    s.same_picture = 1;
+  const city = (p.location ?? "").split(",")[0]?.trim();
+  if (city && city.length >= 3 && a.bio && tokensOf2(a.bio).join(" ").includes(tokensOf2(city).join(" ")))
+    s.place = 1;
+  if (isRareName(p.lastName) && name.score >= 0.95) s.rare_name = 1;
+  if ((c.sharedNeighbours ?? 0) > 0) s.neighbours = Math.min(2, c.sharedNeighbours);
+  if (accountKind(a) === "public_figure") s.public_figure = 1;
+  const handleNorm = normalizeHandle(a.username);
+  if ((c.otherHandles ?? []).some((h) => normalizeHandle(h) !== handleNorm)) s.other_handle = 1;
+  return s;
+}
+function socialScore(signals) {
+  let z9 = SOCIAL_WEIGHTS.bias;
+  for (const [k, v] of Object.entries(signals)) z9 += SOCIAL_WEIGHTS[k] * v;
+  return sigmoid(z9);
+}
+function matchSocialAccount(a, candidates, opts = {}) {
+  const pool2 = candidates.filter((c) => !opts.rejected?.has(c.person.id));
+  const proven = pool2.map((c) => ({ c, proof: socialProof(a, c) })).filter((x) => !!x.proof);
+  if (proven.length === 1)
+    return { kind: "attach", personId: proven[0].c.person.id, via: "proof", proof: proven[0].proof };
+  if (proven.length > 1) return { kind: "none", reason: "ambiguous" };
+  if (accountKind(a) !== "person") return { kind: "none", reason: "not_a_person" };
+  const scored = pool2.map((c) => {
+    const signals = socialSignals(a, c);
+    return { c, signals, score: (signals.name ?? 0) < MIN_NAME ? 0 : socialScore(signals) };
+  }).filter((x) => x.score >= ASK_SOCIAL).sort((x, y) => y.score - x.score);
+  if (!scored.length) return { kind: "none", reason: pool2.length ? "low" : "no_candidate" };
+  if (scored.length > 1) {
+    const best2 = scored[0];
+    if (!best2.c.knownToStudent) return { kind: "none", reason: "ambiguous" };
+    return {
+      kind: "ask",
+      personId: best2.c.person.id,
+      score: Math.min(best2.score, AUTO_SOCIAL - 0.01),
+      signals: best2.signals
+    };
+  }
+  const best = scored[0];
+  const specific = Object.keys(best.signals).some((k) => PERSON_SPECIFIC.has(k));
+  if (best.score >= AUTO_SOCIAL && specific)
+    return {
+      kind: "attach",
+      personId: best.c.person.id,
+      via: "score",
+      score: best.score,
+      signals: best.signals
+    };
+  if (!best.c.knownToStudent) return { kind: "none", reason: "stranger" };
+  return {
+    kind: "ask",
+    personId: best.c.person.id,
+    score: Math.min(best.score, AUTO_SOCIAL - 0.01),
+    signals: best.signals
+  };
+}
+function matchTargetAccount(a, target) {
+  const proof = socialProof(a, target);
+  if (proof) return { kind: "attach", personId: target.person.id, via: "proof", proof };
+  return { kind: "none", reason: "stranger" };
+}
+function socialBlock(a, people) {
+  const name = (a.name ?? "").trim();
+  const handle = normalizeHandle(a.username);
+  return people.filter((c) => {
+    const p = c.person;
+    if (name && compareNames(name, p.displayName || `${p.firstName} ${p.lastName}`).score >= MIN_NAME)
+      return true;
+    if (handleSpellsName(handle, p.firstName, p.lastName) >= 0.7) return true;
+    if (!name) {
+      return !!socialProof(a, c);
+    }
+    return isFirstNameVariant(name.split(/\s+/)[0] ?? "", p.firstName) && !!p.lastName && handle.includes(tokensOf2(p.lastName).join(""));
+  });
+}
+
 // packages/core/src/entity/resolve.ts
 var RESOLVE_WEIGHTS = {
   name_sim: 3,
@@ -11708,7 +12000,7 @@ function isPersonalEmailDomain(domain) {
   const brand = getDomainWithoutSuffix(d);
   return !!brand && PERSONAL_MAIL_BRANDS.has(brand);
 }
-function sigmoid(x) {
+function sigmoid2(x) {
   return 1 / (1 + Math.exp(-x));
 }
 var parsedNames = /* @__PURE__ */ new Map();
@@ -11847,7 +12139,7 @@ function computeFeatures(inc, cand, ctx) {
 }
 function scoreFeatures(f, w = RESOLVE_WEIGHTS) {
   const z9 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
-  return sigmoid(z9);
+  return sigmoid2(z9);
 }
 function addressOnlyScore(f) {
   if (f.email_name_sim >= 1 && f.domain_org_match >= 0.8) return 0.93;
@@ -11908,6 +12200,54 @@ function scorePair(inc, cand, ctx) {
     score = AUTO_MERGE_THRESHOLD - 0.01;
   if (f.org_match > 0 && !independent) score = Math.min(score, NAME_ORG_ONLY_CAP);
   return { score, features: f };
+}
+var hasLinkedIn = (x) => !!(x.linkedinMemberId || x.linkedinSlug || linkedInSlug(x.linkedinUrl));
+var addressesOf = (p) => [p.primaryEmail, ...p.emails].filter((e) => !!e);
+var sameFolded = (a, b) => a.given === b.given && a.surnames.join(" ") === b.surnames.join(" ");
+function assumeSamePerson(inc, cand, f, ctx) {
+  if (!cand.isHuman) return false;
+  const email = inc.email ? normalizeEmail(inc.email) : void 0;
+  if (hasLinkedIn(inc) && hasLinkedIn(cand)) return false;
+  const addresses = [...addressesOf(cand), ...email ? [email] : []];
+  if (addresses.some(numberedAddress)) return false;
+  const incName = incomingName(inc);
+  if (!incName.full || isPlaceholderName(cand)) {
+    return f.email_name_sim >= 0.95 && f.domain_org_match > 0;
+  }
+  const names = namesOf(inc, cand);
+  if (names.given !== "same" || names.surname !== "same" || names.swapped) return false;
+  const mine = foldName(incName);
+  if (!mine.given || !mine.surnames.length) return false;
+  if (!mine.surnames.every((x) => isRareName(x))) return false;
+  const others = ctx.people.filter(
+    (p) => p.id !== cand.id && p.id !== inc.personId && p.isHuman && !isPlaceholderName(p)
+  );
+  if (others.some((p) => sameFolded(foldName(p.displayName), mine))) return false;
+  if (f.org_match < 0 || employerConflict(inc, cand, ctx, f)) return false;
+  if (f.domain_org_match === 0 && f.email_name_sim < 0.3) {
+    const work = addresses.some((e) => !isPersonalEmailDomain(emailDomain(e)));
+    const employer = normalizeCompany(inc.companyRaw) || normalizeCompany(cand.currentOrganizationRaw);
+    if (work && employer) return false;
+  }
+  return true;
+}
+function assumeSamePair(a, b, ctx) {
+  if (rejected(ctx, a.id, b.id) || differentLinkedInProfiles(a, b)) return false;
+  const as = (p) => ({
+    email: addressesOf(p)[0],
+    displayName: p.displayName,
+    linkedinUrl: p.linkedinUrl,
+    linkedinMemberId: p.linkedinMemberId,
+    companyRaw: p.currentOrganizationRaw,
+    title: p.currentTitle,
+    source: "gmail",
+    personId: p.id
+  });
+  const one = (x, y) => {
+    const inc = as(x);
+    return assumeSamePerson(inc, y, computeFeatures(inc, y, ctx), ctx);
+  };
+  return one(a, b) || one(b, a);
 }
 function differentLinkedInProfiles(a, b) {
   const slugOf3 = (p) => p.linkedinSlug ?? linkedInSlug(p.linkedinUrl) ?? void 0;
@@ -11997,13 +12337,16 @@ function resolveIdentity(inc, ctx) {
   const tied = (scored[1]?.score ?? 0) >= AUTO_MERGE_THRESHOLD;
   if (best.score >= AUTO_MERGE_THRESHOLD && !tied)
     return { kind: "probable", personId: best.p.id, score: best.score, features: best.features };
-  if (best.score >= SUGGEST_THRESHOLD)
+  if (best.score >= SUGGEST_THRESHOLD) {
+    if (!tied && assumeSamePerson(inc, best.p, best.features, { ...ctx, people }))
+      return { kind: "probable", personId: best.p.id, score: best.score, features: best.features };
     return {
       kind: "suggest",
       personId: best.p.id,
       score: Math.min(best.score, AUTO_MERGE_THRESHOLD - 0.01),
       features: best.features
     };
+  }
   return { kind: "new" };
 }
 function sameMailboxOtherName(owner, incName, people, ctx) {
@@ -13786,7 +14129,7 @@ function tieBand(score) {
   if (score >= 20) return "light";
   return "faint";
 }
-var sigmoid2 = (x) => 1 / (1 + Math.exp(-x));
+var sigmoid3 = (x) => 1 / (1 + Math.exp(-x));
 function ms(iso4) {
   if (!iso4) return void 0;
   const t = new Date(iso4).getTime();
@@ -14035,7 +14378,7 @@ function linearTie(features, weights = TIE_WEIGHTS) {
 }
 function scoreFromZ(z9, calibration) {
   const zz = calibration ? calibration.a * z9 + calibration.c : z9;
-  return Math.round(100 * sigmoid2(zz));
+  return Math.round(100 * sigmoid3(zz));
 }
 function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
   const { features, facts } = computeTieFeatures(history, now);
@@ -14236,7 +14579,7 @@ function fitCalibration(labels) {
     let ga = 2 * CALIBRATION_RIDGE * (a - 1);
     let gc = 2 * CALIBRATION_RIDGE * c;
     for (const p of pts) {
-      const s = sigmoid2(a * p.z + c);
+      const s = sigmoid3(a * p.z + c);
       const y = (p.closeness - 1) / 4;
       const g = 2 * (s - y) * s * (1 - s);
       ga += g * p.z;
@@ -15753,10 +16096,10 @@ function isRoutable(pair) {
 
 // packages/core/src/graph/route.ts
 var USER_NODE = "user";
-var sigmoid3 = (x) => 1 / (1 + Math.exp(-x));
+var sigmoid4 = (x) => 1 / (1 + Math.exp(-x));
 var DAY8 = 864e5;
 function pAsk(f) {
-  return sigmoid3(
+  return sigmoid4(
     -2 + 4 * Math.max(0, Math.min(100, f.score)) / 100 + 0.8 * Math.max(0, Math.min(1, f.reciprocity ?? 0)) + (f.introducedUserBefore ? 0.6 : 0) + (f.sharesGoalTargetOrg ? 0.3 : 0) - (f.askedRecently ? 0.7 : 0) - (f.owesReply ? 0.5 : 0)
   );
 }
@@ -17093,6 +17436,181 @@ function withPatterns(model, pattern) {
 
 // supabase/functions/_shared/search/reading.ts
 import { z as z6 } from "npm:zod@3.25.76/v4";
+
+// supabase/functions/_shared/search/census.ts
+var SEARCH_LEDGER_TOTAL = 100;
+var CENSUS_SHARE = 0.4;
+var CENSUS_JOB_MS = 5e4;
+var LINKEDIN_TIMEOUT_MS = 15e3;
+var timedOut2 = (e) => {
+  const name = e?.name;
+  return name === "TimeoutError" || name === "AbortError";
+};
+var PASS_AGAIN_DAYS = 30;
+var txt = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : void 0;
+function censusPeople(items) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== "object") continue;
+    const p = raw;
+    const memberId = txt(p.id, 120);
+    const name = txt(p.name, 160);
+    if (!memberId || !name) continue;
+    if (typeof p.network_distance === "string" && p.network_distance !== "DISTANCE_1") continue;
+    const companies = [];
+    const companyIds = {};
+    for (const x of Array.isArray(p.current_positions) ? p.current_positions : []) {
+      if (!x || typeof x !== "object" || companies.length >= 3) continue;
+      const pos = x;
+      const c = txt(pos.company, 160);
+      if (!c) continue;
+      companies.push(c);
+      const id = pos.company_id == null ? void 0 : txt(String(pos.company_id), 60);
+      if (id && /^\d+$/.test(id)) companyIds[c] = id;
+    }
+    out.push({
+      memberId,
+      name,
+      headline: txt(p.headline, 220),
+      location: txt(p.location, 160),
+      companies,
+      ...Object.keys(companyIds).length ? { companyIds } : {}
+    });
+  }
+  return out;
+}
+function ledgerBucket(accountId, now, share) {
+  const day2 = now.toISOString().slice(0, 10);
+  const end = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return {
+    key: `connectors:li:search:${day2}:${accountId}`,
+    limit: Math.round(SEARCH_LEDGER_TOTAL * share),
+    expires: end.toISOString()
+  };
+}
+async function spendCensus(db2, accountId, now, share = CENSUS_SHARE) {
+  const b = ledgerBucket(accountId, now, share);
+  const [used] = await db2.sql`
+    select count from public.orbit_proxy_counters where bucket = ${b.key} and expires_at >= now()`;
+  if ((used?.count ?? 0) + 1 > b.limit) return false;
+  const [row] = await db2.sql`
+    select allowed from public.orbit_proxy_take(${[b.key]}::text[], ${[b.limit]}::int[], ${[b.expires]}::timestamptz[])`;
+  return !!row?.allowed;
+}
+async function filePage(db2, userId, people, now) {
+  if (!people.length) return 0;
+  const ids = people.map((p) => p.memberId);
+  const known = await db2.sql`
+    select p.id, p.linkedin_member_id as member from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+       and p.linkedin_member_id = any(${ids}::text[])
+    union
+    select i.person_id as id, i.value_norm as member from orbit.person_identities i
+      join orbit.people p on p.id = i.person_id and p.deleted_at is null and p.merged_into is null
+     where i.user_id = ${userId}::uuid and i.kind = 'linkedin_member' and i.value_norm = any(${ids}::text[])`;
+  const byMember = /* @__PURE__ */ new Map();
+  for (const k of known) if (!byMember.has(k.member)) byMember.set(k.member, k.id);
+  const rows = [];
+  const places = [];
+  for (const p of people) {
+    const id = byMember.get(p.memberId);
+    if (!id) continue;
+    if (p.location) {
+      rows.push({ person_id: id, kind: "place", value: p.location, ref: null });
+      places.push({ id, location: p.location });
+    }
+    for (const c of p.companies)
+      rows.push({ person_id: id, kind: "company", value: c, ref: p.companyIds?.[c] ?? null });
+  }
+  if (rows.length)
+    await db2.sql`
+      insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source, at, ref)
+      select ${userId}::uuid, r.person_id, r.kind, r.value, true, 'census', ${now.toISOString()}::timestamptz, r.ref
+        from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as r(person_id uuid, kind text, value text, ref text)
+      on conflict (user_id, person_id, kind, value, source) do update set at = excluded.at, positive = true,
+        ref = coalesce(excluded.ref, facet_assertions.ref)`;
+  if (places.length)
+    await db2.sql`
+      update orbit.people p set location = r.location, updated_at = now()
+        from jsonb_to_recordset(${JSON.stringify(places)}::jsonb) as r(id uuid, location text)
+       where p.id = r.id and p.user_id = ${userId}::uuid and (p.location is null or p.location = '')`;
+  return byMember.size;
+}
+async function runCensusStep(db2, deps, userId, accountId, now) {
+  const [row] = await db2.sql`
+    select cursor, seen, matched, pass_started_at::text, pass_done_at::text from orbit.search_census
+     where user_id = ${userId}::uuid`;
+  if (row?.pass_done_at && !row.cursor && now.getTime() - Date.parse(row.pass_done_at) < PASS_AGAIN_DAYS * 864e5)
+    return { pages: 0, seen: 0, matched: 0, done: true, stopped: "fresh" };
+  const resuming = !!row?.cursor;
+  let cursor = resuming ? row.cursor : null;
+  let seen = resuming ? row.seen : 0;
+  let matched = resuming ? row.matched : 0;
+  const passStarted = resuming && row.pass_started_at ? row.pass_started_at : now.toISOString();
+  const started = deps.clock();
+  const step = { pages: 0, seen: 0, matched: 0, done: false };
+  const base = deps.baseUrl.replace(/\/+$/, "");
+  let lastError = null;
+  while (true) {
+    if (deps.clock() - started > CENSUS_JOB_MS) {
+      step.stopped = "time";
+      break;
+    }
+    if (!await spendCensus(db2, accountId, now)) {
+      step.stopped = "ledger";
+      break;
+    }
+    if (step.pages > 0) await deps.sleep(1500 + Math.floor(deps.random() * 2500));
+    const q = new URLSearchParams({ account_id: accountId, limit: "10" });
+    if (cursor) q.set("cursor", cursor);
+    let body;
+    try {
+      const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
+        method: "POST",
+        headers: { "X-API-KEY": deps.apiKey, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ api: "classic", category: "people", network_distance: [1] }),
+        signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS)
+      });
+      if (res.status >= 400 && res.status < 500) {
+        lastError = `refused ${res.status}`;
+        step.stopped = "refused";
+        break;
+      }
+      if (!res.ok) throw new Error(`unipile ${res.status}`);
+      body = await res.json();
+    } catch (e) {
+      if (!timedOut2(e)) throw e;
+      lastError = "timeout";
+      step.stopped = "timeout";
+      break;
+    }
+    const people = censusPeople(body.items);
+    const knew = await filePage(db2, userId, people, now);
+    step.pages++;
+    step.seen += people.length;
+    step.matched += knew;
+    seen += people.length;
+    matched += knew;
+    cursor = typeof body.cursor === "string" && body.cursor ? body.cursor : null;
+    if (!cursor || !people.length) {
+      cursor = null;
+      step.done = true;
+      break;
+    }
+  }
+  await db2.sql`
+    insert into orbit.search_census (user_id, cursor, seen, matched, pass_started_at, pass_done_at, last_error, updated_at)
+    values (${userId}::uuid, ${cursor}, ${seen}, ${matched}, ${passStarted}::timestamptz,
+            ${step.done ? now.toISOString() : row?.pass_done_at ?? null}::timestamptz, ${lastError}, now())
+    on conflict (user_id) do update set cursor = excluded.cursor, seen = excluded.seen, matched = excluded.matched,
+      pass_started_at = excluded.pass_started_at, pass_done_at = excluded.pass_done_at,
+      last_error = excluded.last_error, updated_at = now()`;
+  return step;
+}
+
+// supabase/functions/_shared/search/reading.ts
 var LEDGER_TOTAL = { profile: 100, company: 150 };
 var SHARES = {
   background: { profile: 0.3, company: 0.6 },
@@ -17109,14 +17627,14 @@ function profileOrgs(raw) {
   const list3 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
   return [
     ...list3(raw.work_experience).map((x) => ({
-      company: txt(x.company, 160),
-      companyId: x.company_id == null ? void 0 : txt(String(x.company_id), 60),
-      logoUrl: txt(x.company_picture_url, 1e3)
+      company: txt2(x.company, 160),
+      companyId: x.company_id == null ? void 0 : txt2(String(x.company_id), 60),
+      logoUrl: txt2(x.company_picture_url, 1e3)
     })),
     ...list3(raw.education).map((x) => ({
-      school: txt(x.school, 160),
-      schoolId: x.school_id == null ? void 0 : txt(String(x.school_id), 60),
-      logoUrl: txt(x.school_picture_url, 1e3)
+      school: txt2(x.school, 160),
+      schoolId: x.school_id == null ? void 0 : txt2(String(x.school_id), 60),
+      logoUrl: txt2(x.school_picture_url, 1e3)
     }))
   ].filter((o) => o.logoUrl);
 }
@@ -17142,7 +17660,7 @@ async function spendShare(db2, kind, accountId, now, share) {
     select allowed from public.orbit_proxy_take(${[b.key]}::text[], ${[b.limit]}::int[], ${[b.expires]}::timestamptz[])`;
   return !!row?.allowed;
 }
-var txt = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : typeof v === "number" ? String(v) : void 0;
+var txt2 = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : typeof v === "number" ? String(v) : void 0;
 function dateOf(v) {
   if (v && typeof v === "object") {
     const o = v;
@@ -17166,8 +17684,8 @@ function experienceOf(raw) {
   for (const x of raw) {
     if (!x || typeof x !== "object") continue;
     const e = x;
-    const title = txt(e.position, 160);
-    const company = txt(e.company, 160);
+    const title = txt2(e.position, 160);
+    const company = txt2(e.company, 160);
     if (!title && !company) continue;
     const end = dateOf(e.end);
     const job = {
@@ -17175,12 +17693,12 @@ function experienceOf(raw) {
     };
     if (title) job.title = title;
     if (company) job.company = company;
-    const cid = txt(e.company_id, 60);
+    const cid = txt2(e.company_id, 60);
     if (cid && /^\d+$/.test(cid)) job.companyId = cid;
     const start = dateOf(e.start);
     if (start) job.start = start;
     if (end) job.end = end;
-    const desc = txt(e.description, JOB_CHARS);
+    const desc = txt2(e.description, JOB_CHARS);
     if (desc) job.description = desc;
     out.push(job);
     if (out.length >= 12) break;
@@ -17188,7 +17706,7 @@ function experienceOf(raw) {
   return out;
 }
 function pageOf(id, raw) {
-  const name = txt(raw.name, 160);
+  const name = txt2(raw.name, 160);
   if (!name) return void 0;
   const ins = raw.insights?.employeesCount;
   const growth = Array.isArray(ins?.growthGraph) ? ins.growthGraph : [];
@@ -17200,33 +17718,39 @@ function pageOf(id, raw) {
   const count2 = typeof raw.employee_count === "number" ? raw.employee_count : Number(ins?.totalCount) || void 0;
   const founded = /(\d{4})/.exec(String(raw.foundation_date ?? ""))?.[1];
   const loc = Array.isArray(raw.locations) ? raw.locations.find((l) => l.is_headquarter) ?? raw.locations[0] : void 0;
-  const industries = (Array.isArray(raw.industry) ? raw.industry : [raw.industry]).map((x) => txt(x, 80)).filter((x) => !!x).slice(0, 4);
+  const industries = (Array.isArray(raw.industry) ? raw.industry : [raw.industry]).map((x) => txt2(x, 80)).filter((x) => !!x).slice(0, 4);
   return {
     linkedinId: id,
-    publicIdentifier: txt(raw.public_identifier, 160),
+    publicIdentifier: txt2(raw.public_identifier, 160),
     name,
-    website: txt(raw.website, 300),
+    website: txt2(raw.website, 300),
     industries,
-    tagline: txt(raw.tagline, 300),
-    description: txt(raw.description, COMPANY_ABOUT_CHARS),
+    tagline: txt2(raw.tagline, 300),
+    description: txt2(raw.description, COMPANY_ABOUT_CHARS),
     employeeCount: count2 && count2 > 0 ? Math.round(count2) : void 0,
     employeeRange: range?.from ? `${range.from}-${range.to ?? ""}` : void 0,
     growth6m: g(6),
     growth12m: g(12),
     growth24m: g(24),
     foundedYear: founded ? Number(founded) : void 0,
-    hq: loc ? [txt(loc.city, 80), txt(loc.area, 80), txt(loc.country, 40)].filter(Boolean).join(", ") : void 0
+    hq: loc ? [txt2(loc.city, 80), txt2(loc.area, 80), txt2(loc.country, 40)].filter(Boolean).join(", ") : void 0
   };
 }
 async function getJson(deps, path) {
-  const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, "")}${path}`, {
-    headers: { "X-API-KEY": deps.apiKey, accept: "application/json" }
-  });
-  if (res.status === 404 || res.status === 422) return { ok: false, status: "not_found" };
-  if (res.status === 429) return { ok: false, status: "throttled" };
-  if (res.status >= 400 && res.status < 500) return { ok: false, status: "refused" };
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  return { ok: true, value: await res.json() };
+  try {
+    const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, "")}${path}`, {
+      headers: { "X-API-KEY": deps.apiKey, accept: "application/json" },
+      signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS)
+    });
+    if (res.status === 404 || res.status === 422) return { ok: false, status: "not_found" };
+    if (res.status === 429) return { ok: false, status: "throttled" };
+    if (res.status >= 400 && res.status < 500) return { ok: false, status: "refused" };
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    return { ok: true, value: await res.json() };
+  } catch (e) {
+    if (timedOut2(e)) return { ok: false, status: "timeout" };
+    throw e;
+  }
 }
 function profilePath(accountId, identifier) {
   const q = new URLSearchParams({ account_id: accountId, notify: "false" });
@@ -17284,7 +17808,7 @@ async function projectFact(db2, page2, reading, now) {
        where source = 'linkedin' and source_id = ${page2.linkedinId}`;
 }
 async function saveProfile(db2, userId, personId, memberId, raw, mode, now) {
-  const about = txt(raw.summary, ABOUT_CHARS) ?? null;
+  const about = txt2(raw.summary, ABOUT_CHARS) ?? null;
   const experience = experienceOf(raw.work_experience);
   await db2.sql`
     insert into orbit.profile_reads (user_id, person_id, member_id, about, experience, status, read_by, read_at,
@@ -17665,8 +18189,8 @@ async function readCompanyIds(db2, deps, accountId, ids, now, mode, step, starte
       `/api/v1/linkedin/company/${encodeURIComponent(id)}?account_id=${encodeURIComponent(accountId)}`
     );
     if (!got.ok) {
-      if (got.status === "throttled") {
-        step.stopped = "throttled";
+      if (got.status === "throttled" || got.status === "timeout") {
+        step.stopped = got.status;
         return;
       }
       await markCompany(db2, id, got.status, now);
@@ -17701,8 +18225,8 @@ async function readProfiles(db2, deps, userId, accountId, people, now, mode, ste
     if (fetched++ > 0) await deps.sleep((mode === "ask" ? 300 : 2500) + Math.floor(deps.random() * 2500));
     const got = await getJson(deps, profilePath(accountId, p.member));
     if (!got.ok) {
-      if (got.status === "throttled") {
-        step.stopped = "throttled";
+      if (got.status === "throttled" || got.status === "timeout") {
+        step.stopped = got.status;
         return;
       }
       await markProfile(db2, userId, p.id, p.member, got.status, mode, now);
@@ -17725,7 +18249,7 @@ async function runReadingStep(db2, deps, userId, accountId, now, opts = {}) {
     step.readIds.push(...fresh);
     await readProfiles(db2, deps, userId, accountId, todo, now, mode, step, started, budgetMs * 0.6);
     const companies2 = await wantedCompanies(db2, userId, ASK_MAX, ids);
-    if (step.stopped !== "throttled")
+    if (step.stopped !== "throttled" && step.stopped !== "timeout")
       await readCompanyIds(db2, deps, accountId, companies2, now, mode, step, started, budgetMs * 0.8);
     step.readPeople = await readPeople(db2, deps.claude, userId, ASK_MAX, ids);
     step.readCompanies = await readCompanies(db2, deps.claude, userId, ASK_MAX, now);
@@ -17735,7 +18259,7 @@ async function runReadingStep(db2, deps, userId, accountId, now, opts = {}) {
   await readCompanyIds(db2, deps, accountId, companies, now, mode, step, started, budgetMs * 0.4);
   const stoppedAtCompanies = step.stopped;
   step.stopped = void 0;
-  if (stoppedAtCompanies !== "throttled") {
+  if (stoppedAtCompanies !== "throttled" && stoppedAtCompanies !== "timeout") {
     const people = await pickPeople(db2, userId, PROFILES_PER_STEP);
     await readProfiles(db2, deps, userId, accountId, people, now, mode, step, started, budgetMs * 0.75);
   }
@@ -17805,23 +18329,6 @@ async function refreshTies(db2, userId, now, scope = {}) {
   const interactions = INTERACTION_KINDS.some((k) => keep.has(k));
   const employment = keep.has("co_tenure") || keep.has("same_current_company");
   const education = keep.has("same_school_cohort");
-  const rows = await db2.query(
-    `select ${TIE_PERSON_COLUMNS} from orbit.people p
-      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
-      order by p.id`,
-    [userId]
-  );
-  const idRows = !interactions ? [] : await db2.sql`
-        select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
-          join orbit.people p on p.id = pi.person_id
-         where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self`;
-  const idsBy = /* @__PURE__ */ new Map();
-  for (const r of idRows) {
-    const arr = idsBy.get(r.person_id) ?? [];
-    arr.push(r);
-    idsBy.set(r.person_id, arr);
-  }
-  const people = rows.map((r) => toPerson(r, idsBy.get(r.id)));
   const threadRows = !interactions ? [] : await db2.sql`
         select id, participant_person_ids, last_at, first_at from orbit.threads
          where user_id = ${userId}::uuid and cardinality(participant_person_ids) between 2 and ${GROUP_MAX2}::int
@@ -17876,6 +18383,49 @@ async function refreshTies(db2, userId, now, scope = {}) {
     })),
     attendeePersonIds: e.attendee_person_ids
   }));
+  const narrow = scoped && !employment && !education && !keep.has("same_city");
+  const near = new Set(focus);
+  const addrs2 = /* @__PURE__ */ new Set();
+  if (narrow) {
+    for (const t of threadRows) for (const id of t.participant_person_ids ?? []) near.add(id);
+    for (const e of eventRows) {
+      for (const id of e.attendee_person_ids ?? []) near.add(id);
+      for (const a of e.attendees ?? []) if (a.email) addrs2.add(normalizeEmail(a.email));
+    }
+    for (const m of msgRows) {
+      if (m.from_person_id) near.add(m.from_person_id);
+      for (const a of [m.from_addr, ...m.to_addrs ?? [], ...m.cc_addrs ?? []])
+        if (a) addrs2.add(normalizeEmail(a));
+    }
+  }
+  const rows = await db2.query(
+    `select ${TIE_PERSON_COLUMNS} from orbit.people p
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+        and (not $2::boolean or p.id = any($3::uuid[])
+          or exists (select 1 from orbit.person_identities pi
+                      where pi.user_id = $1::uuid and pi.person_id = p.id and pi.kind = 'email'
+                        and pi.value_norm = any($4::text[]))
+          or (p.primary_email is not null and
+              case when lower(trim(p.primary_email)) ~ '@(gmail|googlemail)\\.com$'
+                   then replace(split_part(split_part(lower(trim(p.primary_email)), '@', 1), '+', 1), '.', '')
+                        || '@gmail.com'
+                   else lower(trim(p.primary_email)) end = any($4::text[])))
+      order by p.id`,
+    [userId, narrow, [...near], [...addrs2]]
+  );
+  const loaded = rows.map((r) => r.id);
+  const idRows = !interactions ? [] : await db2.sql`
+        select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
+          join orbit.people p on p.id = pi.person_id
+         where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self
+           and (not ${narrow}::boolean or pi.person_id = any(${narrow ? loaded : []}::uuid[]))`;
+  const idsBy = /* @__PURE__ */ new Map();
+  for (const r of idRows) {
+    const arr = idsBy.get(r.person_id) ?? [];
+    arr.push(r);
+    idsBy.set(r.person_id, arr);
+  }
+  const people = rows.map((r) => toPerson(r, idsBy.get(r.id)));
   const affKinds = [...employment ? ["employment"] : [], ...education ? ["education"] : []];
   const affiliations = !affKinds.length ? [] : (await db2.sql`
           select a.* from orbit.affiliations a join orbit.people p on p.id = a.person_id
@@ -17966,8 +18516,11 @@ async function upsertTies(db2, userId, rows, now) {
                             last_seen_at)
     select ${userId}::uuid, (r ->> 'a')::uuid, (r ->> 'b')::uuid, r ->> 'kind', (r ->> 'w')::real, (r ->> 'c')::real,
            r -> 'evidence', coalesce((r ->> 'first')::timestamptz, ${now}::timestamptz),
-           coalesce((r ->> 'last')::timestamptz, ${now}::timestamptz)
+           coalesce((r ->> 'last')::timestamptz, t.last_seen_at, ${now}::timestamptz)
       from jsonb_array_elements(${JSON.stringify(payload)}::jsonb) r
+      left join orbit.ties t
+        on t.user_id = ${userId}::uuid and t.a_person_id = (r ->> 'a')::uuid and t.b_person_id = (r ->> 'b')::uuid
+       and t.kind = r ->> 'kind'
     on conflict (user_id, a_person_id, b_person_id, kind) do update set
       weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
       first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
@@ -17987,7 +18540,11 @@ async function upsertTie(db2, userId, t, now) {
                             last_seen_at)
     values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
             coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
-            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
+            coalesce(${t.lastSeenAt ?? null}::timestamptz,
+                     (select x.last_seen_at from orbit.ties x
+                       where x.user_id = ${userId}::uuid and x.a_person_id = ${a}::uuid and x.b_person_id = ${b}::uuid
+                         and x.kind = ${t.kind}),
+                     ${now}::timestamptz))
     on conflict (user_id, a_person_id, b_person_id, kind) do update set
       weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
       first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
@@ -20159,278 +20716,6 @@ var SocialBudgetSpent = class extends Error {
     this.retryAt = retryAt;
   }
 };
-
-// packages/core/src/entity/social.ts
-var PUBLIC_FIGURE_FOLLOWERS = 5e4;
-var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
-function accountKind(a) {
-  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
-  const name = (a.name ?? "").trim();
-  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
-  if (name && BRAND_WORDS.test(name)) return "brand";
-  const words6 = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
-  if (words6.length >= 2) return "person";
-  if (a.business) return "brand";
-  return "unknown";
-}
-var HUBS = [
-  "linktr.ee",
-  "linktree.com",
-  "beacons.ai",
-  "bio.link",
-  "lnk.bio",
-  "carrd.co",
-  "campsite.bio",
-  "hoo.be"
-];
-function normalizeLink(raw) {
-  const s = raw.trim().toLowerCase();
-  if (!s) return void 0;
-  const m = s.match(/^(?:https?:\/\/)?(?:www\.)?([^\s?#]+?)\/?(?:[?#].*)?$/);
-  return m?.[1];
-}
-function handleFromLink(raw, platform) {
-  const l = normalizeLink(raw);
-  if (!l) return void 0;
-  const hosts = platform === "instagram" ? ["instagram.com", "instagr.am"] : ["x.com", "twitter.com", "mobile.twitter.com"];
-  for (const h of hosts) {
-    if (!l.startsWith(`${h}/`)) continue;
-    const seg = l.slice(h.length + 1).split("/")[0];
-    if (!seg || ["p", "reel", "stories", "explore", "i", "home", "intent", "share", "search"].includes(seg))
-      return void 0;
-    return seg.replace(/^@/, "");
-  }
-  return void 0;
-}
-var normalizeHandle = (h) => h.trim().replace(/^@/, "").toLowerCase();
-function handlesIn(text3, platform) {
-  const out = /* @__PURE__ */ new Set();
-  for (const m of text3.matchAll(
-    /\b(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am|x\.com|twitter\.com)\/[\w.@-]+/gi
-  )) {
-    const h = handleFromLink(m[0], platform);
-    if (h) out.add(normalizeHandle(h));
-  }
-  const label = platform === "instagram" ? /\b(?:ig|insta|instagram)\s*[:-]?\s*@([\w.]{2,30})/gi : /\b(?:x|twitter)\s*[:-]?\s*@(\w{2,15})/gi;
-  for (const m of text3.matchAll(label)) out.add(normalizeHandle(m[1]));
-  return [...out];
-}
-var tokensOf2 = (s) => s.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").split(/[^a-z0-9]+/).filter(Boolean);
-var GENERIC_ORG_WORDS = /* @__PURE__ */ new Set([
-  "the",
-  "of",
-  "at",
-  "and",
-  "university",
-  "college",
-  "inc",
-  "llc",
-  "ltd",
-  "co",
-  "corp",
-  "corporation",
-  "company",
-  "group",
-  "hq"
-]);
-function bioMentions(bio, org) {
-  if (!bio || !org) return false;
-  const norm2 = normalizeCompany(org);
-  const words6 = tokensOf2(norm2).filter((w) => w.length >= 2 && !GENERIC_ORG_WORDS.has(w));
-  if (!words6.length || words6.length === 1 && words6[0].length < 3) return false;
-  const bioTokens = tokensOf2(bio);
-  const joined = ` ${bioTokens.join(" ")} `;
-  if (joined.includes(` ${words6.join(" ")} `)) return true;
-  const squashed = words6.join("");
-  return bioTokens.some((t) => t === squashed || t === `${squashed}hq`);
-}
-function bioYear(bio) {
-  if (!bio) return void 0;
-  const m = bio.match(/(?:'|’|\bclass of\s*|\b)(20\d{2}|\d{2})\b/i);
-  if (!m) return void 0;
-  const n = Number(m[1]);
-  if (m[1].length === 2) return n >= 10 && n <= 40 ? 2e3 + n : void 0;
-  return n >= 2e3 && n <= 2040 ? n : void 0;
-}
-function handleSpellsName(handle, first, last) {
-  const h = normalizeHandle(handle);
-  if (/\d/.test(h)) return 0;
-  const f = tokensOf2(first).join("");
-  const l = tokensOf2(last).join("");
-  if (!f || !l) return 0;
-  const bare3 = h.replace(/[._-]/g, "");
-  if (bare3 === `${f}${l}` || bare3 === `${l}${f}`) return 1;
-  if (bare3 === `${f[0]}${l}` || bare3 === `${f}${l[0]}`) return 0.7;
-  if (bare3.includes(f) && bare3.includes(l)) return 0.8;
-  if (bare3 === f || bare3 === l) return 0.3;
-  return 0;
-}
-var COMMON_SURNAMES = new Set(
-  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
-);
-var isRareName = (last) => {
-  const l = tokensOf2(last).join("");
-  return l.length >= 3 && !COMMON_SURNAMES.has(l);
-};
-var PERSON_SPECIFIC = /* @__PURE__ */ new Set([
-  "employer_role_small",
-  "school_year",
-  "same_link",
-  "same_picture"
-]);
-var SOCIAL_WEIGHTS = {
-  bias: -3.5,
-  name: 4,
-  handle: 0.8,
-  employer: 1,
-  employer_role_small: 3,
-  school: 0.8,
-  school_year: 2.5,
-  same_link: 4,
-  same_picture: 3.5,
-  place: 0.4,
-  rare_name: 0.8,
-  neighbours: 0.6,
-  public_figure: -5,
-  other_handle: -1.5
-};
-var AUTO_SOCIAL = 0.95;
-var ASK_SOCIAL = 0.6;
-var MIN_NAME = 0.5;
-var sigmoid4 = (x) => 1 / (1 + Math.exp(-x));
-function socialProof(a, c) {
-  const handle = normalizeHandle(a.username);
-  for (const l of c.links ?? []) {
-    const h = handleFromLink(l, a.platform);
-    if (h && normalizeHandle(h) === handle) return "own_links";
-  }
-  const slug = c.person.linkedinSlug ?? linkedInSlug(c.person.linkedinUrl);
-  if (slug) {
-    for (const l of [
-      ...a.links ?? [],
-      ...a.bio ? a.bio.match(/\S*linkedin\.com\/in\/[\w%-]+/gi) ?? [] : []
-    ]) {
-      if (linkedInSlug(l.startsWith("http") ? l : `https://${l}`) === slug) return "links_back";
-    }
-  }
-  if (a.email) {
-    const e = normalizeEmail(a.email);
-    if ([c.person.primaryEmail, ...c.person.emails ?? []].some((x) => x && normalizeEmail(x) === e))
-      return "contact";
-  }
-  if (a.phone && c.person.phones?.length) {
-    const digits = (p) => p.replace(/\D/g, "").slice(-10);
-    if (c.person.phones.some((p) => digits(p) === digits(a.phone) && digits(p).length >= 10))
-      return "contact";
-  }
-  if ((c.contactHandles ?? []).some((h) => normalizeHandle(h) === handle)) return "address_book";
-  return void 0;
-}
-function socialSignals(a, c) {
-  const p = c.person;
-  const s = {};
-  const name = compareNames(a.name ?? "", p.displayName || `${p.firstName} ${p.lastName}`);
-  s.name = name.score;
-  const handle = handleSpellsName(a.username, p.firstName, p.lastName);
-  if (handle) s.handle = handle;
-  const employer = bioMentions(a.bio, p.currentOrganizationRaw);
-  if (employer) {
-    const titleWords = tokensOf2(p.currentTitle ?? "").filter((w) => w.length >= 3);
-    const bio = tokensOf2(a.bio ?? "");
-    const role = titleWords.some((w) => bio.includes(w));
-    const small = typeof c.employerSize === "number" && c.employerSize < 1e3;
-    if (role && small) s.employer_role_small = 1;
-    else s.employer = 1;
-  }
-  if (bioMentions(a.bio, p.school)) {
-    const y = bioYear(a.bio);
-    if (y && c.schoolYear && y === c.schoolYear) s.school_year = 1;
-    else s.school = 1;
-  }
-  const theirs = new Set(
-    (c.links ?? []).map(normalizeLink).filter((l) => !!l && !HUBS.some((h) => l.startsWith(h)))
-  );
-  if ((a.links ?? []).some((l) => {
-    const n = normalizeLink(l);
-    return !!n && theirs.has(n);
-  }))
-    s.same_link = 1;
-  if (a.pictureHash && !a.defaultPicture && c.pictureHash && a.pictureHash === c.pictureHash)
-    s.same_picture = 1;
-  const city = (p.location ?? "").split(",")[0]?.trim();
-  if (city && city.length >= 3 && a.bio && tokensOf2(a.bio).join(" ").includes(tokensOf2(city).join(" ")))
-    s.place = 1;
-  if (isRareName(p.lastName) && name.score >= 0.95) s.rare_name = 1;
-  if ((c.sharedNeighbours ?? 0) > 0) s.neighbours = Math.min(2, c.sharedNeighbours);
-  if (accountKind(a) === "public_figure") s.public_figure = 1;
-  const handleNorm = normalizeHandle(a.username);
-  if ((c.otherHandles ?? []).some((h) => normalizeHandle(h) !== handleNorm)) s.other_handle = 1;
-  return s;
-}
-function socialScore(signals) {
-  let z9 = SOCIAL_WEIGHTS.bias;
-  for (const [k, v] of Object.entries(signals)) z9 += SOCIAL_WEIGHTS[k] * v;
-  return sigmoid4(z9);
-}
-function matchSocialAccount(a, candidates, opts = {}) {
-  const pool2 = candidates.filter((c) => !opts.rejected?.has(c.person.id));
-  const proven = pool2.map((c) => ({ c, proof: socialProof(a, c) })).filter((x) => !!x.proof);
-  if (proven.length === 1)
-    return { kind: "attach", personId: proven[0].c.person.id, via: "proof", proof: proven[0].proof };
-  if (proven.length > 1) return { kind: "none", reason: "ambiguous" };
-  if (accountKind(a) !== "person") return { kind: "none", reason: "not_a_person" };
-  const scored = pool2.map((c) => {
-    const signals = socialSignals(a, c);
-    return { c, signals, score: (signals.name ?? 0) < MIN_NAME ? 0 : socialScore(signals) };
-  }).filter((x) => x.score >= ASK_SOCIAL).sort((x, y) => y.score - x.score);
-  if (!scored.length) return { kind: "none", reason: pool2.length ? "low" : "no_candidate" };
-  if (scored.length > 1) {
-    const best2 = scored[0];
-    if (!best2.c.knownToStudent) return { kind: "none", reason: "ambiguous" };
-    return {
-      kind: "ask",
-      personId: best2.c.person.id,
-      score: Math.min(best2.score, AUTO_SOCIAL - 0.01),
-      signals: best2.signals
-    };
-  }
-  const best = scored[0];
-  const specific = Object.keys(best.signals).some((k) => PERSON_SPECIFIC.has(k));
-  if (best.score >= AUTO_SOCIAL && specific)
-    return {
-      kind: "attach",
-      personId: best.c.person.id,
-      via: "score",
-      score: best.score,
-      signals: best.signals
-    };
-  if (!best.c.knownToStudent) return { kind: "none", reason: "stranger" };
-  return {
-    kind: "ask",
-    personId: best.c.person.id,
-    score: Math.min(best.score, AUTO_SOCIAL - 0.01),
-    signals: best.signals
-  };
-}
-function matchTargetAccount(a, target) {
-  const proof = socialProof(a, target);
-  if (proof) return { kind: "attach", personId: target.person.id, via: "proof", proof };
-  return { kind: "none", reason: "stranger" };
-}
-function socialBlock(a, people) {
-  const name = (a.name ?? "").trim();
-  const handle = normalizeHandle(a.username);
-  return people.filter((c) => {
-    const p = c.person;
-    if (name && compareNames(name, p.displayName || `${p.firstName} ${p.lastName}`).score >= MIN_NAME)
-      return true;
-    if (handleSpellsName(handle, p.firstName, p.lastName) >= 0.7) return true;
-    if (!name) {
-      return !!socialProof(a, c);
-    }
-    return isFirstNameVariant(name.split(/\s+/)[0] ?? "", p.firstName) && !!p.lastName && handle.includes(tokensOf2(p.lastName).join(""));
-  });
-}
 
 // packages/core/src/graph/socialLookup.ts
 var MAX_LIST_READ = 2e3;
@@ -23646,6 +23931,30 @@ function patternOf(local, f, l) {
 }
 var ROLE_LOCAL = /^(info|hello|hi|team|founders?|support|admin|contact|office|admissions|housing|careers|jobs|hr|sales|press|media|noreply|no-reply|help|events|marketing|billing|accounts?|ops|legal|security|partners?|investors?|community|reshall|mailroom)\b/;
 var ROLE_NAME2 = /\b(team|founders|office|services|housing|support|admissions|corps|mailroom|invitational|department|committee|club|association|council|center|centre|newsletter|notifications?)\b/i;
+function isRoleAddress2(email) {
+  const local = email?.trim().toLowerCase().split("@")[0];
+  return !!local && ROLE_LOCAL.test(local);
+}
+function isEvidence(confidence) {
+  return !confidence || confidence === "verified" || confidence === "page";
+}
+function domainNamesOrg(domain, org) {
+  const label = domain?.toLowerCase().split(".")[0] ?? "";
+  const k = normOrg(org).replace(/[^a-z0-9]/g, "");
+  return label.length >= 3 && k.length >= 3 && (k.includes(label) || label.includes(k));
+}
+function isCompanyDomain(domain, org, o) {
+  if (isPersonalEmailDomain(domain)) return false;
+  if (o.facts?.has(domain)) return true;
+  if (domainNamesOrg(domain, org)) return true;
+  if (isUniversity(domain) && !isSchoolOrg(org)) return false;
+  return o.count >= 2;
+}
+function ownSiteDomain(c) {
+  const page2 = siteDomain(c.url);
+  const orgs = [...c.org ? [c.org] : [], ...orgsOf(c)];
+  return page2 && orgs.some((o) => domainNamesOrg(page2, o)) ? page2 : void 0;
+}
 function domainPattern(known, domain) {
   const counts = /* @__PURE__ */ new Map();
   let people = 0;
@@ -23709,11 +24018,16 @@ function domainsOf(c, orgDomains) {
   };
   add2(workDomain(c.email));
   for (const d of orgDomainsOf(c, orgDomains)) add2(d);
-  add2(siteDomain(c.url));
+  add2(ownSiteDomain(c));
   return out;
 }
 var isUniversity = (d) => /\.(edu|ac\.[a-z]{2})$/.test(d);
 async function fillEmails(cands, opts) {
+  for (const c of cands)
+    if (c.entity === "person" && c.email && isRoleAddress2(c.email)) {
+      c.email = void 0;
+      c.emailConfidence = void 0;
+    }
   if (opts.lookup) {
     const want = cands.filter((c) => c.entity === "person" && !c.email && !c.lastNameObfuscated).slice(0, opts.maxLookups ?? MAX_LOOKUPS);
     const got = await Promise.all(want.map((c) => opts.lookup(c).catch(() => void 0)));
@@ -23726,7 +24040,7 @@ async function fillEmails(cands, opts) {
   }
   const known = [
     ...opts.known,
-    ...cands.filter((c) => c.email).map((c) => ({ name: c.name, email: c.email }))
+    ...cands.filter((c) => c.email && isEvidence(c.emailConfidence)).map((c) => ({ name: c.name, email: c.email }))
   ];
   const patterns = /* @__PURE__ */ new Map();
   const patternAt = (d) => {
@@ -23803,46 +24117,71 @@ async function take(d, provider, operation, units, usdPerUnit = 0) {
   };
 }
 function emailLookup(d) {
-  return async (c) => {
+  return async (c, note2) => {
     const slug = linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl));
     const n = c.lastNameObfuscated ? void 0 : nameParts(c.name, c.firstName, c.lastName);
     const domain = d.domainOf?.(c);
-    const mine = await fromLinkedIn(d, c, slug);
+    const li = { failed: false };
+    const mine = await fromLinkedIn(d, c, slug, li);
     if (mine) return mine;
+    const miss = (failed) => {
+      if (note2 && (failed || li.failed)) note2.unchecked = true;
+      return void 0;
+    };
     const finder = d.enrow?.configured ? "e" : d.icypeas?.configured ? "i" : "";
     const asked = `${finder}${d.hunter?.configured ? "h" : ""}${d.apollo?.configured ? "a" : ""}`;
-    if (!asked) return void 0;
+    if (!asked) return miss(false);
     const who = slug ? `li:${slug}` : c.memberId ? `mid:${c.memberId}` : n && domain ? `nd:${n.f}.${n.l}@${domain}` : n && orgsOf(c)[0] ? `nc:${n.f}.${n.l}@${orgsOf(c)[0].toLowerCase()}` : void 0;
-    if (!who) return void 0;
+    if (!who) return miss(false);
     const key2 = `email:${asked}:${who}`;
     const hit = await d.cache.get(key2).catch(() => void 0);
-    if (hit) return "none" in hit ? void 0 : hit;
-    const found = await fromFinder(d, c, n, domain) ?? await fromHunter(d, c, slug, n, domain) ?? await fromApollo(d, c, domain);
-    await d.cache.put(key2, "email_lookup", found ?? { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
-    return found;
+    if (hit) return "none" in hit || isRoleAddress2(hit.email) ? miss(false) : hit;
+    const paid = { failed: false };
+    const found = await fromFinder(d, c, n, domain, paid) ?? await fromHunter(d, c, slug, n, domain, paid) ?? await fromApollo(d, c, domain, paid);
+    if (found || !paid.failed)
+      await d.cache.put(key2, "email_lookup", found ?? { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
+    return found ?? miss(paid.failed);
   };
 }
-async function fromLinkedIn(d, c, slug) {
+function linkedInEmail(d) {
+  return async (c, note2) => {
+    const t = { failed: false };
+    const mine = await fromLinkedIn(d, c, linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl)), t);
+    if (!mine && t.failed && note2) note2.unchecked = true;
+    return mine;
+  };
+}
+async function fromLinkedIn(d, c, slug, t) {
   if (c.networkDistance !== 1 || !d.unipile?.configured || !d.unipileAccountId) return void 0;
   const id = c.memberId ?? slug;
   if (!id) return void 0;
-  if (d.budget && !(await d.budget.check(d.userId, "unipile_profile", 1)).ok) return void 0;
+  const fail = () => {
+    t.failed = true;
+    return void 0;
+  };
+  if (d.budget && !(await d.budget.check(d.userId, "unipile_profile", 1)).ok) return fail();
   const r = await d.unipile.profile(d.unipileAccountId, id, { sections: [] });
-  if (!r.ok) return void 0;
+  if (!r.ok) return fail();
   await d.budget?.record(d.userId, {
     provider: "unipile_profile",
     operation: "profile_view",
     units: 1,
     costUsd: 0
   });
-  const email = r.value.contact_info?.emails?.find((e) => typeof e === "string" && e.includes("@"));
+  const email = r.value.contact_info?.emails?.find(
+    (e) => typeof e === "string" && e.includes("@") && !isRoleAddress2(e)
+  );
   return email ? { email: email.trim().toLowerCase(), source: "linkedin", status: "verified" } : void 0;
 }
-async function fromFinder(d, c, n, domain) {
+async function fromFinder(d, c, n, domain, t) {
   if (!n || !domain) return void 0;
+  const fail = () => {
+    t.failed = true;
+    return void 0;
+  };
   if (d.enrow?.configured) {
     const slot = await take(d, "enrow", "find", 1, CREDIT_USD.enrow);
-    if (!slot) return void 0;
+    if (!slot) return fail();
     const r = await d.enrow.findEmail({
       fullname: `${n.f} ${n.l}`,
       domain,
@@ -23851,23 +24190,29 @@ async function fromFinder(d, c, n, domain) {
     const email = r.ok ? r.value.email?.trim().toLowerCase() : void 0;
     const valid = r.ok && (r.value.qualification ?? "").toLowerCase() === "valid";
     await slot.settle(email?.includes("@") ? Math.max(1, r.ok ? r.value.credits_used ?? 1 : 1) : 0);
-    if (email?.includes("@") && valid && email.endsWith(`@${domain}`))
+    if (!r.ok) return fail();
+    if (email?.includes("@") && valid && email.endsWith(`@${domain}`) && !isRoleAddress2(email))
       return { email, source: "enrow", status: "verified" };
     return void 0;
   }
   if (d.icypeas?.configured) {
     const slot = await take(d, "icypeas", "find", 1, CREDIT_USD.icypeas);
-    if (!slot) return void 0;
+    if (!slot) return fail();
     const r = await d.icypeas.findEmail({ firstname: n.f, lastname: n.l, domainOrCompany: domain });
     await slot.settle(r.ok && r.value.debited ? 1 : 0);
-    if (!r.ok || !r.value.email?.includes("@")) return void 0;
+    if (!r.ok) return fail();
+    if (!r.value.email?.includes("@") || isRoleAddress2(r.value.email)) return void 0;
     const sure = /^(ultra_sure|very_sure)$/i.test(r.value.certainty ?? "");
     return { email: r.value.email, source: "icypeas", status: sure ? "verified" : "guess" };
   }
   return void 0;
 }
-async function fromHunter(d, c, slug, n, domain) {
+async function fromHunter(d, c, slug, n, domain, t) {
   if (!d.hunter?.configured) return void 0;
+  const fail = () => {
+    t.failed = true;
+    return void 0;
+  };
   const asks = [];
   if (slug) asks.push({ by: "handle", params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, domain } });
@@ -23875,16 +24220,16 @@ async function fromHunter(d, c, slug, n, domain) {
   if (n && company) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, company } });
   for (const ask of asks) {
     const slot = await take(d, "hunter", "find", 1);
-    if (!slot) return void 0;
+    if (!slot) return fail();
     const r = await d.hunter.findEmail(ask.params);
     if (!r.ok) {
       await slot.settle(0);
-      return void 0;
+      return fail();
     }
     const h = r.value.data;
     const email = h?.email?.trim().toLowerCase();
     await slot.settle(h && email?.includes("@") ? 1 : 0);
-    if (!h || !email?.includes("@")) continue;
+    if (!h || !email?.includes("@") || isRoleAddress2(email)) continue;
     const theirs = linkedInSlugOf(cleanLinkedInUrl(h.linkedin_url));
     if (slug && theirs && theirs !== slug) continue;
     const v = deliverability(h.verification?.status);
@@ -23910,15 +24255,20 @@ function domainTemplate(d) {
   const hunter = d.hunter;
   if (!hunter?.configured) return void 0;
   const asked = /* @__PURE__ */ new Map();
+  const failed = /* @__PURE__ */ new Set();
   const ask = async (domain) => {
     const key2 = `pattern:${domain}`;
     const hit = await d.cache.get(key2).catch(() => void 0);
     if (hit) return hit.t;
     const slot = await take(d, "hunter", "domain", 1);
-    if (!slot) return void 0;
+    if (!slot) {
+      failed.add(domain);
+      return void 0;
+    }
     const r = await hunter.domainPattern(domain);
     if (!r.ok) {
       await slot.settle(0);
+      failed.add(domain);
       return void 0;
     }
     const t = r.value.data?.pattern ?? void 0;
@@ -23926,14 +24276,16 @@ function domainTemplate(d) {
     await d.cache.put(key2, "email_pattern", t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
     return t;
   };
-  return (domain) => {
+  return async (domain, note2) => {
     const k = domain.toLowerCase();
     let p = asked.get(k);
     if (!p) {
       p = ask(k);
       asked.set(k, p);
     }
-    return p;
+    const t = await p;
+    if (!t && note2 && failed.has(k)) note2.unchecked = true;
+    return t;
   };
 }
 function emailVerifier(d) {
@@ -23974,7 +24326,8 @@ function cachedTemplate(cache3) {
     return hit?.t;
   };
 }
-async function fromApollo(d, c, domain) {
+var APOLLO_LOCKED = /not_unlocked|^email_not|@domain\.com$/;
+async function fromApollo(d, c, domain, t) {
   if (!d.apollo?.configured) return void 0;
   const url = cleanLinkedInUrl(c.linkedinUrl);
   const [first = "", ...rest] = c.name.trim().split(/\s+/);
@@ -23983,16 +24336,26 @@ async function fromApollo(d, c, domain) {
   const params = url ? { linkedin_url: url } : firstName && lastName && domain && !c.lastNameObfuscated ? { first_name: firstName, last_name: lastName, domain } : void 0;
   if (!params) return void 0;
   const slot = await take(d, "apollo_match", "match", 1);
-  if (!slot) return void 0;
+  if (!slot) {
+    t.failed = true;
+    return void 0;
+  }
   const r = await d.apollo.matchPerson({ ...params, reveal_personal_emails: false });
   await slot.settle(r.ok ? 1 : 0);
-  if (!r.ok) return void 0;
+  if (!r.ok) {
+    t.failed = true;
+    return void 0;
+  }
   const p = r.value.person;
   const email = p?.email?.trim().toLowerCase();
-  if (!email?.includes("@")) return void 0;
-  const status = (p?.email_status ?? "").toLowerCase();
+  if (!email?.includes("@") || APOLLO_LOCKED.test(email) || isRoleAddress2(email)) return void 0;
+  const status = (p?.email_status ?? "").trim().toLowerCase();
   if (/unavailable|bounced|invalid/.test(status)) return void 0;
-  return { email, source: "apollo", status: /guess|extrapolat/.test(status) ? "guess" : "verified" };
+  const at = email.split("@")[1] ?? "";
+  const orgs = [...c.org ? [c.org] : [], ...orgsOf(c)];
+  const apolloDomain = (p?.organization?.primary_domain ?? siteDomain(p?.organization?.website_url ?? void 0))?.toLowerCase();
+  const theirCompany = at === domain?.toLowerCase() || orgs.some((o) => domainNamesOrg(at, o)) || !orgs.length && !domain && !!url && at === apolloDomain;
+  return { email, source: "apollo", status: status === "verified" && theirCompany ? "verified" : "guess" };
 }
 
 // supabase/functions/_shared/sourcing/ondemand.ts
@@ -24022,21 +24385,23 @@ function emailToolsFor(s, userId, unipileAccountId) {
     template: domainTemplate(deps),
     verify: emailVerifier(deps),
     lookup: (domainOf) => emailLookup({ ...deps, domainOf }),
+    linkedin: linkedInEmail(deps),
     mx: dnsMx(s.fetch)
   };
 }
 var UNCHECKED = /* @__PURE__ */ new Set(["pattern", "guess"]);
 async function checkBuiltAddress(s, userId, person) {
   if (person.confidence === "invalid") return "invalid";
-  if (!person.confidence || !UNCHECKED.has(person.confidence) || person.checkedAt) return "ok";
+  if (!person.confidence || !UNCHECKED.has(person.confidence)) return "ok";
+  if (person.checkedAt) return "unconfirmed";
   const verify = emailToolsFor(s, userId).verify;
   const v = verify ? await verify(person.email).catch(() => void 0) : void 0;
-  if (!v) return "ok";
+  if (!v) return "unconfirmed";
   const next = v === "valid" ? "verified" : v === "invalid" ? "invalid" : person.confidence;
   await s.db.sql`
     update orbit.people set email_confidence = ${next}, email_checked_at = ${s.now()}::timestamptz
      where id = ${person.id}::uuid and user_id = ${userId}::uuid`;
-  return v === "invalid" ? "invalid" : "ok";
+  return v === "valid" ? "ok" : v === "invalid" ? "invalid" : "unconfirmed";
 }
 
 // supabase/functions/_shared/sending/files.ts
@@ -24607,6 +24972,7 @@ ${d.body}`)) {
     return { status: "held", reason: cap };
   }
   let out;
+  let guessedAddress = false;
   if (d.channel === "gmail") {
     if (!person.primary_email) {
       await settle2("failed", { error: "no_email" });
@@ -24623,6 +24989,7 @@ ${d.body}`)) {
       await audit2(db2, userId, "system", "draft.hold", d.id, { reason: "email_invalid" });
       return { status: "held", reason: "email_invalid" };
     }
+    guessedAddress = address2 === "unconfirmed";
     const copy = unconfirmed ? await gmailSentCopy(s, userId, {
       to: person.primary_email,
       draftId: d.id,
@@ -24761,7 +25128,11 @@ ${d.body}`)) {
       update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
              answered_at = coalesce(answered_at, ${now}::timestamptz)
        where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
-  return { status: "sent", providerMessageId: out.providerMessageId };
+  return {
+    status: "sent",
+    providerMessageId: out.providerMessageId,
+    ...guessedAddress ? { addressUnconfirmed: true } : {}
+  };
 }
 async function afterSend(db2, userId, d, now) {
   const [c] = await db2.sql`
@@ -28211,6 +28582,21 @@ function pageAnchors(html, base) {
   return out;
 }
 var nameTokens = (name) => name.toLowerCase().replace(/[^a-z\s'-]/g, " ").split(/\s+/).filter((w) => w.length >= 2 && !["dr", "prof", "professor", "phd", "md"].includes(w));
+function mailtoFit(local, first, last) {
+  const f = first.replace(/[^a-z]/g, "");
+  const l = last.replace(/[^a-z]/g, "");
+  if (l.length < 3 || !f) return 0;
+  const rests = [
+    ...local.startsWith(l) ? [local.slice(l.length)] : [],
+    ...local.endsWith(l) ? [local.slice(0, local.length - l.length)] : []
+  ];
+  let best = 0;
+  for (const rest of rests) {
+    const fit = rest === "" ? 1 : rest === f ? 3 : rest.length >= 2 && (f.startsWith(rest) || rest.startsWith(f)) ? 2 : rest.length <= 2 && rest[0] === f[0] ? 1 : 0;
+    best = Math.max(best, fit);
+  }
+  return best;
+}
 function linksFor(anchors, people, base) {
   const out = /* @__PURE__ */ new Map();
   let host = "";
@@ -28220,6 +28606,8 @@ function linksFor(anchors, people, base) {
     host = "";
   }
   const mailtos = anchors.filter((a) => /^mailto:/i.test(a.href)).map((a) => cleanEmail(a.href.replace(/^mailto:/i, "").split("?")[0])).filter((e) => !!e);
+  const named = people.map((p) => ({ name: p.name, toks: nameTokens(p.name) })).filter((p) => p.toks.length >= 2).map((p) => ({ name: p.name, first: p.toks[0], last: p.toks[p.toks.length - 1] }));
+  const fitOf = (e, who) => mailtoFit(e.split("@")[0].replace(/[^a-z]/g, ""), who.first, who.last);
   const social = /linkedin\.com|twitter\.com|x\.com|facebook\.com|scholar\.google/i;
   for (const p of people) {
     const toks = nameTokens(p.name);
@@ -28248,10 +28636,7 @@ function linksFor(anchors, people, base) {
       });
       if (byPath) entry.profile = byPath.href;
     }
-    const mine = mailtos.find((e) => {
-      const local = e.split("@")[0].replace(/[^a-z]/g, "");
-      return lastKey.length >= 3 && (local.startsWith(lastKey) || local.endsWith(lastKey) || local === `${first[0]}${lastKey}` || local === `${first}${lastKey}`);
-    });
+    const mine = mailtos.map((e) => ({ e, fit: fitOf(e, { first, last }) })).filter((m) => m.fit > 0 && !named.some((o) => o.name !== p.name && fitOf(m.e, o) >= m.fit)).sort((a, b) => b.fit - a.fit)[0]?.e;
     if (mine) entry.email = mine;
     if (entry.profile || entry.email) out.set(p.name, entry);
   }
@@ -28462,7 +28847,7 @@ function fill(into, from) {
 function cleanEmail(e) {
   if (!e) return void 0;
   const s = e.trim().replace(/\s*[[(]\s*at\s*[\])]\s*/i, "@").replace(/\s*[[(]\s*dot\s*[\])]\s*/gi, ".").replace(/^mailto:/i, "").toLowerCase();
-  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(s) ? s : void 0;
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(s) && !isRoleAddress2(s) ? s : void 0;
 }
 var titleCase2 = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -29600,10 +29985,17 @@ async function runSourcing(s, userId, req) {
     budget: budget2,
     cache: cache3
   };
-  const lookup = emailLookup({
+  const paidLookup = emailLookup({
     ...emailDeps,
-    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url)
+    // the page they were found on only when it is their company's own site, never a news or directory page's
+    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? ownSiteDomain(c)
   });
+  const lookup = async (c) => {
+    const note2 = {};
+    const found = await paidLookup(c, note2);
+    if (found || !note2.unchecked) c.emailLookedUp = true;
+    return found;
+  };
   const template = domainTemplate(emailDeps);
   const cached = cachedTemplate(cache3);
   const emailsFor = async (cands) => {
@@ -29617,7 +30009,6 @@ async function runSourcing(s, userId, req) {
     if (!wantsEmails) return;
     const top = cands.filter((c) => c.entity === "person").slice(0, ASKED_LOOKUPS);
     const todo = top.filter((c) => !c.email && !c.lastNameObfuscated);
-    for (const c of todo) c.emailLookedUp = true;
     await fillEmails(todo, {
       known: ctx.known,
       orgDomains: ctx.orgDomains,
@@ -29761,7 +30152,7 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
       select parsed from orbit.uploads
        where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`,
     db2.sql`
-      select id, display_name, org_raw, primary_email as email from orbit.people
+      select id, display_name, org_raw, primary_email as email, email_confidence from orbit.people
        where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
        limit 5000`,
     graph(),
@@ -29778,19 +30169,23 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
     gradYear: u2?.grad_year,
     homeCity: typeof homeCity === "string" ? homeCity.slice(0, 80) : void 0
   });
-  const known = emails.map((e) => ({ name: e.display_name, email: e.email }));
+  const real = emails.filter((e) => isEvidence(e.email_confidence));
+  const known = real.map((e) => ({ name: e.display_name, email: e.email }));
   const emailOf = new Map(emails.map((e) => [e.id, e.email]));
   const tally = /* @__PURE__ */ new Map();
-  for (const e of emails) {
+  for (const e of real) {
     const d = workDomain(e.email);
     if (!d || !e.org_raw) continue;
     const k = norm(e.org_raw);
-    const m = tally.get(k) ?? /* @__PURE__ */ new Map();
-    m.set(d, (m.get(d) ?? 0) + 1);
-    tally.set(k, m);
+    const t = tally.get(k) ?? { org: e.org_raw, domains: /* @__PURE__ */ new Map() };
+    t.domains.set(d, (t.domains.get(d) ?? 0) + 1);
+    tally.set(k, t);
   }
   const orgDomains = /* @__PURE__ */ new Map();
-  for (const [k, m] of tally) orgDomains.set(k, [...m].sort((a, b) => b[1] - a[1])[0][0]);
+  for (const [k, t] of tally) {
+    const best = [...t.domains].sort((a, b) => b[1] - a[1]).find(([d, count2]) => isCompanyDomain(d, t.org, { count: count2 }));
+    if (best) orgDomains.set(k, best[0]);
+  }
   const warm = [...gr.people.values()].filter((p) => p.score >= WARM_SCORE && !p.hidden && !p.doNotContact).sort((a, b) => b.score - a.score).map((p) => ({
     personId: p.id,
     name: p.displayName,
@@ -29926,15 +30321,21 @@ function nameOf(i) {
   if (!i.name || isHandle(i.name, i.email)) return parseName("");
   return parseName(i.name);
 }
-async function upsertOrganization(db2, userId, name) {
+async function upsertOrganization(db2, userId, name, known) {
   const norm2 = normalizeCompany(name);
   if (!name || !norm2) return null;
-  const [row] = await db2.sql`
-    insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, ${name.trim()}, ${norm2})
-    on conflict (user_id, name_norm) do update set name = orbit.organizations.name
-    returning id`;
+  const cached = known?.get(norm2);
+  if (cached) return cached;
+  const [have] = await db2.sql`
+    select id from orbit.organizations where user_id = ${userId}::uuid and name_norm = ${norm2}`;
+  const [row] = have ? [have] : await db2.sql`
+        insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, ${name.trim()}, ${norm2})
+        on conflict (user_id, name_norm) do update set name = orbit.organizations.name
+        returning id`;
+  if (row?.id) known?.set(norm2, row.id);
   return row?.id ?? null;
 }
+var peopleLockKey = (userId) => `orbit.people:${userId}`;
 async function resolvePeople(db2, userId, input, opts) {
   const result = { byKey: /* @__PURE__ */ new Map(), created: /* @__PURE__ */ new Set(), merged: /* @__PURE__ */ new Map() };
   const create = opts.create ?? true;
@@ -29946,26 +30347,36 @@ async function resolvePeople(db2, userId, input, opts) {
     items.push(raw);
   }
   if (!items.length) return result;
+  return db2.begin(async (tx) => {
+    await tx.sql`select pg_advisory_xact_lock(hashtextextended(${peopleLockKey(userId)}, 0))`;
+    return resolveLocked(tx, userId, items, { now: opts.now, create }, result);
+  });
+}
+async function resolveLocked(db2, userId, items, opts, result) {
+  const { create } = opts;
   const emails = [...new Set(items.filter((i) => i.email).map((i) => normalizeEmail(i.email)))];
   const members = [...new Set(items.map((i) => i.linkedinMemberId).filter((x) => !!x))];
   const slugs = [...new Set(items.map(slugOf2).filter((x) => !!x))];
+  const attendees = [...new Set(items.map((i) => i.unipileAttendeeId).filter((x) => !!x))];
   const hits2 = await db2.sql`
-    select pi.kind, pi.value_norm as value, coalesce(p.merged_into, p.id) as person_id
+    select pi.kind, pi.value_norm as value, coalesce(p.merged_into, p.id) as person_id, true as stored
       from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
      where pi.user_id = ${userId}::uuid and p.deleted_at is null
        and ((pi.kind = 'email' and pi.value_norm = any(${emails}::text[]))
          or (pi.kind = 'linkedin_member' and pi.value_norm = any(${members}::text[]))
-         or (pi.kind = 'linkedin_slug' and pi.value_norm = any(${slugs}::text[])))
+         or (pi.kind = 'linkedin_slug' and pi.value_norm = any(${slugs}::text[]))
+         or (pi.kind = 'unipile_attendee' and pi.value_norm = any(${attendees}::text[])))
     union all
-    select 'email', p.primary_email, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'email', p.primary_email, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.primary_email = any(${emails}::text[])
     union all
-    select 'linkedin_member', p.linkedin_member_id, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'linkedin_member', p.linkedin_member_id, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_member_id = any(${members}::text[])
     union all
-    select 'linkedin_slug', p.linkedin_slug, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'linkedin_slug', p.linkedin_slug, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_slug = any(${slugs}::text[])`;
   const byIdentity = new Map(hits2.map((h) => [`${h.kind}:${h.value}`, h.person_id]));
+  const identities = new Set(hits2.filter((h) => h.stored).map((h) => `${h.kind}:${h.value}`));
   const found = (i) => i.linkedinMemberId && byIdentity.get(`linkedin_member:${i.linkedinMemberId}`) || i.email && byIdentity.get(`email:${normalizeEmail(i.email)}`) || slugOf2(i) && byIdentity.get(`linkedin_slug:${slugOf2(i)}`) || void 0;
   const misses = [];
   const known = [];
@@ -30019,7 +30430,9 @@ async function resolvePeople(db2, userId, input, opts) {
     people,
     doNotMerge: new Set(dnm.map((d) => doNotMergeKey(d.person_a, d.person_b))),
     orgDomains: new Map(orgs.map((o) => [o.id, o.domains])),
-    result
+    result,
+    identities,
+    orgIds: /* @__PURE__ */ new Map()
   };
   for (const k of known) {
     result.byKey.set(k.item.key, k.personId);
@@ -30066,7 +30479,7 @@ async function resolvePeople(db2, userId, input, opts) {
       continue;
     }
     if (!create) continue;
-    const pid = await createPerson(ctx, i);
+    const pid = await createPerson2(ctx, i);
     result.byKey.set(i.key, pid);
     if (d.kind === "suggest") await suggestMerge(db2, userId, d.personId, pid, d.score, d.features);
   }
@@ -30099,11 +30512,14 @@ async function insertIdentities(ctx, personId, i) {
   const slug = slugOf2(i);
   if (slug) rows.push(["linkedin_slug", slug, urlOf(i) ?? slug]);
   if (i.unipileAttendeeId) rows.push(["unipile_attendee", i.unipileAttendeeId, i.unipileAttendeeId]);
-  for (const [kind, norm2, raw] of rows)
+  for (const [kind, norm2, raw] of rows) {
+    if (ctx.identities.has(`${kind}:${norm2}`)) continue;
     await ctx.db.sql`
       insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, created_at)
       values (${ctx.userId}::uuid, ${personId}::uuid, ${kind}, ${norm2}, ${raw}, ${src}, ${at}::timestamptz)
       on conflict (user_id, kind, value_norm) do nothing`;
+    ctx.identities.add(`${kind}:${norm2}`);
+  }
 }
 var REPLACEABLE_PHOTO = "^https?://([a-z0-9-]+\\.)*(licdn\\.com|gravatar\\.com)/";
 function linkedInPhotoExpiry(url) {
@@ -30122,15 +30538,23 @@ async function attach(ctx, personId, i) {
   const p = ctx.people.find((x) => x.id === personId);
   const n = nameOf(i);
   const rename = !!p && !!n.full && isPlaceholderName(p);
-  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw, ctx.orgIds) : null;
   const slug = slugOf2(i) ?? null;
+  const email = i.email ? normalizeEmail(i.email) : null;
   await ctx.db.sql`
     update orbit.people set
       display_name = case when ${rename}::boolean then ${n.full} else display_name end,
       first_name = case when ${rename}::boolean then ${n.first || null} else first_name end,
       last_name = case when ${rename}::boolean then ${n.last || null} else last_name end,
       name_norm = case when ${rename}::boolean then ${n.normalized || null} else name_norm end,
-      primary_email = coalesce(primary_email, ${i.email ? normalizeEmail(i.email) : null}),
+      primary_email = case
+        when ${email}::text is not null
+             and (primary_email is null or email_confidence in ('pattern', 'guess', 'invalid'))
+          then ${email}
+        else primary_email end,
+      email_confidence = case
+        when ${email}::text is not null and email_confidence in ('pattern', 'guess', 'invalid') then null
+        else email_confidence end,
       linkedin_member_id = coalesce(linkedin_member_id, ${i.linkedinMemberId ?? null}),
       linkedin_slug = coalesce(linkedin_slug, ${slug}),
       linkedin_url = coalesce(linkedin_url, ${urlOf(i) ?? null}),
@@ -30164,7 +30588,7 @@ async function attach(ctx, personId, i) {
     p.linkedinSlug ??= slug ?? void 0;
   }
 }
-async function createPerson(ctx, i) {
+async function createPerson2(ctx, i) {
   const n = nameOf(i);
   const email = i.email ? normalizeEmail(i.email) : void 0;
   const handle = i.email ? emailLocalPart(i.email.trim().toLowerCase().replace(/^.*</, "").replace(/>.*$/, "")).replace(
@@ -30172,7 +30596,7 @@ async function createPerson(ctx, i) {
     ""
   ) : "";
   const display = n.full || handle || slugOf2(i) || "Unknown";
-  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw, ctx.orgIds) : null;
   const slug = slugOf2(i) ?? null;
   const [row] = await ctx.db.sql`
     insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, primary_email, headline, title,
@@ -30376,6 +30800,71 @@ async function moveSocialRows(tx, p) {
     `delete from orbit.text_days where user_id = $1::uuid and person_id = $2::uuid`,
     p.slice(0, 2)
   );
+}
+var SETTLE_PER_RUN = 200;
+async function settleSamePeople(db2, userId) {
+  const survivors = /* @__PURE__ */ new Set();
+  const fold5 = async (survivor, loser) => {
+    try {
+      const merged = await mergePeople(db2, userId, survivor, loser);
+      if (merged) survivors.add(survivor);
+      return merged;
+    } catch (e) {
+      if (e instanceof SocialMergeRefused) return false;
+      throw e;
+    }
+  };
+  const doubles = await db2.sql`
+    select array_agg(p.id order by p.created_at, p.id) as ids,
+           (select pi.person_id from orbit.person_identities pi
+             where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member'
+               and pi.value_norm = p.linkedin_member_id limit 1) as owner
+      from orbit.people p
+     where p.user_id = ${userId}::uuid and p.linkedin_member_id is not null and p.deleted_at is null
+       and p.merged_into is null and not p.is_self
+     group by p.linkedin_member_id having count(*) > 1
+     limit ${SETTLE_PER_RUN}`;
+  let sameProfile = 0;
+  for (const d of doubles) {
+    const keep = d.owner && d.ids.includes(d.owner) ? d.owner : d.ids[0];
+    for (const id of d.ids) if (id !== keep && await fold5(keep, id)) sameProfile++;
+  }
+  const open = await db2.sql`
+    select person_a, person_b from orbit.merge_suggestions
+     where user_id = ${userId}::uuid and status = 'open' order by score desc limit ${SETTLE_PER_RUN}`;
+  if (!open.length) return { sameProfile, assumed: 0, survivors: [...survivors] };
+  const rows = await db2.query(
+    `select ${PERSON_COLUMNS} from orbit.people p
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self`,
+    [userId]
+  );
+  const asked = [...new Set(open.flatMap((o) => [o.person_a, o.person_b]))];
+  const idRows = await db2.sql`
+    select person_id, kind, value_norm from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = any(${asked}::uuid[])`;
+  const idsBy = /* @__PURE__ */ new Map();
+  for (const r of idRows) idsBy.set(r.person_id, [...idsBy.get(r.person_id) ?? [], r]);
+  let people = rows.map((r) => toPerson(r, idsBy.get(r.id)));
+  const dnm = await db2.sql`
+    select person_a, person_b from orbit.do_not_merge where user_id = ${userId}::uuid`;
+  const orgs = await db2.sql`
+    select id, domains from orbit.organizations where user_id = ${userId}::uuid and cardinality(domains) > 0`;
+  const doNotMerge = new Set(dnm.map((d) => doNotMergeKey(d.person_a, d.person_b)));
+  const orgDomains = new Map(orgs.map((o) => [o.id, o.domains]));
+  let assumed = 0;
+  for (const o of open) {
+    const a = people.find((p) => p.id === o.person_a);
+    const b = people.find((p) => p.id === o.person_b);
+    if (!a || !b) continue;
+    if (!assumeSamePair(a, b, { people, doNotMerge, orgDomains })) continue;
+    const linked = (p) => !!(p.linkedinMemberId || p.linkedinSlug);
+    const keep = linked(a) === linked(b) ? a.createdAt <= b.createdAt ? a : b : linked(a) ? a : b;
+    const lose = keep === a ? b : a;
+    if (!await fold5(keep.id, lose.id)) continue;
+    assumed++;
+    people = people.filter((p) => p.id !== lose.id);
+  }
+  return { sameProfile, assumed, survivors: [...survivors] };
 }
 
 // supabase/functions/_shared/ingest/calendar.ts
@@ -30932,6 +31421,7 @@ async function maybeBounce(db2, userId, messageId, now) {
     now
   });
 }
+var scorePersonKey = (userId, personId, now) => `score.person:${userId}:rapport:${personId}:${now.toISOString().slice(0, 13)}`;
 function classifyHandlers(deps, agents = { env: {} }) {
   return {
     "classify.message": async (job, ctx) => {
@@ -30955,7 +31445,7 @@ function classifyHandlers(deps, agents = { env: {} }) {
           kind: "score.person",
           userId,
           payload: { personIds: [personId] },
-          dedupeKey: `score.person:${userId}:rapport:${id}`
+          dedupeKey: scorePersonKey(userId, personId, ctx.now())
         });
       if ((r.replyClass === "interested" || r.replyClass === "scheduling") && p.history !== true) {
         await ctx.queue.enqueue({
@@ -32752,13 +33242,7 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
   const res = await resolvePeople(db2, userId, items, { now });
   const personOf = (providerId) => providerId ? res.byKey.get(`li:${providerId}`) : void 0;
   const otherIds = [...new Set(others.map((a) => personOf(a.providerId)).filter((x) => !!x))];
-  const [thread] = await db2.sql`
-    insert into orbit.threads (user_id, provider, external_id, category, is_networking)
-    values (${userId}::uuid, 'linkedin', ${chat.id}, 'networking', true)
-    on conflict (user_id, provider, external_id) do update set is_networking = true
-    returning id`;
-  const threadId = thread.id;
-  const out = { threadId, inbound: [], inserted: 0, personIds: otherIds };
+  const wanted = [];
   for (const m of messages) {
     if (m.skip) continue;
     const text3 = (m.text ?? "").trim();
@@ -32766,6 +33250,37 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
     if (!text3 || !sentAt) continue;
     const own = isOwnMessage(m, ownIds);
     const from = own ? null : personOf(m.senderId) ?? (otherIds.length === 1 ? otherIds[0] : null);
+    wanted.push({ m, text: text3, sentAt, own, from });
+  }
+  const twins = wanted.length ? await db2.sql`
+        select r.i, x.thread_id
+          from unnest(${wanted.map((w) => w.m.id)}::text[], ${wanted.map((w) => w.sentAt)}::timestamptz[],
+                      ${wanted.map((w) => w.own)}::boolean[], ${wanted.map((w) => w.from)}::uuid[],
+                      ${wanted.map((w) => w.text)}::text[], ${wanted.map((w) => w.text.slice(0, 200))}::text[])
+               with ordinality as r(id, at, own, from_id, body, snip, i)
+          join orbit.messages x
+            on x.user_id = ${userId}::uuid and x.provider = 'linkedin' and x.sent_at = r.at
+           and x.external_id <> r.id and x.direction = case when r.own then 'out' else 'in' end
+           and x.from_person_id is not distinct from r.from_id
+           and x.to_person_ids @> (case when r.own then ${otherIds}::uuid[] else '{}'::uuid[] end)
+           and x.to_person_ids <@ (case when r.own then ${otherIds}::uuid[] else '{}'::uuid[] end)
+           and (x.body_text = r.body or (x.body_text is null and x.snippet = r.snip))` : [];
+  const already = new Set(twins.map((t) => Number(t.i) - 1));
+  const fresh = wanted.filter((_, i) => !already.has(i));
+  if (!fresh.length && twins.length) {
+    const [known] = await db2.sql`
+      select id from orbit.threads
+       where user_id = ${userId}::uuid and provider = 'linkedin' and external_id = ${chat.id}`;
+    if (!known) return { threadId: twins[0].thread_id, inbound: [], inserted: 0, personIds: otherIds };
+  }
+  const [thread] = await db2.sql`
+    insert into orbit.threads (user_id, provider, external_id, category, is_networking)
+    values (${userId}::uuid, 'linkedin', ${chat.id}, 'networking', true)
+    on conflict (user_id, provider, external_id) do update set is_networking = true
+    returning id`;
+  const threadId = thread.id;
+  const out = { threadId, inbound: [], inserted: 0, personIds: otherIds };
+  for (const { m, text: text3, sentAt, own, from } of fresh) {
     const to = own ? otherIds : [];
     const [row] = await db2.sql`
       insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,
@@ -33483,6 +33998,9 @@ function scoreHandlers(deps) {
       if (!job.userId) throw new JobSkipped("no_user");
       await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
       const now = ctx.now();
+      await settleSamePeople(ctx.db, job.userId).catch(
+        (e) => console.warn("[orbit score.user] settle people", e instanceof Error ? e.message : e)
+      );
       const labelled = (await ctx.db.sql`
           select person_id from orbit.tie_labels where user_id = ${job.userId}::uuid`).map((r) => r.person_id);
       let refit = false;
@@ -33879,165 +34397,6 @@ function storageLogoWriter(url, serviceKey, doFetch = fetch) {
     });
     return r.ok ? `${url}/storage/v1/object/public/company-logos/${path}` : void 0;
   };
-}
-
-// supabase/functions/_shared/search/census.ts
-var SEARCH_LEDGER_TOTAL = 100;
-var CENSUS_SHARE = 0.4;
-var CENSUS_JOB_MS = 5e4;
-var PASS_AGAIN_DAYS = 30;
-var txt2 = (v, n = 200) => typeof v === "string" && v.trim() ? v.trim().slice(0, n) : void 0;
-function censusPeople(items) {
-  if (!Array.isArray(items)) return [];
-  const out = [];
-  for (const raw of items) {
-    if (!raw || typeof raw !== "object") continue;
-    const p = raw;
-    const memberId = txt2(p.id, 120);
-    const name = txt2(p.name, 160);
-    if (!memberId || !name) continue;
-    if (typeof p.network_distance === "string" && p.network_distance !== "DISTANCE_1") continue;
-    const companies = [];
-    const companyIds = {};
-    for (const x of Array.isArray(p.current_positions) ? p.current_positions : []) {
-      if (!x || typeof x !== "object" || companies.length >= 3) continue;
-      const pos = x;
-      const c = txt2(pos.company, 160);
-      if (!c) continue;
-      companies.push(c);
-      const id = pos.company_id == null ? void 0 : txt2(String(pos.company_id), 60);
-      if (id && /^\d+$/.test(id)) companyIds[c] = id;
-    }
-    out.push({
-      memberId,
-      name,
-      headline: txt2(p.headline, 220),
-      location: txt2(p.location, 160),
-      companies,
-      ...Object.keys(companyIds).length ? { companyIds } : {}
-    });
-  }
-  return out;
-}
-function ledgerBucket(accountId, now, share) {
-  const day2 = now.toISOString().slice(0, 10);
-  const end = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
-  end.setUTCDate(end.getUTCDate() + 1);
-  return {
-    key: `connectors:li:search:${day2}:${accountId}`,
-    limit: Math.round(SEARCH_LEDGER_TOTAL * share),
-    expires: end.toISOString()
-  };
-}
-async function spendCensus(db2, accountId, now, share = CENSUS_SHARE) {
-  const b = ledgerBucket(accountId, now, share);
-  const [used] = await db2.sql`
-    select count from public.orbit_proxy_counters where bucket = ${b.key} and expires_at >= now()`;
-  if ((used?.count ?? 0) + 1 > b.limit) return false;
-  const [row] = await db2.sql`
-    select allowed from public.orbit_proxy_take(${[b.key]}::text[], ${[b.limit]}::int[], ${[b.expires]}::timestamptz[])`;
-  return !!row?.allowed;
-}
-async function filePage(db2, userId, people, now) {
-  if (!people.length) return 0;
-  const ids = people.map((p) => p.memberId);
-  const known = await db2.sql`
-    select p.id, p.linkedin_member_id as member from orbit.people p
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
-       and p.linkedin_member_id = any(${ids}::text[])
-    union
-    select i.person_id as id, i.value_norm as member from orbit.person_identities i
-      join orbit.people p on p.id = i.person_id and p.deleted_at is null and p.merged_into is null
-     where i.user_id = ${userId}::uuid and i.kind = 'linkedin_member' and i.value_norm = any(${ids}::text[])`;
-  const byMember = /* @__PURE__ */ new Map();
-  for (const k of known) if (!byMember.has(k.member)) byMember.set(k.member, k.id);
-  const rows = [];
-  const places = [];
-  for (const p of people) {
-    const id = byMember.get(p.memberId);
-    if (!id) continue;
-    if (p.location) {
-      rows.push({ person_id: id, kind: "place", value: p.location, ref: null });
-      places.push({ id, location: p.location });
-    }
-    for (const c of p.companies)
-      rows.push({ person_id: id, kind: "company", value: c, ref: p.companyIds?.[c] ?? null });
-  }
-  if (rows.length)
-    await db2.sql`
-      insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source, at, ref)
-      select ${userId}::uuid, r.person_id, r.kind, r.value, true, 'census', ${now.toISOString()}::timestamptz, r.ref
-        from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as r(person_id uuid, kind text, value text, ref text)
-      on conflict (user_id, person_id, kind, value, source) do update set at = excluded.at, positive = true,
-        ref = coalesce(excluded.ref, facet_assertions.ref)`;
-  if (places.length)
-    await db2.sql`
-      update orbit.people p set location = r.location, updated_at = now()
-        from jsonb_to_recordset(${JSON.stringify(places)}::jsonb) as r(id uuid, location text)
-       where p.id = r.id and p.user_id = ${userId}::uuid and (p.location is null or p.location = '')`;
-  return byMember.size;
-}
-async function runCensusStep(db2, deps, userId, accountId, now) {
-  const [row] = await db2.sql`
-    select cursor, seen, matched, pass_started_at::text, pass_done_at::text from orbit.search_census
-     where user_id = ${userId}::uuid`;
-  if (row?.pass_done_at && !row.cursor && now.getTime() - Date.parse(row.pass_done_at) < PASS_AGAIN_DAYS * 864e5)
-    return { pages: 0, seen: 0, matched: 0, done: true, stopped: "fresh" };
-  const resuming = !!row?.cursor;
-  let cursor = resuming ? row.cursor : null;
-  let seen = resuming ? row.seen : 0;
-  let matched = resuming ? row.matched : 0;
-  const passStarted = resuming && row.pass_started_at ? row.pass_started_at : now.toISOString();
-  const started = deps.clock();
-  const step = { pages: 0, seen: 0, matched: 0, done: false };
-  const base = deps.baseUrl.replace(/\/+$/, "");
-  let lastError = null;
-  while (true) {
-    if (deps.clock() - started > CENSUS_JOB_MS) {
-      step.stopped = "time";
-      break;
-    }
-    if (!await spendCensus(db2, accountId, now)) {
-      step.stopped = "ledger";
-      break;
-    }
-    if (step.pages > 0) await deps.sleep(1500 + Math.floor(deps.random() * 2500));
-    const q = new URLSearchParams({ account_id: accountId, limit: "10" });
-    if (cursor) q.set("cursor", cursor);
-    const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
-      method: "POST",
-      headers: { "X-API-KEY": deps.apiKey, "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ api: "classic", category: "people", network_distance: [1] })
-    });
-    if (res.status >= 400 && res.status < 500) {
-      lastError = `refused ${res.status}`;
-      step.stopped = "refused";
-      break;
-    }
-    if (!res.ok) throw new Error(`unipile ${res.status}`);
-    const body = await res.json();
-    const people = censusPeople(body.items);
-    const knew = await filePage(db2, userId, people, now);
-    step.pages++;
-    step.seen += people.length;
-    step.matched += knew;
-    seen += people.length;
-    matched += knew;
-    cursor = typeof body.cursor === "string" && body.cursor ? body.cursor : null;
-    if (!cursor || !people.length) {
-      cursor = null;
-      step.done = true;
-      break;
-    }
-  }
-  await db2.sql`
-    insert into orbit.search_census (user_id, cursor, seen, matched, pass_started_at, pass_done_at, last_error, updated_at)
-    values (${userId}::uuid, ${cursor}, ${seen}, ${matched}, ${passStarted}::timestamptz,
-            ${step.done ? now.toISOString() : row?.pass_done_at ?? null}::timestamptz, ${lastError}, now())
-    on conflict (user_id) do update set cursor = excluded.cursor, seen = excluded.seen, matched = excluded.matched,
-      pass_started_at = excluded.pass_started_at, pass_done_at = excluded.pass_done_at,
-      last_error = excluded.last_error, updated_at = now()`;
-  return step;
 }
 
 // packages/core/src/search/commonWords.ts
@@ -36539,6 +36898,9 @@ var HEAVY_KINDS = /* @__PURE__ */ new Set([
   "sources.switch"
 ]);
 var HEAVY_PER_TICK = 1;
+var HEAVY_QUEUES = new Set(
+  [...HEAVY_KINDS].map((k) => KIND_QUEUE[k]).filter((q) => !!q)
+);
 var ONCE_PER_TICK = /* @__PURE__ */ new Set(["sync.linkedin"]);
 var HEAVY_AFTER_JOBS = 6;
 var RESERVE_MS = {
@@ -36558,7 +36920,7 @@ var RESERVE_MS = {
   "enrich.dossier": 1e5
 };
 var DEFAULT_RESERVE_MS = 8e3;
-var backoffSec = (readCt) => 30 * 2 ** Math.max(0, readCt - 1);
+var backoffSec = (attempt) => 30 * 2 ** Math.max(0, attempt - 1);
 var ATTEMPTS_AFTER_SPEND = 1;
 var PAID_ERROR_PREFIX = "[paid] ";
 function parse(message) {
@@ -36606,7 +36968,7 @@ async function runTick(deps) {
   outer: while (clock() < deadline) {
     for (const q of QUEUES) {
       if (closed.has(q)) continue;
-      const batch = await queue.read(q, VT_SEC, BATCH);
+      const batch = await queue.read(q, VT_SEC, HEAVY_QUEUES.has(q) ? HEAVY_PER_TICK : BATCH);
       if (!batch.length) continue;
       const readAt = clock();
       const handBack = async (rest) => {
@@ -36663,18 +37025,24 @@ async function runTick(deps) {
   }
   async function runOne(q, msgId, readCt, message) {
     const started = clock();
+    const [before] = await db2.sql`
+      select (select count(*) from orbit.job_runs
+               where queue = ${q} and msg_id = ${msgId}::bigint and status = 'error')
+           + (select count(*) from orbit.job_runs
+               where queue = ${q} and msg_id = ${msgId}::bigint and status = 'running') as n`;
+    const attempt = Number(before?.n ?? 0) + 1;
     const m = parse(message);
     if (!m) {
       await db2.sql`insert into orbit.job_runs (queue, msg_id, kind, status, attempt, error, finished_at, duration_ms)
-        values (${q}, ${msgId}::bigint, 'invalid', 'error', ${readCt}::int, 'malformed message', ${now()}::timestamptz, 0)`;
+        values (${q}, ${msgId}::bigint, 'invalid', 'error', ${attempt}::int, 'malformed message', ${now()}::timestamptz, 0)`;
       await deadLetter(q, msgId, message, "malformed message");
       s.failed++;
       return;
     }
     const job = { ...m, queue: q, msgId, readCt };
-    if (readCt > MAX_READS_UNFINISHED) {
+    if (attempt > MAX_READS_UNFINISHED) {
       await record("error", "never finished");
-      await deadLetter(q, msgId, message, `read ${readCt} times without finishing`);
+      await deadLetter(q, msgId, message, `started ${attempt - 1} times without finishing`);
       s.failed++;
       return;
     }
@@ -36706,7 +37074,7 @@ async function runTick(deps) {
     }
     const [run] = await db2.sql`
       insert into orbit.job_runs (queue, msg_id, user_id, kind, dedupe_key, status, attempt, started_at)
-      values (${q}, ${msgId}::bigint, ${m.userId}::uuid, ${m.kind}, ${m.dedupeKey ?? null}, 'running', ${readCt}::int,
+      values (${q}, ${msgId}::bigint, ${m.userId}::uuid, ${m.kind}, ${m.dedupeKey ?? null}, 'running', ${attempt}::int,
               ${now()}::timestamptz)
       returning id`;
     const runId = Number(run.id);
@@ -36746,8 +37114,9 @@ async function runTick(deps) {
                  where queue = ${q} and msg_id = ${msgId}::bigint and status = 'error'
                    and error like ${`${PAID_ERROR_PREFIX}%`}`)[0]?.n ?? 0
       ) : 0;
-      if (readCt > MAX_READS || paidFailures > ATTEMPTS_AFTER_SPEND) await deadLetter(q, msgId, message, err);
-      else await queue.setVt(q, msgId, backoffSec(readCt));
+      if (attempt > MAX_READS || paidFailures > ATTEMPTS_AFTER_SPEND)
+        await deadLetter(q, msgId, message, err);
+      else await queue.setVt(q, msgId, backoffSec(attempt));
       await log2.log({
         fn: "orbit-worker",
         kind: m.kind,
@@ -36761,7 +37130,7 @@ async function runTick(deps) {
       await db2.sql`insert into orbit.job_runs (queue, msg_id, user_id, kind, dedupe_key, status, attempt, error,
           finished_at, duration_ms)
         values (${q}, ${msgId}::bigint, ${m.userId}::uuid, ${m.kind}, ${m.dedupeKey ?? null}, ${status},
-                ${readCt}::int, ${error}, ${now()}::timestamptz, 0)`;
+                ${attempt}::int, ${error}, ${now()}::timestamptz, 0)`;
     }
   }
 }

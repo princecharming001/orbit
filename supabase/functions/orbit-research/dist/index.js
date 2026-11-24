@@ -1931,6 +1931,11 @@ var EAST_ASIAN_SURNAMES = {
 };
 for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
 
+// packages/core/src/entity/social.ts
+var COMMON_SURNAMES = new Set(
+  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
+);
+
 // packages/core/src/entity/resolve.ts
 var PERSONAL_EMAIL_DOMAINS = /* @__PURE__ */ new Set([
   "gmail.com",
