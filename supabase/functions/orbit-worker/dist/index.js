@@ -43739,6 +43739,975 @@ async function scorePeople(ctx, userId, personIds, key2) {
   });
 }
 
+// packages/core/src/resume/schools.ts
+var SCHOOL_WORDS = /\b(university|universit[àáä]t|universidad|université|college|institute|school|academy|polytechnic|conservatory|seminary)\b/i;
+var KNOWN_SCHOOLS = new Set(
+  [
+    "mit",
+    "caltech",
+    "cmu",
+    "carnegie mellon",
+    "nyu",
+    "ucla",
+    "usc",
+    "uc berkeley",
+    "berkeley",
+    "uc san diego",
+    "ucsd",
+    "uc davis",
+    "uc irvine",
+    "uci",
+    "ucsb",
+    "unc",
+    "unc chapel hill",
+    "umich",
+    "uiuc",
+    "ut austin",
+    "upenn",
+    "penn",
+    "wharton",
+    "harvard",
+    "yale",
+    "princeton",
+    "columbia",
+    "cornell",
+    "dartmouth",
+    "brown",
+    "stanford",
+    "duke",
+    "northwestern",
+    "georgetown",
+    "vanderbilt",
+    "rice",
+    "emory",
+    "tufts",
+    "notre dame",
+    "georgia tech",
+    "virginia tech",
+    "texas a&m",
+    "purdue",
+    "uva",
+    "umd",
+    "bu",
+    "bc",
+    "wellesley",
+    "barnard",
+    "williams",
+    "amherst",
+    "swarthmore",
+    "pomona",
+    "harvey mudd",
+    "oxford",
+    "cambridge",
+    "lse",
+    "eth zurich",
+    "insead",
+    "baruch",
+    "cuny",
+    "suny"
+  ].map((s) => s.toLowerCase())
+);
+var COMPANY_WORDS = /\b(inc|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|gmbh|plc|technologies|technology|labs?|capital|partners|group|holdings|ventures|bank|health|healthcare|systems|solutions|consulting|studios?|media|software|analytics|therapeutics|pharmaceuticals|logistics|motors|energy|securities|advisors|associates|agency|foundation|fund|ai)\b\.?/i;
+var clean3 = (s) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").replace(/^[\s,.;:–—-]+|[\s,.;:–—-]+$/g, "").trim();
+function looksLikeCompany(name) {
+  const n = clean3(name ?? "");
+  if (!n) return false;
+  if (SCHOOL_WORDS.test(n)) return false;
+  return COMPANY_WORDS.test(n);
+}
+function looksLikeSchool(name) {
+  const n = clean3(name ?? "");
+  if (!n || n.length > 120) return false;
+  if (SCHOOL_WORDS.test(n)) return true;
+  if (looksLikeCompany(n)) return false;
+  const l = n.toLowerCase();
+  if (KNOWN_SCHOOLS.has(l)) return true;
+  const head = l.split(",")[0].trim();
+  if (KNOWN_SCHOOLS.has(head)) return true;
+  if (/^[a-z .'-]+ state$/i.test(head) && head.split(" ").length <= 4) return true;
+  if (/^(uc|ut|suny|cuny|cal) [a-z ]+$/i.test(head) && head.split(" ").length <= 4) return true;
+  return false;
+}
+
+// supabase/functions/_shared/roles/discover.ts
+var DAY21 = 864e5;
+var LOOKUP_RECHECK_MS = 30 * DAY21;
+var LOOKUP_FAILED_RECHECK_MS = 3 * DAY21;
+var DISCOVERY_PER_DAY = 500;
+var PAGES_PER_COMPANY = 4;
+var PAGE_MAX_BYTES = 15e5;
+function siteOf(raw) {
+  if (!raw?.trim()) return void 0;
+  let host;
+  try {
+    host = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname.toLowerCase();
+  } catch {
+    return void 0;
+  }
+  host = host.replace(/^www\./, "");
+  if (!host.includes(".") || postingUrlProblem(`https://${host}/`)) return void 0;
+  if (/(^|\.)(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|msn|qq|163|gmx|mail|yandex|linkedin|github|medium|substack|notion|wixsite|squarespace)\.[a-z.]+$/.test(
+    host
+  ) || /\.edu$|\.ac\.[a-z]+$/.test(host))
+    return void 0;
+  return host;
+}
+var onSite = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+async function getPage(net, url, domain) {
+  let at = url;
+  for (let hop = 0; hop < 4; hop++) {
+    let res;
+    try {
+      res = await net.fetch(at, {
+        headers: { "user-agent": POSTING_USER_AGENT, accept: "text/html,application/xhtml+xml" },
+        redirect: "manual",
+        signal: AbortSignal.timeout(net.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+      });
+    } catch {
+      return { status: 0, url: at };
+    }
+    const next = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    if (next) {
+      await res.body?.cancel().catch(() => void 0);
+      const to = new URL(next, at).toString();
+      const board = boardOfUrl(to);
+      if (board?.token) return { status: res.status, board, url: to };
+      if (postingUrlProblem(to) || !onSite(new URL(to).hostname.toLowerCase().replace(/^www\./, ""), domain))
+        return { status: res.status, url: to };
+      at = to;
+      continue;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => void 0);
+      return { status: res.status, url: at };
+    }
+    const type = res.headers.get("content-type") ?? "";
+    if (type && !/html|text/i.test(type)) {
+      await res.body?.cancel().catch(() => void 0);
+      return { status: res.status, url: at };
+    }
+    const text4 = await res.text().catch(() => "");
+    return { status: res.status, html: text4.slice(0, PAGE_MAX_BYTES), url: at };
+  }
+  return { status: 0, url: at };
+}
+function careersLinkIn(html, base2) {
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]{0,200}?)<\/a>/gi)) {
+    const label2 = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (!/^(careers?|jobs|join us|join the team|open (roles|positions)|we('|’)re hiring|work with us|work at .{1,30})$/i.test(
+      label2
+    ))
+      continue;
+    try {
+      return new URL(m[1], base2).toString();
+    } catch {
+    }
+  }
+  return void 0;
+}
+function boardOnPage(html) {
+  const links = boardLinksIn(html);
+  return links[0]?.link;
+}
+async function discoverCompany(db2, net, c, now) {
+  const out = { outcome: "none", requests: 0, refused: 0 };
+  const sleep = sleepFor(net);
+  const domain = siteOf(c.domain);
+  let found;
+  let failed = false;
+  if (domain) {
+    const tried = /* @__PURE__ */ new Set();
+    const queue = [
+      `https://${domain}/careers`,
+      `https://${domain}/jobs`,
+      `https://careers.${domain}/`,
+      `https://${domain}/`
+    ];
+    while (queue.length && out.requests < PAGES_PER_COMPANY && !found) {
+      const url = queue.shift();
+      if (tried.has(url)) continue;
+      tried.add(url);
+      if (out.requests) await sleep(400);
+      const page2 = await getPage(net, url, domain);
+      out.requests++;
+      if (page2.board) {
+        found = { ...page2.board, url };
+        break;
+      }
+      if (page2.status === 403 || page2.status === 429) {
+        out.refused++;
+        if (page2.status === 429) break;
+        continue;
+      }
+      if (!page2.html) continue;
+      const board = boardOnPage(page2.html);
+      if (board) {
+        found = { ...board, url: page2.url };
+        break;
+      }
+      if (url === `https://${domain}/`) {
+        const link = careersLinkIn(page2.html, page2.url);
+        const linked = link ? boardOfUrl(link) : void 0;
+        if (linked?.token) {
+          found = { ...linked, url: page2.url };
+          break;
+        }
+        if (link && !tried.has(link) && !postingUrlProblem(link) && onSite(new URL(link).hostname.replace(/^www\./, ""), domain))
+          queue.push(link);
+      }
+    }
+    if (!found && out.refused && out.refused >= out.requests) failed = true;
+  }
+  let via = "careers_page";
+  if (!found && !failed) {
+    const tokens2 = [.../* @__PURE__ */ new Set([c.key.replace(/[^a-z0-9]/g, ""), c.key.replace(/[^a-z0-9]+/g, "-")])].filter(
+      (t) => t.length >= 3
+    );
+    for (const t of tokens2.slice(0, 2)) {
+      if (out.requests) await sleep(300);
+      const got = await greenhouseBoardName(net, t);
+      out.requests++;
+      if (got.ok && got.value && normalizeCompany(got.value) === c.key) {
+        found = { service: "greenhouse", token: t };
+        via = "name";
+        break;
+      }
+      if (!got.ok && (got.reason === "refused" || got.reason === "rate_limited")) out.refused++;
+    }
+  }
+  if (found) {
+    const board = await upsertBoard(db2, {
+      service: found.service,
+      token: found.token,
+      companyKey: c.key,
+      companyName: c.name,
+      companyDomain: domain,
+      foundVia: via,
+      foundUrl: found.url
+    });
+    out.outcome = "found";
+    out.board = { service: found.service, token: found.token, id: board.id, via, url: found.url };
+  } else if (failed) out.outcome = "failed";
+  await db2.sql`
+    insert into orbit_private.job_board_lookups (company_key, company_name, domain, outcome, board_id, checked_at)
+    values (${c.key}, ${c.name}, ${domain ?? null}, ${out.outcome}, ${out.board?.id ?? null}::uuid, ${now}::timestamptz)
+    on conflict (company_key) do update set company_name = excluded.company_name, domain = excluded.domain,
+      outcome = excluded.outcome, board_id = excluded.board_id, checked_at = excluded.checked_at`;
+  await count(db2, now, "discovery_companies");
+  await count(db2, now, "discovery_requests", out.requests);
+  await count(db2, now, "discovery_refused", out.refused);
+  if (found) await count(db2, now, "discovery_found");
+  return out;
+}
+async function companiesToFind(db2, now, limit2) {
+  const rows = await db2.sql`
+    select trim(t.name) as name, null::text as domain, 3 as pri, count(*)::int as n
+      from orbit.goals g
+      join orbit.users u on u.id = g.user_id and u.deleted_at is null,
+           jsonb_array_elements_text(coalesce(g.targets->'organizations', '[]'::jsonb)) t(name)
+     where g.deleted_at is null and trim(t.name) <> ''
+     group by 1
+    union all
+    select * from (
+      select coalesce(o.name, p.org_raw) as name, max(o.domains[1]) as domain, 2 as pri, count(*)::int as n
+        from orbit.people p
+        join orbit.users u on u.id = p.user_id and u.deleted_at is null
+        left join orbit.organizations o on o.id = p.org_id
+       where p.deleted_at is null and p.merged_into is null and not p.is_self and coalesce(o.name, p.org_raw) is not null
+       group by 1
+       order by count(*) desc
+       limit 4000) people
+    union all
+    select * from (
+      select name, website as domain, 1 as pri, coalesce(team_size, 0) as n
+        from orbit_private.company_facts
+       where website is not null and coalesce(yc_status, 'Active') <> 'Inactive'
+       order by coalesce(team_size, 0) desc
+       limit 6000) facts`;
+  const known = new Set(
+    (await db2.sql`
+        select company_key as key from orbit_private.job_board_lookups
+         where (outcome <> 'failed' and checked_at > ${new Date(now.getTime() - LOOKUP_RECHECK_MS)}::timestamptz)
+            or (outcome = 'failed' and checked_at > ${new Date(now.getTime() - LOOKUP_FAILED_RECHECK_MS)}::timestamptz)
+        union
+        select company_key from orbit_private.job_boards where company_key is not null`).map((r) => r.key)
+  );
+  const byKey = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const name = r.name?.trim();
+    if (!name || looksLikeSchool(name)) continue;
+    const key2 = companyKey(name);
+    if (!key2 || known.has(key2)) continue;
+    const had = byKey.get(key2);
+    const domain = siteOf(r.domain) ?? had?.domain;
+    if (had) {
+      had.pri = Math.max(had.pri, Number(r.pri));
+      had.n += Number(r.n);
+      had.domain = domain;
+    } else byKey.set(key2, { key: key2, name, domain, pri: Number(r.pri), n: Number(r.n) });
+  }
+  return [...byKey.values()].sort((a, b) => b.pri - a.pri || b.n - a.n).slice(0, limit2).map(({ key: key2, name, domain }) => ({ key: key2, name, domain }));
+}
+async function discoverSome(db2, net, now, run) {
+  const s = {
+    looked: 0,
+    found: 0,
+    refused: 0,
+    requests: 0,
+    stoppedBy: void 0
+  };
+  if (run.deadline - run.clock() < 5e3) return { ...s, stoppedBy: "time" };
+  const todo = await companiesToFind(db2, now, run.maxCompanies);
+  for (const c of todo) {
+    if (run.deadline - run.clock() < 5e3) {
+      s.stoppedBy = "time";
+      break;
+    }
+    if (!await take(db2, now, "discovery_cap", DISCOVERY_PER_DAY)) {
+      s.stoppedBy = "cap";
+      break;
+    }
+    const d = await discoverCompany(db2, net, c, now);
+    s.looked++;
+    s.requests += d.requests;
+    s.refused += d.refused;
+    if (d.outcome === "found") s.found++;
+  }
+  return s;
+}
+async function harvestBoards(db2, listings, now) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const l of listings) {
+    const link = boardOfUrl(l.url);
+    if (!link?.token) continue;
+    const k = `${link.service}:${link.token.toLowerCase()}`;
+    if (!seen.has(k)) seen.set(k, { link, name: l.companyName, url: l.url });
+  }
+  if (!seen.size) return 0;
+  const have = new Set(
+    (await db2.sql`
+        select service || ':' || lower(token) as k from orbit_private.job_boards
+         where service || ':' || lower(token) = any(${[...seen.keys()]}::text[])`).map((r) => r.k)
+  );
+  let added = 0;
+  for (const [k, v] of seen) {
+    if (have.has(k)) continue;
+    const r = await upsertBoard(db2, {
+      service: v.link.service,
+      token: v.link.token,
+      companyKey: companyKey(v.name),
+      companyName: v.name,
+      foundVia: "simplify",
+      foundUrl: v.url
+    });
+    if (r.created) added++;
+  }
+  await count(db2, now, "boards_harvested", added);
+  return added;
+}
+
+// supabase/functions/_shared/roles/readers/simplify.ts
+var SIMPLIFY_LISTS = {
+  intern: "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/.github/scripts/listings.json",
+  newgrad: "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json"
+};
+var SIMPLIFY_MAX_BYTES = 4e7;
+function simplifyListing(x, list3) {
+  if (x.active !== true || x.is_visible === false) return void 0;
+  const id = str2(x.id);
+  const title = str2(x.title);
+  const company = str2(x.company_name);
+  const url = str2(x.url);
+  if (!id || !title || !company || !url) return void 0;
+  const sponsorRaw = str2(x.sponsorship);
+  const sponsorship = sponsorRaw === "Offers Sponsorship" ? "offers" : sponsorRaw === "Does Not Offer Sponsorship" || sponsorRaw === "U.S. Citizenship is Required" ? "none" : void 0;
+  const terms = arr(x.terms).map((t) => str2(t)).filter((t) => !!t && !/^n\/?a$/i.test(t));
+  const posted = typeof x.date_posted === "number" ? new Date(x.date_posted * 1e3).toISOString() : void 0;
+  const board = boardOfUrl(url);
+  return {
+    source: "simplify",
+    externalId: id,
+    companyName: company,
+    title,
+    locations: arr(x.locations).map((l) => str2(l)).filter((l) => !!l),
+    level: list3 === "intern" ? "intern" : void 0,
+    employment: list3 === "intern" ? "internship" : void 0,
+    term: terms.length ? terms.join(", ") : void 0,
+    sponsorship,
+    degrees: arr(x.degrees).map((d) => str2(d)).filter((d) => !!d),
+    url,
+    applyUrl: url,
+    postedAt: posted,
+    meta: {
+      list: list3,
+      category: str2(x.category),
+      companyUrl: str2(x.company_url),
+      ...sponsorRaw && sponsorRaw !== "Other" ? { sponsorshipNote: sponsorRaw } : {},
+      ...sponsorRaw === "U.S. Citizenship is Required" ? { citizenship: true } : {},
+      ...board?.externalId ? { boardRef: `${board.service}:${board.externalId}` } : {}
+    }
+  };
+}
+async function readSimplify(net, list3) {
+  const got = await askJson(net, SIMPLIFY_LISTS[list3], { maxBytes: SIMPLIFY_MAX_BYTES, accept: "*/*" });
+  if (!got.ok) return got;
+  if (!Array.isArray(got.value)) return fail("bad_shape", "not a list");
+  const listings = [];
+  for (const raw of got.value) {
+    const x = obj(raw);
+    const l = x && simplifyListing(x, list3);
+    if (l) listings.push(l);
+  }
+  return { ok: true, value: { listings, entries: got.value.length }, bytes: got.bytes };
+}
+
+// supabase/functions/_shared/roles/readers/linkedin.ts
+var base = (a) => a.base.replace(/\/+$/, "");
+function linkedinPlace(raw) {
+  if (!raw) return {};
+  const m = /\((on-site|onsite|hybrid|remote)\)\s*$/i.exec(raw);
+  const how = m?.[1]?.toLowerCase();
+  const place = raw.replace(/\s*\((on-site|onsite|hybrid|remote)\)\s*$/i, "").trim();
+  return {
+    place: place || void 0,
+    remote: how === "remote" ? "remote" : how === "hybrid" ? "hybrid" : how ? "on_site" : void 0
+  };
+}
+function linkedinListing(it) {
+  const id = str2(it.id);
+  const title = str2(it.title);
+  const company = obj(it.company);
+  const name = str2(company?.name) ?? str2(it.company);
+  if (!id || !title || !name || it.type && it.type !== "JOB") return void 0;
+  const { place, remote } = linkedinPlace(str2(it.location));
+  return {
+    source: "linkedin",
+    externalId: id,
+    companyName: name,
+    companyLinkedinId: str2(company?.id),
+    companyLogoUrl: str2(company?.profile_picture_url),
+    title,
+    locations: place ? [place] : [],
+    remote,
+    url: str2(it.url) ?? `https://www.linkedin.com/jobs/view/${id}`,
+    postedAt: isoOf(it.posted_at),
+    meta: {
+      companySlug: str2(company?.public_identifier),
+      easyApply: it.easy_apply === true,
+      reposted: it.reposted === true,
+      promoted: it.promoted === true
+    }
+  };
+}
+async function linkedinJobSearch(net, access, q) {
+  const limit2 = Math.min(50, Math.max(1, q.limit ?? 25));
+  const params = new URLSearchParams({ account_id: access.accountId, limit: String(limit2) });
+  const body = { api: "classic", category: "jobs", keywords: q.keywords, sort_by: "date" };
+  if (q.seniority?.length) body.seniority = q.seniority;
+  if (q.jobType?.length) body.job_type = q.jobType;
+  if (q.presence?.length) body.presence = q.presence;
+  if (q.datePosted) body.date_posted = q.datePosted;
+  const got = await askJson(net, `${base(access)}/api/v1/linkedin/search?${params}`, {
+    method: "POST",
+    body,
+    headers: { "X-API-KEY": access.apiKey },
+    retries: 1,
+    maxBytes: 3e6
+  });
+  if (!got.ok) return got;
+  const items = obj(got.value)?.items;
+  if (!Array.isArray(items)) return fail("bad_shape", "no items");
+  const out = items.map((x) => obj(x) ? linkedinListing(obj(x)) : void 0).filter((x) => !!x);
+  return { ok: true, value: out, bytes: got.bytes };
+}
+async function linkedinJob(net, access, id) {
+  const params = new URLSearchParams({ account_id: access.accountId });
+  const got = await askJson(net, `${base(access)}/api/v1/linkedin/jobs/${encodeURIComponent(id)}?${params}`, {
+    headers: { "X-API-KEY": access.apiKey },
+    retries: 1,
+    maxBytes: 2e6
+  });
+  if (!got.ok) return got;
+  const j = obj(got.value);
+  if (!j) return fail("bad_shape", "not a job");
+  return {
+    ok: true,
+    bytes: got.bytes,
+    value: {
+      text: typeof j.description === "string" ? j.description : "",
+      title: str2(j.title),
+      companyName: str2(j.company) ?? str2(obj(j.company)?.name),
+      companyLinkedinId: str2(j.company_id),
+      place: str2(j.location),
+      state: str2(j.state)
+    }
+  };
+}
+
+// supabase/functions/_shared/roles/sources.ts
+var TEXT_FRESH_MS = 7 * 864e5;
+var PAGE_MAX_BYTES2 = 15e5;
+function jobLdOf(html) {
+  for (const b of html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+  )) {
+    let data;
+    try {
+      data = JSON.parse(b[1].trim());
+    } catch {
+      continue;
+    }
+    const items = (Array.isArray(data) ? data : [data]).flatMap(
+      (d) => Array.isArray(obj(d)?.["@graph"]) ? obj(d)["@graph"] : [d]
+    );
+    for (const it of items) {
+      const o = obj(it);
+      const type = o?.["@type"];
+      if (!o || !(type === "JobPosting" || Array.isArray(type) && type.includes("JobPosting"))) continue;
+      const org = o.hiringOrganization;
+      const company = typeof org === "string" ? str2(org) : str2(obj(org)?.name);
+      const title = str2(o.title);
+      if (!company || !title) continue;
+      const places2 = (Array.isArray(o.jobLocation) ? o.jobLocation : [o.jobLocation]).map((l) => {
+        const a = obj(obj(l)?.address);
+        return a ? [str2(a.addressLocality), str2(a.addressRegion), str2(a.addressCountry)].filter(Boolean).join(", ") : "";
+      }).filter((x) => !!x);
+      const salary = obj(obj(o.baseSalary)?.value);
+      const unit = String(obj(o.baseSalary)?.value && salary?.unitText ? salary.unitText : "");
+      const pay = salary && (num(salary.minValue) || num(salary.maxValue) || num(salary.value)) ? {
+        min: num(salary.minValue) ?? num(salary.value),
+        max: num(salary.maxValue) ?? num(salary.value),
+        currency: str2(obj(o.baseSalary)?.currency),
+        per: /hour/i.test(unit) ? "hour" : /month/i.test(unit) ? "month" : "year"
+      } : void 0;
+      return {
+        title: decodeEntities(title),
+        company: decodeEntities(company),
+        description: typeof o.description === "string" ? pageText(decodeEntities(o.description)) : void 0,
+        datePosted: isoOf(o.datePosted),
+        employmentType: Array.isArray(o.employmentType) ? str2(o.employmentType[0]) : str2(o.employmentType),
+        places: places2,
+        remote: o.jobLocationType === "TELECOMMUTE" ? "remote" : void 0,
+        pay
+      };
+    }
+  }
+  return void 0;
+}
+var LINKEDIN_JOB = /linkedin\.com\/(?:comm\/)?jobs\/(?:view\/(?:[^/?#]*-)?(\d{6,})|.*[?&]currentJobId=(\d{6,}))/i;
+async function pageListing(net, url, depth = 0) {
+  const got = await askText(net, url, {
+    accept: "text/html,application/xhtml+xml",
+    maxBytes: PAGE_MAX_BYTES2,
+    retries: 1
+  });
+  if (!got.ok)
+    return {
+      problem: got.reason === "not_found" ? "That posting is no longer listed." : "Orbit couldn't open that page. Paste the posting's text."
+    };
+  const ld = jobLdOf(got.value);
+  if (ld)
+    return {
+      source: "posting",
+      externalId: url,
+      companyName: ld.company,
+      title: ld.title,
+      locations: ld.places,
+      remote: ld.remote,
+      pay: ld.pay,
+      url,
+      postedAt: ld.datePosted,
+      text: ld.description,
+      meta: { employmentType: ld.employmentType }
+    };
+  const inner = depth === 0 ? embeddedJobLink(got.value) : void 0;
+  if (inner && inner !== url && !postingUrlProblem(inner))
+    return readUrlWith(net, inner, void 0, depth + 1);
+  return { problem: "Orbit cannot read this site: paste the posting's text." };
+}
+async function readUrlWith(net, url, linkedin, depth) {
+  const problem = postingUrlProblem(url);
+  if (problem) return { problem };
+  const li = LINKEDIN_JOB.exec(url);
+  if (li) {
+    const id = li[1] ?? li[2];
+    if (!linkedin)
+      return {
+        problem: "Orbit reads LinkedIn jobs through your own LinkedIn. Connect it, or paste the posting's text."
+      };
+    const got = await linkedinJob(net, linkedin, id);
+    if (!got.ok || !got.value.title || !got.value.companyName)
+      return { problem: "Orbit couldn't read that LinkedIn job just now. Paste the posting's text." };
+    return {
+      source: "linkedin",
+      externalId: id,
+      companyName: got.value.companyName,
+      companyLinkedinId: got.value.companyLinkedinId,
+      title: got.value.title,
+      locations: got.value.place ? [got.value.place] : [],
+      url: `https://www.linkedin.com/jobs/view/${id}`,
+      text: got.value.text
+    };
+  }
+  const board = boardOfUrl(url);
+  if (board?.externalId) {
+    const name = nameFromToken(board.token || "company");
+    switch (board.service) {
+      case "greenhouse": {
+        if (!board.token) break;
+        const got = await readGreenhouseJob(net, board.token, board.externalId);
+        if (!got.ok) {
+          if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
+          break;
+        }
+        return {
+          source: "greenhouse",
+          externalId: board.externalId,
+          companyName: name,
+          title: got.value.title ?? "Role",
+          team: got.value.team,
+          locations: got.value.place ? [got.value.place] : [],
+          pay: got.value.pay,
+          url,
+          text: got.value.text
+        };
+      }
+      case "lever": {
+        const got = await readLeverJob(net, board.token, board.externalId, name);
+        if (got.ok) return { ...got.value, url: got.value.url || url };
+        if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
+        break;
+      }
+      case "workday": {
+        if (!board.path) break;
+        const got = await readWorkdayJob(net, board.token, board.path);
+        if (got.ok)
+          return {
+            source: "workday",
+            externalId: board.externalId,
+            companyName: got.value.companyName ?? name,
+            title: got.value.title ?? "Role",
+            locations: got.value.places,
+            remote: got.value.remote,
+            url,
+            postedAt: got.value.postedAt,
+            text: got.value.text,
+            meta: { path: board.path, timeType: got.value.timeType }
+          };
+        if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
+        break;
+      }
+      case "smartrecruiters": {
+        const id = board.externalId.split("/").pop();
+        const got = await readSmartRecruitersJob(net, board.token, id);
+        if (got.ok && got.value.title)
+          return {
+            source: "smartrecruiters",
+            externalId: board.externalId,
+            companyName: got.value.companyName ?? board.token,
+            title: got.value.title,
+            locations: got.value.place ? [got.value.place] : [],
+            url: got.value.url ?? url,
+            postedAt: got.value.postedAt,
+            text: got.value.text
+          };
+        break;
+      }
+      case "workable": {
+        const code = board.externalId.split("/").pop();
+        const got = await readWorkableJob(net, board.token, code);
+        if (got.ok && got.value.title)
+          return {
+            source: "workable",
+            externalId: board.externalId,
+            companyName: name,
+            title: got.value.title,
+            locations: got.value.place ? [got.value.place] : [],
+            url,
+            text: got.value.text
+          };
+        break;
+      }
+      case "recruitee": {
+        const slug = board.externalId.split("/").pop();
+        const got = await readRecruiteeJob(net, board.token, slug);
+        if (got.ok) return got.value;
+        if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
+        break;
+      }
+      case "ashby":
+        break;
+    }
+  }
+  return pageListing(net, url, depth);
+}
+function readUrl(net, url, linkedin) {
+  return readUrlWith(net, url.trim(), linkedin, 0);
+}
+async function readText(net, j, linkedin) {
+  const fromUrl = boardOfUrl(j.url);
+  const token2 = j.token ?? fromUrl?.token;
+  const tail = j.external_id.split("/").pop();
+  switch (j.source) {
+    case "greenhouse": {
+      if (!token2) break;
+      const got = await readGreenhouseJob(net, token2, j.external_id);
+      return got.ok ? { ...got, value: { text: got.value.text, team: got.value.team, pay: got.value.pay } } : got;
+    }
+    case "lever": {
+      if (!token2) break;
+      const got = await readLeverJob(net, token2, j.external_id, j.company_name);
+      return got.ok ? { ...got, value: { text: got.value.text ?? "", team: got.value.team, pay: got.value.pay } } : got;
+    }
+    case "workday": {
+      const path = typeof j.meta?.path === "string" ? j.meta.path : fromUrl?.path;
+      if (!token2 || !path) break;
+      const got = await readWorkdayJob(net, token2, path);
+      return got.ok ? { ...got, value: { text: got.value.text, places: got.value.places, remote: got.value.remote } } : got;
+    }
+    case "smartrecruiters": {
+      if (!token2) break;
+      const got = await readSmartRecruitersJob(net, token2, tail);
+      return got.ok ? { ...got, value: { text: got.value.text } } : got;
+    }
+    case "workable": {
+      if (!token2) break;
+      const got = await readWorkableJob(net, token2, tail);
+      return got.ok ? { ...got, value: { text: got.value.text } } : got;
+    }
+    case "recruitee": {
+      if (!token2) break;
+      const got = await readRecruiteeJob(net, token2, tail);
+      return got.ok ? { ...got, value: { text: got.value.text ?? "", pay: got.value.pay } } : got;
+    }
+    case "linkedin": {
+      if (!linkedin) return { ok: false, reason: "unreadable" };
+      const got = await linkedinJob(net, linkedin, j.external_id);
+      if (!got.ok) return got;
+      if (got.value.state && got.value.state !== "active")
+        return { ok: false, reason: "not_found", message: "closed" };
+      return { ok: true, value: { text: got.value.text }, bytes: got.bytes };
+    }
+    default:
+      break;
+  }
+  const l = await readUrlWith(net, j.url, linkedin, 0);
+  if ("problem" in l)
+    return {
+      ok: false,
+      reason: /no longer listed/.test(l.problem) ? "not_found" : "unreadable",
+      message: l.problem
+    };
+  return {
+    ok: true,
+    value: { text: l.text ?? "", places: l.locations.length ? l.locations : void 0, pay: l.pay },
+    bytes: 0
+  };
+}
+async function text2(db2, net, jobId, linkedin) {
+  const now = net.now();
+  const [j] = await db2.sql`
+    select j.id, j.source, j.external_id, j.board_id, j.url, j.title, j.text, j.text_read_at, j.level, j.term, j.meta,
+           j.company_name, b.token
+      from orbit_private.jobs j left join orbit_private.job_boards b on b.id = j.board_id
+     where j.id = ${jobId}::uuid`;
+  if (!j) return void 0;
+  if (j.text && j.text_read_at && now.getTime() - new Date(j.text_read_at).getTime() < TEXT_FRESH_MS)
+    return j.text;
+  const got = await readText(net, j, linkedin).catch(() => ({
+    ok: false,
+    reason: "unreadable"
+  }));
+  if (!got.ok) {
+    if (got.reason === "not_found")
+      await db2.sql`update orbit_private.jobs set closed_at = coalesce(closed_at, ${now}::timestamptz) where id = ${j.id}::uuid`;
+    return j.text ?? void 0;
+  }
+  const cleaned = cleanText(got.value.text);
+  if (!cleaned) return j.text ?? void 0;
+  const hash = await sha256(cleaned);
+  const places2 = got.value.places?.length ? splitPlaces(got.value.places) : void 0;
+  await db2.sql`
+    update orbit_private.jobs
+       set text = ${cleaned}, text_hash = ${hash}, text_read_at = ${now}::timestamptz,
+           level = coalesce(level, ${j.level ? null : roleLevel(j.title, cleaned) ?? null}),
+           term = coalesce(term, ${j.term ? null : termOf(j.title, cleaned) ?? null}),
+           team = coalesce(team, ${got.value.team ?? null}),
+           pay = coalesce(pay, ${got.value.pay ?? payFromText(cleaned) ?? null}::jsonb),
+           remote = coalesce(remote, ${got.value.remote ?? null}),
+           places = coalesce(${places2 ?? null}::text[], places),
+           countries = coalesce(${places2 ? countriesOf(places2) : null}::text[], countries)
+     where id = ${j.id}::uuid`;
+  await count(db2, now, "texts_read");
+  return cleaned;
+}
+async function linkedinSearch(net, access, q) {
+  const got = await linkedinJobSearch(net, access, q);
+  return got.ok ? got.value : [];
+}
+var roleSources = { keep, text: text2, linkedinSearch, readUrl };
+
+// supabase/functions/_shared/roles/tick.ts
+var DAY22 = 864e5;
+var TICK_MS = 4e4;
+var TICK_MAX_BYTES = 16e6;
+var LIST_UNSEEN_MS = 3 * DAY22;
+var CLOSED_KEEP_MS = 60 * DAY22;
+var TOPUP_HOUR = 6;
+var TOPUP_ACTIVE_MS = 14 * DAY22;
+var SIMPLIFY_PART = 500;
+var SIMPLIFY_PER_TICK = 2e3;
+var TEXTS_PER_TICK = 15;
+var DISCOVERY_PER_TICK = 8;
+async function upkeep(db2, now) {
+  const closed = await db2.sql`
+    update orbit_private.jobs set closed_at = ${now}::timestamptz
+     where source in ('simplify', 'linkedin') and closed_at is null
+       and last_seen_at < ${new Date(now.getTime() - LIST_UNSEEN_MS)}::timestamptz
+     returning id`;
+  const deleted = await db2.sql`
+    delete from orbit_private.jobs j
+     where j.id in (
+       select id from orbit_private.jobs
+        where closed_at is not null and closed_at < ${new Date(now.getTime() - CLOSED_KEEP_MS)}::timestamptz
+          and not exists (select 1 from orbit.role_matches m
+                           where m.job_id = orbit_private.jobs.id and m.status in ('saved', 'applied', 'interviewing'))
+        limit 2000)
+     returning id`;
+  await count(db2, now, "roles_closed", closed.length);
+  await count(db2, now, "roles_deleted", deleted.length);
+  return { closed: closed.length, deleted: deleted.length };
+}
+async function queueTopups(db2, queue, now) {
+  if (now.getUTCHours() < TOPUP_HOUR) return null;
+  if (await counted(db2, now, "topup_queued")) return null;
+  const users = await db2.sql`
+    select distinct s.user_id from orbit.role_searches s
+      join orbit.users u on u.id = s.user_id and u.deleted_at is null
+     where s.created_at > ${new Date(now.getTime() - TOPUP_ACTIVE_MS)}::timestamptz`;
+  const day2 = dayOf(now);
+  for (const u2 of users)
+    await queue.enqueue({
+      kind: "roles.topup",
+      userId: u2.user_id,
+      payload: {},
+      dedupeKey: `roles.topup:${u2.user_id}:${day2}`
+    });
+  await setMark(db2, now, "topup_queued", users.length + 1);
+  return users.length;
+}
+async function readSimplifyPart(db2, net, now, run) {
+  let list3;
+  for (const l of ["intern", "newgrad"])
+    if (!await counted(db2, now, `simplify_${l}_done`)) {
+      list3 = l;
+      break;
+    }
+  if (!list3) return void 0;
+  const got = await readSimplify(net, list3);
+  if (!got.ok) {
+    return { list: list3, kept: 0, done: false, harvested: 0, error: got.reason };
+  }
+  const listings = got.value.listings;
+  let at = await counted(db2, now, `simplify_${list3}_at`);
+  const harvested = at === 0 ? await harvestBoards(db2, listings, now) : 0;
+  let kept = 0;
+  const stop = at + SIMPLIFY_PER_TICK;
+  while (at < listings.length && at < stop && run.clock() < run.deadline) {
+    const part2 = listings.slice(at, at + SIMPLIFY_PART);
+    const r = await keepListings(db2, part2, { now });
+    kept += r.added + r.updated;
+    at += part2.length;
+    await setMark(db2, now, `simplify_${list3}_at`, at);
+  }
+  const done2 = at >= listings.length;
+  if (done2) {
+    await setMark(db2, now, `simplify_${list3}_done`, 1);
+    await count(db2, now, "simplify_listings", listings.length);
+  }
+  return { list: list3, kept, done: done2, harvested };
+}
+async function fillTexts(db2, net, run) {
+  if (run.deadline - run.clock() < 3e3) return 0;
+  const rows = await db2.sql`
+    select id from orbit_private.jobs
+     where closed_at is null and dupe_of is null and text_read_at is null
+       and source in ('greenhouse', 'smartrecruiters', 'workable')
+     order by case when level = 'intern' then 0 when level = 'entry' then 1 when level is null then 2 else 3 end,
+              first_seen_at desc
+     limit ${run.max}::int`;
+  let n = 0;
+  for (const r of rows) {
+    if (run.deadline - run.clock() < 3e3) break;
+    if (await text2(db2, net, r.id)) n++;
+  }
+  return n;
+}
+async function runRolesTick(db2, deps) {
+  const now = deps.net.now();
+  const start = deps.clock();
+  const budget2 = deps.budgetMs ?? TICK_MS;
+  const end = start + budget2;
+  const s = {
+    closedLists: 0,
+    deleted: 0,
+    topups: null,
+    boards: { read: 0, failed: 0, tooLarge: 0, added: 0, closed: 0 },
+    texts: 0,
+    discovery: { looked: 0, found: 0, refused: 0 },
+    ms: 0
+  };
+  const up = await upkeep(db2, now);
+  s.closedLists = up.closed;
+  s.deleted = up.deleted;
+  s.topups = await queueTopups(db2, deps.queue, now);
+  s.simplify = await readSimplifyPart(db2, deps.net, now, {
+    clock: deps.clock,
+    deadline: start + budget2 * 0.6
+  });
+  const boards = await readDueBoards(db2, deps.net, now, {
+    clock: deps.clock,
+    deadline: start + budget2 * 0.75,
+    maxBytes: (deps.maxBytes ?? TICK_MAX_BYTES) / (s.simplify ? 2 : 1)
+  });
+  s.boards = {
+    read: boards.read,
+    failed: boards.failed,
+    tooLarge: boards.tooLarge,
+    added: boards.added,
+    closed: boards.closed,
+    stoppedBy: boards.stoppedBy
+  };
+  s.texts = await fillTexts(db2, deps.net, {
+    clock: deps.clock,
+    deadline: start + budget2 * 0.85,
+    max: deps.textsPerTick ?? TEXTS_PER_TICK
+  });
+  const d = await discoverSome(db2, deps.net, now, {
+    clock: deps.clock,
+    deadline: end,
+    maxCompanies: deps.discoveryPerTick ?? DISCOVERY_PER_TICK
+  });
+  s.discovery = { looked: d.looked, found: d.found, refused: d.refused, stoppedBy: d.stoppedBy };
+  s.ms = deps.clock() - start;
+  return s;
+}
+
+// supabase/functions/orbit-worker/handlers/roles.ts
+function rolesHandlers(deps = {}) {
+  return {
+    "roles.tick": async (_job, ctx) => {
+      const r = await runRolesTick(ctx.db, {
+        net: { fetch: deps.fetch ?? fetch, now: ctx.now, sleep: deps.sleep },
+        queue: ctx.queue,
+        clock: deps.clock ?? Date.now,
+        ...deps.roles
+      });
+      console.log(JSON.stringify({ fn: "orbit-worker", step: "roles_tick", ...r }));
+    }
+  };
+}
+
 // packages/core/src/roles/profileLevel.ts
 function levelsFor(level) {
   switch (level) {
@@ -44924,392 +45893,6 @@ async function topup(s, deps, userId) {
   return { listed: ranked.length, read: out.read.length, ...out.note ? { note: out.note } : {} };
 }
 
-// supabase/functions/_shared/roles/readers/linkedin.ts
-var base = (a) => a.base.replace(/\/+$/, "");
-function linkedinPlace(raw) {
-  if (!raw) return {};
-  const m = /\((on-site|onsite|hybrid|remote)\)\s*$/i.exec(raw);
-  const how = m?.[1]?.toLowerCase();
-  const place = raw.replace(/\s*\((on-site|onsite|hybrid|remote)\)\s*$/i, "").trim();
-  return {
-    place: place || void 0,
-    remote: how === "remote" ? "remote" : how === "hybrid" ? "hybrid" : how ? "on_site" : void 0
-  };
-}
-function linkedinListing(it) {
-  const id = str2(it.id);
-  const title = str2(it.title);
-  const company = obj(it.company);
-  const name = str2(company?.name) ?? str2(it.company);
-  if (!id || !title || !name || it.type && it.type !== "JOB") return void 0;
-  const { place, remote } = linkedinPlace(str2(it.location));
-  return {
-    source: "linkedin",
-    externalId: id,
-    companyName: name,
-    companyLinkedinId: str2(company?.id),
-    companyLogoUrl: str2(company?.profile_picture_url),
-    title,
-    locations: place ? [place] : [],
-    remote,
-    url: str2(it.url) ?? `https://www.linkedin.com/jobs/view/${id}`,
-    postedAt: isoOf(it.posted_at),
-    meta: {
-      companySlug: str2(company?.public_identifier),
-      easyApply: it.easy_apply === true,
-      reposted: it.reposted === true,
-      promoted: it.promoted === true
-    }
-  };
-}
-async function linkedinJobSearch(net, access, q) {
-  const limit2 = Math.min(50, Math.max(1, q.limit ?? 25));
-  const params = new URLSearchParams({ account_id: access.accountId, limit: String(limit2) });
-  const body = { api: "classic", category: "jobs", keywords: q.keywords, sort_by: "date" };
-  if (q.seniority?.length) body.seniority = q.seniority;
-  if (q.jobType?.length) body.job_type = q.jobType;
-  if (q.presence?.length) body.presence = q.presence;
-  if (q.datePosted) body.date_posted = q.datePosted;
-  const got = await askJson(net, `${base(access)}/api/v1/linkedin/search?${params}`, {
-    method: "POST",
-    body,
-    headers: { "X-API-KEY": access.apiKey },
-    retries: 1,
-    maxBytes: 3e6
-  });
-  if (!got.ok) return got;
-  const items = obj(got.value)?.items;
-  if (!Array.isArray(items)) return fail("bad_shape", "no items");
-  const out = items.map((x) => obj(x) ? linkedinListing(obj(x)) : void 0).filter((x) => !!x);
-  return { ok: true, value: out, bytes: got.bytes };
-}
-async function linkedinJob(net, access, id) {
-  const params = new URLSearchParams({ account_id: access.accountId });
-  const got = await askJson(net, `${base(access)}/api/v1/linkedin/jobs/${encodeURIComponent(id)}?${params}`, {
-    headers: { "X-API-KEY": access.apiKey },
-    retries: 1,
-    maxBytes: 2e6
-  });
-  if (!got.ok) return got;
-  const j = obj(got.value);
-  if (!j) return fail("bad_shape", "not a job");
-  return {
-    ok: true,
-    bytes: got.bytes,
-    value: {
-      text: typeof j.description === "string" ? j.description : "",
-      title: str2(j.title),
-      companyName: str2(j.company) ?? str2(obj(j.company)?.name),
-      companyLinkedinId: str2(j.company_id),
-      place: str2(j.location),
-      state: str2(j.state)
-    }
-  };
-}
-
-// supabase/functions/_shared/roles/sources.ts
-var TEXT_FRESH_MS = 7 * 864e5;
-var PAGE_MAX_BYTES = 15e5;
-function jobLdOf(html) {
-  for (const b of html.matchAll(
-    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-  )) {
-    let data;
-    try {
-      data = JSON.parse(b[1].trim());
-    } catch {
-      continue;
-    }
-    const items = (Array.isArray(data) ? data : [data]).flatMap(
-      (d) => Array.isArray(obj(d)?.["@graph"]) ? obj(d)["@graph"] : [d]
-    );
-    for (const it of items) {
-      const o = obj(it);
-      const type = o?.["@type"];
-      if (!o || !(type === "JobPosting" || Array.isArray(type) && type.includes("JobPosting"))) continue;
-      const org = o.hiringOrganization;
-      const company = typeof org === "string" ? str2(org) : str2(obj(org)?.name);
-      const title = str2(o.title);
-      if (!company || !title) continue;
-      const places2 = (Array.isArray(o.jobLocation) ? o.jobLocation : [o.jobLocation]).map((l) => {
-        const a = obj(obj(l)?.address);
-        return a ? [str2(a.addressLocality), str2(a.addressRegion), str2(a.addressCountry)].filter(Boolean).join(", ") : "";
-      }).filter((x) => !!x);
-      const salary = obj(obj(o.baseSalary)?.value);
-      const unit = String(obj(o.baseSalary)?.value && salary?.unitText ? salary.unitText : "");
-      const pay = salary && (num(salary.minValue) || num(salary.maxValue) || num(salary.value)) ? {
-        min: num(salary.minValue) ?? num(salary.value),
-        max: num(salary.maxValue) ?? num(salary.value),
-        currency: str2(obj(o.baseSalary)?.currency),
-        per: /hour/i.test(unit) ? "hour" : /month/i.test(unit) ? "month" : "year"
-      } : void 0;
-      return {
-        title: decodeEntities(title),
-        company: decodeEntities(company),
-        description: typeof o.description === "string" ? pageText(decodeEntities(o.description)) : void 0,
-        datePosted: isoOf(o.datePosted),
-        employmentType: Array.isArray(o.employmentType) ? str2(o.employmentType[0]) : str2(o.employmentType),
-        places: places2,
-        remote: o.jobLocationType === "TELECOMMUTE" ? "remote" : void 0,
-        pay
-      };
-    }
-  }
-  return void 0;
-}
-var LINKEDIN_JOB = /linkedin\.com\/(?:comm\/)?jobs\/(?:view\/(?:[^/?#]*-)?(\d{6,})|.*[?&]currentJobId=(\d{6,}))/i;
-async function pageListing(net, url, depth = 0) {
-  const got = await askText(net, url, {
-    accept: "text/html,application/xhtml+xml",
-    maxBytes: PAGE_MAX_BYTES,
-    retries: 1
-  });
-  if (!got.ok)
-    return {
-      problem: got.reason === "not_found" ? "That posting is no longer listed." : "Orbit couldn't open that page. Paste the posting's text."
-    };
-  const ld = jobLdOf(got.value);
-  if (ld)
-    return {
-      source: "posting",
-      externalId: url,
-      companyName: ld.company,
-      title: ld.title,
-      locations: ld.places,
-      remote: ld.remote,
-      pay: ld.pay,
-      url,
-      postedAt: ld.datePosted,
-      text: ld.description,
-      meta: { employmentType: ld.employmentType }
-    };
-  const inner = depth === 0 ? embeddedJobLink(got.value) : void 0;
-  if (inner && inner !== url && !postingUrlProblem(inner))
-    return readUrlWith(net, inner, void 0, depth + 1);
-  return { problem: "Orbit cannot read this site: paste the posting's text." };
-}
-async function readUrlWith(net, url, linkedin, depth) {
-  const problem = postingUrlProblem(url);
-  if (problem) return { problem };
-  const li = LINKEDIN_JOB.exec(url);
-  if (li) {
-    const id = li[1] ?? li[2];
-    if (!linkedin)
-      return {
-        problem: "Orbit reads LinkedIn jobs through your own LinkedIn. Connect it, or paste the posting's text."
-      };
-    const got = await linkedinJob(net, linkedin, id);
-    if (!got.ok || !got.value.title || !got.value.companyName)
-      return { problem: "Orbit couldn't read that LinkedIn job just now. Paste the posting's text." };
-    return {
-      source: "linkedin",
-      externalId: id,
-      companyName: got.value.companyName,
-      companyLinkedinId: got.value.companyLinkedinId,
-      title: got.value.title,
-      locations: got.value.place ? [got.value.place] : [],
-      url: `https://www.linkedin.com/jobs/view/${id}`,
-      text: got.value.text
-    };
-  }
-  const board = boardOfUrl(url);
-  if (board?.externalId) {
-    const name = nameFromToken(board.token || "company");
-    switch (board.service) {
-      case "greenhouse": {
-        if (!board.token) break;
-        const got = await readGreenhouseJob(net, board.token, board.externalId);
-        if (!got.ok) {
-          if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
-          break;
-        }
-        return {
-          source: "greenhouse",
-          externalId: board.externalId,
-          companyName: name,
-          title: got.value.title ?? "Role",
-          team: got.value.team,
-          locations: got.value.place ? [got.value.place] : [],
-          pay: got.value.pay,
-          url,
-          text: got.value.text
-        };
-      }
-      case "lever": {
-        const got = await readLeverJob(net, board.token, board.externalId, name);
-        if (got.ok) return { ...got.value, url: got.value.url || url };
-        if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
-        break;
-      }
-      case "workday": {
-        if (!board.path) break;
-        const got = await readWorkdayJob(net, board.token, board.path);
-        if (got.ok)
-          return {
-            source: "workday",
-            externalId: board.externalId,
-            companyName: got.value.companyName ?? name,
-            title: got.value.title ?? "Role",
-            locations: got.value.places,
-            remote: got.value.remote,
-            url,
-            postedAt: got.value.postedAt,
-            text: got.value.text,
-            meta: { path: board.path, timeType: got.value.timeType }
-          };
-        if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
-        break;
-      }
-      case "smartrecruiters": {
-        const id = board.externalId.split("/").pop();
-        const got = await readSmartRecruitersJob(net, board.token, id);
-        if (got.ok && got.value.title)
-          return {
-            source: "smartrecruiters",
-            externalId: board.externalId,
-            companyName: got.value.companyName ?? board.token,
-            title: got.value.title,
-            locations: got.value.place ? [got.value.place] : [],
-            url: got.value.url ?? url,
-            postedAt: got.value.postedAt,
-            text: got.value.text
-          };
-        break;
-      }
-      case "workable": {
-        const code = board.externalId.split("/").pop();
-        const got = await readWorkableJob(net, board.token, code);
-        if (got.ok && got.value.title)
-          return {
-            source: "workable",
-            externalId: board.externalId,
-            companyName: name,
-            title: got.value.title,
-            locations: got.value.place ? [got.value.place] : [],
-            url,
-            text: got.value.text
-          };
-        break;
-      }
-      case "recruitee": {
-        const slug = board.externalId.split("/").pop();
-        const got = await readRecruiteeJob(net, board.token, slug);
-        if (got.ok) return got.value;
-        if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
-        break;
-      }
-      case "ashby":
-        break;
-    }
-  }
-  return pageListing(net, url, depth);
-}
-function readUrl(net, url, linkedin) {
-  return readUrlWith(net, url.trim(), linkedin, 0);
-}
-async function readText(net, j, linkedin) {
-  const fromUrl = boardOfUrl(j.url);
-  const token2 = j.token ?? fromUrl?.token;
-  const tail = j.external_id.split("/").pop();
-  switch (j.source) {
-    case "greenhouse": {
-      if (!token2) break;
-      const got = await readGreenhouseJob(net, token2, j.external_id);
-      return got.ok ? { ...got, value: { text: got.value.text, team: got.value.team, pay: got.value.pay } } : got;
-    }
-    case "lever": {
-      if (!token2) break;
-      const got = await readLeverJob(net, token2, j.external_id, j.company_name);
-      return got.ok ? { ...got, value: { text: got.value.text ?? "", team: got.value.team, pay: got.value.pay } } : got;
-    }
-    case "workday": {
-      const path = typeof j.meta?.path === "string" ? j.meta.path : fromUrl?.path;
-      if (!token2 || !path) break;
-      const got = await readWorkdayJob(net, token2, path);
-      return got.ok ? { ...got, value: { text: got.value.text, places: got.value.places, remote: got.value.remote } } : got;
-    }
-    case "smartrecruiters": {
-      if (!token2) break;
-      const got = await readSmartRecruitersJob(net, token2, tail);
-      return got.ok ? { ...got, value: { text: got.value.text } } : got;
-    }
-    case "workable": {
-      if (!token2) break;
-      const got = await readWorkableJob(net, token2, tail);
-      return got.ok ? { ...got, value: { text: got.value.text } } : got;
-    }
-    case "recruitee": {
-      if (!token2) break;
-      const got = await readRecruiteeJob(net, token2, tail);
-      return got.ok ? { ...got, value: { text: got.value.text ?? "", pay: got.value.pay } } : got;
-    }
-    case "linkedin": {
-      if (!linkedin) return { ok: false, reason: "unreadable" };
-      const got = await linkedinJob(net, linkedin, j.external_id);
-      if (!got.ok) return got;
-      if (got.value.state && got.value.state !== "active")
-        return { ok: false, reason: "not_found", message: "closed" };
-      return { ok: true, value: { text: got.value.text }, bytes: got.bytes };
-    }
-    default:
-      break;
-  }
-  const l = await readUrlWith(net, j.url, linkedin, 0);
-  if ("problem" in l)
-    return {
-      ok: false,
-      reason: /no longer listed/.test(l.problem) ? "not_found" : "unreadable",
-      message: l.problem
-    };
-  return {
-    ok: true,
-    value: { text: l.text ?? "", places: l.locations.length ? l.locations : void 0, pay: l.pay },
-    bytes: 0
-  };
-}
-async function text2(db2, net, jobId, linkedin) {
-  const now = net.now();
-  const [j] = await db2.sql`
-    select j.id, j.source, j.external_id, j.board_id, j.url, j.title, j.text, j.text_read_at, j.level, j.term, j.meta,
-           j.company_name, b.token
-      from orbit_private.jobs j left join orbit_private.job_boards b on b.id = j.board_id
-     where j.id = ${jobId}::uuid`;
-  if (!j) return void 0;
-  if (j.text && j.text_read_at && now.getTime() - new Date(j.text_read_at).getTime() < TEXT_FRESH_MS)
-    return j.text;
-  const got = await readText(net, j, linkedin).catch(() => ({
-    ok: false,
-    reason: "unreadable"
-  }));
-  if (!got.ok) {
-    if (got.reason === "not_found")
-      await db2.sql`update orbit_private.jobs set closed_at = coalesce(closed_at, ${now}::timestamptz) where id = ${j.id}::uuid`;
-    return j.text ?? void 0;
-  }
-  const cleaned = cleanText(got.value.text);
-  if (!cleaned) return j.text ?? void 0;
-  const hash = await sha256(cleaned);
-  const places2 = got.value.places?.length ? splitPlaces(got.value.places) : void 0;
-  await db2.sql`
-    update orbit_private.jobs
-       set text = ${cleaned}, text_hash = ${hash}, text_read_at = ${now}::timestamptz,
-           level = coalesce(level, ${j.level ? null : roleLevel(j.title, cleaned) ?? null}),
-           term = coalesce(term, ${j.term ? null : termOf(j.title, cleaned) ?? null}),
-           team = coalesce(team, ${got.value.team ?? null}),
-           pay = coalesce(pay, ${got.value.pay ?? payFromText(cleaned) ?? null}::jsonb),
-           remote = coalesce(remote, ${got.value.remote ?? null}),
-           places = coalesce(${places2 ?? null}::text[], places),
-           countries = coalesce(${places2 ? countriesOf(places2) : null}::text[], countries)
-     where id = ${j.id}::uuid`;
-  await count(db2, now, "texts_read");
-  return cleaned;
-}
-async function linkedinSearch(net, access, q) {
-  const got = await linkedinJobSearch(net, access, q);
-  return got.ok ? got.value : [];
-}
-var roleSources = { keep, text: text2, linkedinSearch, readUrl };
-
 // supabase/functions/orbit-worker/handlers/rolesTopup.ts
 function rolesTopupHandlers(config = { env: {} }, deps = { sources: roleSources }) {
   return {
@@ -45318,589 +45901,6 @@ function rolesTopupHandlers(config = { env: {} }, deps = { sources: roleSources 
       const s = makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue });
       const r = await topup(s, deps, job.userId);
       console.log(JSON.stringify({ fn: "orbit-worker", step: "roles.topup", ...r }));
-    }
-  };
-}
-
-// packages/core/src/resume/schools.ts
-var SCHOOL_WORDS = /\b(university|universit[àáä]t|universidad|université|college|institute|school|academy|polytechnic|conservatory|seminary)\b/i;
-var KNOWN_SCHOOLS = new Set(
-  [
-    "mit",
-    "caltech",
-    "cmu",
-    "carnegie mellon",
-    "nyu",
-    "ucla",
-    "usc",
-    "uc berkeley",
-    "berkeley",
-    "uc san diego",
-    "ucsd",
-    "uc davis",
-    "uc irvine",
-    "uci",
-    "ucsb",
-    "unc",
-    "unc chapel hill",
-    "umich",
-    "uiuc",
-    "ut austin",
-    "upenn",
-    "penn",
-    "wharton",
-    "harvard",
-    "yale",
-    "princeton",
-    "columbia",
-    "cornell",
-    "dartmouth",
-    "brown",
-    "stanford",
-    "duke",
-    "northwestern",
-    "georgetown",
-    "vanderbilt",
-    "rice",
-    "emory",
-    "tufts",
-    "notre dame",
-    "georgia tech",
-    "virginia tech",
-    "texas a&m",
-    "purdue",
-    "uva",
-    "umd",
-    "bu",
-    "bc",
-    "wellesley",
-    "barnard",
-    "williams",
-    "amherst",
-    "swarthmore",
-    "pomona",
-    "harvey mudd",
-    "oxford",
-    "cambridge",
-    "lse",
-    "eth zurich",
-    "insead",
-    "baruch",
-    "cuny",
-    "suny"
-  ].map((s) => s.toLowerCase())
-);
-var COMPANY_WORDS = /\b(inc|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|gmbh|plc|technologies|technology|labs?|capital|partners|group|holdings|ventures|bank|health|healthcare|systems|solutions|consulting|studios?|media|software|analytics|therapeutics|pharmaceuticals|logistics|motors|energy|securities|advisors|associates|agency|foundation|fund|ai)\b\.?/i;
-var clean3 = (s) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").replace(/^[\s,.;:–—-]+|[\s,.;:–—-]+$/g, "").trim();
-function looksLikeCompany(name) {
-  const n = clean3(name ?? "");
-  if (!n) return false;
-  if (SCHOOL_WORDS.test(n)) return false;
-  return COMPANY_WORDS.test(n);
-}
-function looksLikeSchool(name) {
-  const n = clean3(name ?? "");
-  if (!n || n.length > 120) return false;
-  if (SCHOOL_WORDS.test(n)) return true;
-  if (looksLikeCompany(n)) return false;
-  const l = n.toLowerCase();
-  if (KNOWN_SCHOOLS.has(l)) return true;
-  const head = l.split(",")[0].trim();
-  if (KNOWN_SCHOOLS.has(head)) return true;
-  if (/^[a-z .'-]+ state$/i.test(head) && head.split(" ").length <= 4) return true;
-  if (/^(uc|ut|suny|cuny|cal) [a-z ]+$/i.test(head) && head.split(" ").length <= 4) return true;
-  return false;
-}
-
-// supabase/functions/_shared/roles/discover.ts
-var DAY21 = 864e5;
-var LOOKUP_RECHECK_MS = 30 * DAY21;
-var LOOKUP_FAILED_RECHECK_MS = 3 * DAY21;
-var DISCOVERY_PER_DAY = 500;
-var PAGES_PER_COMPANY = 4;
-var PAGE_MAX_BYTES2 = 15e5;
-function siteOf(raw) {
-  if (!raw?.trim()) return void 0;
-  let host;
-  try {
-    host = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname.toLowerCase();
-  } catch {
-    return void 0;
-  }
-  host = host.replace(/^www\./, "");
-  if (!host.includes(".") || postingUrlProblem(`https://${host}/`)) return void 0;
-  if (/(^|\.)(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|msn|qq|163|gmx|mail|yandex|linkedin|github|medium|substack|notion|wixsite|squarespace)\.[a-z.]+$/.test(
-    host
-  ) || /\.edu$|\.ac\.[a-z]+$/.test(host))
-    return void 0;
-  return host;
-}
-var onSite = (host, domain) => host === domain || host.endsWith(`.${domain}`);
-async function getPage(net, url, domain) {
-  let at = url;
-  for (let hop = 0; hop < 4; hop++) {
-    let res;
-    try {
-      res = await net.fetch(at, {
-        headers: { "user-agent": POSTING_USER_AGENT, accept: "text/html,application/xhtml+xml" },
-        redirect: "manual",
-        signal: AbortSignal.timeout(net.timeoutMs ?? DEFAULT_TIMEOUT_MS)
-      });
-    } catch {
-      return { status: 0, url: at };
-    }
-    const next = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
-    if (next) {
-      await res.body?.cancel().catch(() => void 0);
-      const to = new URL(next, at).toString();
-      const board = boardOfUrl(to);
-      if (board?.token) return { status: res.status, board, url: to };
-      if (postingUrlProblem(to) || !onSite(new URL(to).hostname.toLowerCase().replace(/^www\./, ""), domain))
-        return { status: res.status, url: to };
-      at = to;
-      continue;
-    }
-    if (!res.ok) {
-      await res.body?.cancel().catch(() => void 0);
-      return { status: res.status, url: at };
-    }
-    const type = res.headers.get("content-type") ?? "";
-    if (type && !/html|text/i.test(type)) {
-      await res.body?.cancel().catch(() => void 0);
-      return { status: res.status, url: at };
-    }
-    const text4 = await res.text().catch(() => "");
-    return { status: res.status, html: text4.slice(0, PAGE_MAX_BYTES2), url: at };
-  }
-  return { status: 0, url: at };
-}
-function careersLinkIn(html, base2) {
-  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]{0,200}?)<\/a>/gi)) {
-    const label2 = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    if (!/^(careers?|jobs|join us|join the team|open (roles|positions)|we('|’)re hiring|work with us|work at .{1,30})$/i.test(
-      label2
-    ))
-      continue;
-    try {
-      return new URL(m[1], base2).toString();
-    } catch {
-    }
-  }
-  return void 0;
-}
-function boardOnPage(html) {
-  const links = boardLinksIn(html);
-  return links[0]?.link;
-}
-async function discoverCompany(db2, net, c, now) {
-  const out = { outcome: "none", requests: 0, refused: 0 };
-  const sleep = sleepFor(net);
-  const domain = siteOf(c.domain);
-  let found;
-  let failed = false;
-  if (domain) {
-    const tried = /* @__PURE__ */ new Set();
-    const queue = [
-      `https://${domain}/careers`,
-      `https://${domain}/jobs`,
-      `https://careers.${domain}/`,
-      `https://${domain}/`
-    ];
-    while (queue.length && out.requests < PAGES_PER_COMPANY && !found) {
-      const url = queue.shift();
-      if (tried.has(url)) continue;
-      tried.add(url);
-      if (out.requests) await sleep(400);
-      const page2 = await getPage(net, url, domain);
-      out.requests++;
-      if (page2.board) {
-        found = { ...page2.board, url };
-        break;
-      }
-      if (page2.status === 403 || page2.status === 429) {
-        out.refused++;
-        if (page2.status === 429) break;
-        continue;
-      }
-      if (!page2.html) continue;
-      const board = boardOnPage(page2.html);
-      if (board) {
-        found = { ...board, url: page2.url };
-        break;
-      }
-      if (url === `https://${domain}/`) {
-        const link = careersLinkIn(page2.html, page2.url);
-        const linked = link ? boardOfUrl(link) : void 0;
-        if (linked?.token) {
-          found = { ...linked, url: page2.url };
-          break;
-        }
-        if (link && !tried.has(link) && !postingUrlProblem(link) && onSite(new URL(link).hostname.replace(/^www\./, ""), domain))
-          queue.push(link);
-      }
-    }
-    if (!found && out.refused && out.refused >= out.requests) failed = true;
-  }
-  let via = "careers_page";
-  if (!found && !failed) {
-    const tokens2 = [.../* @__PURE__ */ new Set([c.key.replace(/[^a-z0-9]/g, ""), c.key.replace(/[^a-z0-9]+/g, "-")])].filter(
-      (t) => t.length >= 3
-    );
-    for (const t of tokens2.slice(0, 2)) {
-      if (out.requests) await sleep(300);
-      const got = await greenhouseBoardName(net, t);
-      out.requests++;
-      if (got.ok && got.value && normalizeCompany(got.value) === c.key) {
-        found = { service: "greenhouse", token: t };
-        via = "name";
-        break;
-      }
-      if (!got.ok && (got.reason === "refused" || got.reason === "rate_limited")) out.refused++;
-    }
-  }
-  if (found) {
-    const board = await upsertBoard(db2, {
-      service: found.service,
-      token: found.token,
-      companyKey: c.key,
-      companyName: c.name,
-      companyDomain: domain,
-      foundVia: via,
-      foundUrl: found.url
-    });
-    out.outcome = "found";
-    out.board = { service: found.service, token: found.token, id: board.id, via, url: found.url };
-  } else if (failed) out.outcome = "failed";
-  await db2.sql`
-    insert into orbit_private.job_board_lookups (company_key, company_name, domain, outcome, board_id, checked_at)
-    values (${c.key}, ${c.name}, ${domain ?? null}, ${out.outcome}, ${out.board?.id ?? null}::uuid, ${now}::timestamptz)
-    on conflict (company_key) do update set company_name = excluded.company_name, domain = excluded.domain,
-      outcome = excluded.outcome, board_id = excluded.board_id, checked_at = excluded.checked_at`;
-  await count(db2, now, "discovery_companies");
-  await count(db2, now, "discovery_requests", out.requests);
-  await count(db2, now, "discovery_refused", out.refused);
-  if (found) await count(db2, now, "discovery_found");
-  return out;
-}
-async function companiesToFind(db2, now, limit2) {
-  const rows = await db2.sql`
-    select trim(t.name) as name, null::text as domain, 3 as pri, count(*)::int as n
-      from orbit.goals g
-      join orbit.users u on u.id = g.user_id and u.deleted_at is null,
-           jsonb_array_elements_text(coalesce(g.targets->'organizations', '[]'::jsonb)) t(name)
-     where g.deleted_at is null and trim(t.name) <> ''
-     group by 1
-    union all
-    select * from (
-      select coalesce(o.name, p.org_raw) as name, max(o.domains[1]) as domain, 2 as pri, count(*)::int as n
-        from orbit.people p
-        join orbit.users u on u.id = p.user_id and u.deleted_at is null
-        left join orbit.organizations o on o.id = p.org_id
-       where p.deleted_at is null and p.merged_into is null and not p.is_self and coalesce(o.name, p.org_raw) is not null
-       group by 1
-       order by count(*) desc
-       limit 4000) people
-    union all
-    select * from (
-      select name, website as domain, 1 as pri, coalesce(team_size, 0) as n
-        from orbit_private.company_facts
-       where website is not null and coalesce(yc_status, 'Active') <> 'Inactive'
-       order by coalesce(team_size, 0) desc
-       limit 6000) facts`;
-  const known = new Set(
-    (await db2.sql`
-        select company_key as key from orbit_private.job_board_lookups
-         where (outcome <> 'failed' and checked_at > ${new Date(now.getTime() - LOOKUP_RECHECK_MS)}::timestamptz)
-            or (outcome = 'failed' and checked_at > ${new Date(now.getTime() - LOOKUP_FAILED_RECHECK_MS)}::timestamptz)
-        union
-        select company_key from orbit_private.job_boards where company_key is not null`).map((r) => r.key)
-  );
-  const byKey = /* @__PURE__ */ new Map();
-  for (const r of rows) {
-    const name = r.name?.trim();
-    if (!name || looksLikeSchool(name)) continue;
-    const key2 = companyKey(name);
-    if (!key2 || known.has(key2)) continue;
-    const had = byKey.get(key2);
-    const domain = siteOf(r.domain) ?? had?.domain;
-    if (had) {
-      had.pri = Math.max(had.pri, Number(r.pri));
-      had.n += Number(r.n);
-      had.domain = domain;
-    } else byKey.set(key2, { key: key2, name, domain, pri: Number(r.pri), n: Number(r.n) });
-  }
-  return [...byKey.values()].sort((a, b) => b.pri - a.pri || b.n - a.n).slice(0, limit2).map(({ key: key2, name, domain }) => ({ key: key2, name, domain }));
-}
-async function discoverSome(db2, net, now, run) {
-  const s = {
-    looked: 0,
-    found: 0,
-    refused: 0,
-    requests: 0,
-    stoppedBy: void 0
-  };
-  if (run.deadline - run.clock() < 5e3) return { ...s, stoppedBy: "time" };
-  const todo = await companiesToFind(db2, now, run.maxCompanies);
-  for (const c of todo) {
-    if (run.deadline - run.clock() < 5e3) {
-      s.stoppedBy = "time";
-      break;
-    }
-    if (!await take(db2, now, "discovery_cap", DISCOVERY_PER_DAY)) {
-      s.stoppedBy = "cap";
-      break;
-    }
-    const d = await discoverCompany(db2, net, c, now);
-    s.looked++;
-    s.requests += d.requests;
-    s.refused += d.refused;
-    if (d.outcome === "found") s.found++;
-  }
-  return s;
-}
-async function harvestBoards(db2, listings, now) {
-  const seen = /* @__PURE__ */ new Map();
-  for (const l of listings) {
-    const link = boardOfUrl(l.url);
-    if (!link?.token) continue;
-    const k = `${link.service}:${link.token.toLowerCase()}`;
-    if (!seen.has(k)) seen.set(k, { link, name: l.companyName, url: l.url });
-  }
-  if (!seen.size) return 0;
-  const have = new Set(
-    (await db2.sql`
-        select service || ':' || lower(token) as k from orbit_private.job_boards
-         where service || ':' || lower(token) = any(${[...seen.keys()]}::text[])`).map((r) => r.k)
-  );
-  let added = 0;
-  for (const [k, v] of seen) {
-    if (have.has(k)) continue;
-    const r = await upsertBoard(db2, {
-      service: v.link.service,
-      token: v.link.token,
-      companyKey: companyKey(v.name),
-      companyName: v.name,
-      foundVia: "simplify",
-      foundUrl: v.url
-    });
-    if (r.created) added++;
-  }
-  await count(db2, now, "boards_harvested", added);
-  return added;
-}
-
-// supabase/functions/_shared/roles/readers/simplify.ts
-var SIMPLIFY_LISTS = {
-  intern: "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/.github/scripts/listings.json",
-  newgrad: "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json"
-};
-var SIMPLIFY_MAX_BYTES = 4e7;
-function simplifyListing(x, list3) {
-  if (x.active !== true || x.is_visible === false) return void 0;
-  const id = str2(x.id);
-  const title = str2(x.title);
-  const company = str2(x.company_name);
-  const url = str2(x.url);
-  if (!id || !title || !company || !url) return void 0;
-  const sponsorRaw = str2(x.sponsorship);
-  const sponsorship = sponsorRaw === "Offers Sponsorship" ? "offers" : sponsorRaw === "Does Not Offer Sponsorship" || sponsorRaw === "U.S. Citizenship is Required" ? "none" : void 0;
-  const terms = arr(x.terms).map((t) => str2(t)).filter((t) => !!t && !/^n\/?a$/i.test(t));
-  const posted = typeof x.date_posted === "number" ? new Date(x.date_posted * 1e3).toISOString() : void 0;
-  const board = boardOfUrl(url);
-  return {
-    source: "simplify",
-    externalId: id,
-    companyName: company,
-    title,
-    locations: arr(x.locations).map((l) => str2(l)).filter((l) => !!l),
-    level: list3 === "intern" ? "intern" : void 0,
-    employment: list3 === "intern" ? "internship" : void 0,
-    term: terms.length ? terms.join(", ") : void 0,
-    sponsorship,
-    degrees: arr(x.degrees).map((d) => str2(d)).filter((d) => !!d),
-    url,
-    applyUrl: url,
-    postedAt: posted,
-    meta: {
-      list: list3,
-      category: str2(x.category),
-      companyUrl: str2(x.company_url),
-      ...sponsorRaw && sponsorRaw !== "Other" ? { sponsorshipNote: sponsorRaw } : {},
-      ...sponsorRaw === "U.S. Citizenship is Required" ? { citizenship: true } : {},
-      ...board?.externalId ? { boardRef: `${board.service}:${board.externalId}` } : {}
-    }
-  };
-}
-async function readSimplify(net, list3) {
-  const got = await askJson(net, SIMPLIFY_LISTS[list3], { maxBytes: SIMPLIFY_MAX_BYTES, accept: "*/*" });
-  if (!got.ok) return got;
-  if (!Array.isArray(got.value)) return fail("bad_shape", "not a list");
-  const listings = [];
-  for (const raw of got.value) {
-    const x = obj(raw);
-    const l = x && simplifyListing(x, list3);
-    if (l) listings.push(l);
-  }
-  return { ok: true, value: { listings, entries: got.value.length }, bytes: got.bytes };
-}
-
-// supabase/functions/_shared/roles/tick.ts
-var DAY22 = 864e5;
-var TICK_MS = 4e4;
-var TICK_MAX_BYTES = 16e6;
-var LIST_UNSEEN_MS = 3 * DAY22;
-var CLOSED_KEEP_MS = 60 * DAY22;
-var TOPUP_HOUR = 6;
-var TOPUP_ACTIVE_MS = 14 * DAY22;
-var SIMPLIFY_PART = 500;
-var SIMPLIFY_PER_TICK = 2e3;
-var TEXTS_PER_TICK = 15;
-var DISCOVERY_PER_TICK = 8;
-async function upkeep(db2, now) {
-  const closed = await db2.sql`
-    update orbit_private.jobs set closed_at = ${now}::timestamptz
-     where source in ('simplify', 'linkedin') and closed_at is null
-       and last_seen_at < ${new Date(now.getTime() - LIST_UNSEEN_MS)}::timestamptz
-     returning id`;
-  const deleted = await db2.sql`
-    delete from orbit_private.jobs j
-     where j.id in (
-       select id from orbit_private.jobs
-        where closed_at is not null and closed_at < ${new Date(now.getTime() - CLOSED_KEEP_MS)}::timestamptz
-          and not exists (select 1 from orbit.role_matches m
-                           where m.job_id = orbit_private.jobs.id and m.status in ('saved', 'applied', 'interviewing'))
-        limit 2000)
-     returning id`;
-  await count(db2, now, "roles_closed", closed.length);
-  await count(db2, now, "roles_deleted", deleted.length);
-  return { closed: closed.length, deleted: deleted.length };
-}
-async function queueTopups(db2, queue, now) {
-  if (now.getUTCHours() < TOPUP_HOUR) return null;
-  if (await counted(db2, now, "topup_queued")) return null;
-  const users = await db2.sql`
-    select distinct s.user_id from orbit.role_searches s
-      join orbit.users u on u.id = s.user_id and u.deleted_at is null
-     where s.created_at > ${new Date(now.getTime() - TOPUP_ACTIVE_MS)}::timestamptz`;
-  const day2 = dayOf(now);
-  for (const u2 of users)
-    await queue.enqueue({
-      kind: "roles.topup",
-      userId: u2.user_id,
-      payload: {},
-      dedupeKey: `roles.topup:${u2.user_id}:${day2}`
-    });
-  await setMark(db2, now, "topup_queued", users.length + 1);
-  return users.length;
-}
-async function readSimplifyPart(db2, net, now, run) {
-  let list3;
-  for (const l of ["intern", "newgrad"])
-    if (!await counted(db2, now, `simplify_${l}_done`)) {
-      list3 = l;
-      break;
-    }
-  if (!list3) return void 0;
-  const got = await readSimplify(net, list3);
-  if (!got.ok) {
-    return { list: list3, kept: 0, done: false, harvested: 0, error: got.reason };
-  }
-  const listings = got.value.listings;
-  let at = await counted(db2, now, `simplify_${list3}_at`);
-  const harvested = at === 0 ? await harvestBoards(db2, listings, now) : 0;
-  let kept = 0;
-  const stop = at + SIMPLIFY_PER_TICK;
-  while (at < listings.length && at < stop && run.clock() < run.deadline) {
-    const part2 = listings.slice(at, at + SIMPLIFY_PART);
-    const r = await keepListings(db2, part2, { now });
-    kept += r.added + r.updated;
-    at += part2.length;
-    await setMark(db2, now, `simplify_${list3}_at`, at);
-  }
-  const done2 = at >= listings.length;
-  if (done2) {
-    await setMark(db2, now, `simplify_${list3}_done`, 1);
-    await count(db2, now, "simplify_listings", listings.length);
-  }
-  return { list: list3, kept, done: done2, harvested };
-}
-async function fillTexts(db2, net, run) {
-  if (run.deadline - run.clock() < 3e3) return 0;
-  const rows = await db2.sql`
-    select id from orbit_private.jobs
-     where closed_at is null and dupe_of is null and text_read_at is null
-       and source in ('greenhouse', 'smartrecruiters', 'workable')
-     order by case when level = 'intern' then 0 when level = 'entry' then 1 when level is null then 2 else 3 end,
-              first_seen_at desc
-     limit ${run.max}::int`;
-  let n = 0;
-  for (const r of rows) {
-    if (run.deadline - run.clock() < 3e3) break;
-    if (await text2(db2, net, r.id)) n++;
-  }
-  return n;
-}
-async function runRolesTick(db2, deps) {
-  const now = deps.net.now();
-  const start = deps.clock();
-  const budget2 = deps.budgetMs ?? TICK_MS;
-  const end = start + budget2;
-  const s = {
-    closedLists: 0,
-    deleted: 0,
-    topups: null,
-    boards: { read: 0, failed: 0, tooLarge: 0, added: 0, closed: 0 },
-    texts: 0,
-    discovery: { looked: 0, found: 0, refused: 0 },
-    ms: 0
-  };
-  const up = await upkeep(db2, now);
-  s.closedLists = up.closed;
-  s.deleted = up.deleted;
-  s.topups = await queueTopups(db2, deps.queue, now);
-  s.simplify = await readSimplifyPart(db2, deps.net, now, {
-    clock: deps.clock,
-    deadline: start + budget2 * 0.6
-  });
-  const boards = await readDueBoards(db2, deps.net, now, {
-    clock: deps.clock,
-    deadline: start + budget2 * 0.75,
-    maxBytes: (deps.maxBytes ?? TICK_MAX_BYTES) / (s.simplify ? 2 : 1)
-  });
-  s.boards = {
-    read: boards.read,
-    failed: boards.failed,
-    tooLarge: boards.tooLarge,
-    added: boards.added,
-    closed: boards.closed,
-    stoppedBy: boards.stoppedBy
-  };
-  s.texts = await fillTexts(db2, deps.net, {
-    clock: deps.clock,
-    deadline: start + budget2 * 0.85,
-    max: deps.textsPerTick ?? TEXTS_PER_TICK
-  });
-  const d = await discoverSome(db2, deps.net, now, {
-    clock: deps.clock,
-    deadline: end,
-    maxCompanies: deps.discoveryPerTick ?? DISCOVERY_PER_TICK
-  });
-  s.discovery = { looked: d.looked, found: d.found, refused: d.refused, stoppedBy: d.stoppedBy };
-  s.ms = deps.clock() - start;
-  return s;
-}
-
-// supabase/functions/orbit-worker/handlers/roles.ts
-function rolesHandlers(deps = {}) {
-  return {
-    "roles.tick": async (_job, ctx) => {
-      const r = await runRolesTick(ctx.db, {
-        net: { fetch: deps.fetch ?? fetch, now: ctx.now, sleep: deps.sleep },
-        queue: ctx.queue,
-        clock: deps.clock ?? Date.now,
-        ...deps.roles
-      });
-      console.log(JSON.stringify({ fn: "orbit-worker", step: "roles_tick", ...r }));
     }
   };
 }
