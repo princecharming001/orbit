@@ -365,6 +365,8 @@ export type WarmUpStopReason =
   | 'replied'
   | 'messaged'
   | 'connected'
+  /** the student sent them a connection request from Orbit (Connect) */
+  | 'connect_sent'
   | 'do_not_contact'
   | 'hidden'
   | 'merged'
@@ -505,6 +507,8 @@ export function warmUpStopWords(reason: string | undefined, first: string): stri
       return `You already wrote to ${first}, so Orbit stopped the warm-up.`;
     case 'connected':
       return `You and ${first} are connected now, so Orbit stopped the warm-up.`;
+    case 'connect_sent':
+      return `You sent ${first} a connection request, so Orbit stopped the warm-up.`;
     case 'do_not_contact':
       return `${first} is marked do not contact, so Orbit stopped the warm-up.`;
     case 'hidden':

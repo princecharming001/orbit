@@ -1228,6 +1228,20 @@ describe('what stops a warm-up', () => {
         t.db.sql`update orbit.people set linkedin_connected_on = '2026-11-16' where id = ${personId}::uuid`,
     ],
     [
+      'the student sends them a connection request from Orbit',
+      'connect_sent',
+      ({ userId, personId }) => t.db.sql`
+        insert into orbit.linkedin_connects (user_id, target, person_id, status, sent_at)
+        values (${userId}::uuid, 'in:priya', ${personId}::uuid, 'sent', now())`,
+    ],
+    [
+      'a connection request that may have gone',
+      'connect_sent',
+      ({ userId, personId }) => t.db.sql`
+        insert into orbit.linkedin_connects (user_id, target, person_id, status)
+        values (${userId}::uuid, 'in:priya', ${personId}::uuid, 'unconfirmed')`,
+    ],
+    [
       'they are marked do not contact',
       'do_not_contact',
       ({ personId }) => t.db.sql`update orbit.people set do_not_contact = true where id = ${personId}::uuid`,
@@ -1319,7 +1333,7 @@ describe('what stops a warm-up', () => {
       expect(viaTick.out.kind).toBe('nothing');
     });
 
-  it('a chat in the "warming" stage, an old card, or a message from before the start, stops nothing', async () => {
+  it('a chat in the "warming" stage, an old card, a message or a connection request from before the start, or one still on its way, stops nothing', async () => {
     const k = setup();
     const u = await student();
     const p = await priya(u.userId);
@@ -1333,6 +1347,12 @@ describe('what stops a warm-up', () => {
       values (${u.userId}::uuid, ${p}::uuid, 'no_response', ${new Date(MONDAY - 200 * DAY)}::timestamptz),
              (${u.userId}::uuid, ${p}::uuid, 'identified', ${new Date(MONDAY - 2 * DAY)}::timestamptz),
              (${u.userId}::uuid, ${p}::uuid, 'replied', ${new Date(MONDAY - 300 * DAY)}::timestamptz)`;
+    // a connection request sent before the warm-up, and one still on its way to LinkedIn
+    await t.db.sql`
+      insert into orbit.linkedin_connects (user_id, target, person_id, status, created_at, sent_at)
+      values (${u.userId}::uuid, 'in:priya', ${p}::uuid, 'sent', ${new Date(MONDAY - 5 * DAY)}::timestamptz,
+              ${new Date(MONDAY - 5 * DAY)}::timestamptz),
+             (${u.userId}::uuid, 'id:ACoPriya', ${p}::uuid, 'sending', now(), null)`;
     await addThread(t, u.userId, p, [
       { direction: 'in', at: new Date(MONDAY - 30 * DAY).toISOString(), body: 'An old note' },
       { direction: 'out', at: new Date(MONDAY - 29 * DAY).toISOString(), body: 'An old answer' },

@@ -76,7 +76,7 @@ Per student, per day in their time zone: **15 profile views, 10 likes, 4 comment
 ### 8.4 What stops it
 
 - The student: **Stop** on the person's page and on Drafts (Coming up). The chat goes back to To contact. Moving the card out of Warming up by hand (back to To contact, archived, or on to a later stage) stops the run as well.
-- By itself (`orbit.warmup_stop_reason`, checked before every step and by the five-minute tick): the person wrote; the student wrote to them or queued a message; they became a connection; do not contact, hidden, merged or deleted; LinkedIn disconnected, parked, needing a new sign-in, or a different account than the one the run started with; the setting turned off (at once).
+- By itself (`orbit.warmup_stop_reason`, checked before every step and by the five-minute tick): the person wrote; the student wrote to them or queued a message; they became a connection, or the student sent them a connection request from Orbit (Connect, `20261215_orbit_warmup_connect_sent.sql`); do not contact, hidden, merged or deleted; LinkedIn disconnected, parked, needing a new sign-in, or a different account than the one the run started with; the setting turned off (at once).
 - The post was deleted: the like and the comment are skipped, the run goes on.
 - When Orbit stops a run for a LinkedIn or settings reason, the steps it never reached go back to the student as the manual steps of §4.
 

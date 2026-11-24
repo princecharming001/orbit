@@ -17,9 +17,11 @@ import {
   tidyWarmUpComment,
   WARMUP_AUTO_CAPS,
   type WarmUpRun,
+  type WarmUpStopReason,
   warmUpCapVerdict,
   warmUpCommentProblems,
   warmUpPostCandidates,
+  warmUpStopWords,
   whenWorking,
   workingDayAfter,
 } from '../warmup/auto';
@@ -664,5 +666,36 @@ describe('the plan in plain words', () => {
         tz: NY,
       })[0]!.text,
     ).toBe("view James' profile.");
+  });
+});
+
+describe('why a run stopped, in words', () => {
+  const ALL: Record<WarmUpStopReason, true> = {
+    cancelled: true,
+    replied: true,
+    messaged: true,
+    connected: true,
+    connect_sent: true,
+    do_not_contact: true,
+    hidden: true,
+    merged: true,
+    person_gone: true,
+    linkedin_disconnected: true,
+    linkedin_parked: true,
+    linkedin_sign_in: true,
+    linkedin_changed: true,
+    setting_off: true,
+  };
+  it('has its own plain sentence for every reason, never the fallback', () => {
+    const fallback = warmUpStopWords('something else', 'Priya');
+    for (const r of Object.keys(ALL)) {
+      const w = warmUpStopWords(r, 'Priya');
+      expect(w, r).not.toBe(fallback);
+      expect(w, r).not.toMatch(/[–—!]/);
+      expect(w.endsWith('.'), r).toBe(true);
+    }
+    expect(warmUpStopWords('connect_sent', 'Priya')).toBe(
+      'You sent Priya a connection request, so Orbit stopped the warm-up.',
+    );
   });
 });
