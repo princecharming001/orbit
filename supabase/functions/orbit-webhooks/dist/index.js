@@ -4396,8 +4396,6 @@ var KIND_QUEUE = {
   friend_shares_refresh: "orbit_score",
   // plan 43: a source switched on, off or removed: rescore twice, the friend projection, the graph mark
   "sources.switch": "orbit_score",
-  // plan 44: one student's nightly roles top-up
-  "roles.topup": "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
@@ -4416,6 +4414,9 @@ var KIND_QUEUE = {
   // plan 43: accounts offered to matching, and who could introduce the student to a target
   "social.match": "orbit_enrich",
   "social.lookup": "orbit_enrich",
+  // plan 44: the roles tick (boards, SimplifyJobs, discovery) every 10 minutes, and the nightly top-up per student
+  "roles.tick": "orbit_score",
+  "roles.topup": "orbit_score",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
