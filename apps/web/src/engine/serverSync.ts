@@ -42,6 +42,7 @@ import { endActivity } from './activity';
 import { emailSendError, linkedinSendError } from './linkedinSendWords';
 import { linkedInImageExpired } from './photos';
 import { backfillServerTouchpoints, touchpointsFromServer } from './serverTouchpoints';
+import { mirrorWarmUpRuns } from './warmupMirror';
 
 // ---- tables -------------------------------------------------------------------------------------------------------
 
@@ -73,6 +74,8 @@ export const PULL_TARGETS: { table: string; dexie: string }[] = [
   { table: 'social_links', dexie: 'socialLinks' },
   { table: 'social_match_asks', dexie: 'socialAsks' },
   { table: 'social_lookups', dexie: 'socialLookups' },
+  // the automated LinkedIn warm-ups Orbit runs, each with its steps (engine/warmupMirror.ts copies them onto chats)
+  { table: 'warmups', dexie: 'warmups' },
 ];
 const DEXIE_OF = new Map(PULL_TARGETS.map((t) => [t.table, t.dexie]));
 
@@ -616,6 +619,9 @@ export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
       // a new "same person" question: its handle and names come with GET /social/asks
       if (!more && tables.has('social_match_asks'))
         await import('./social').then((m) => m.refreshAsks(userId)).catch(() => undefined);
+      // a warm-up Orbit runs moved (a step ran, it finished or stopped), or its chat arrived: the chat's plan follows
+      if (!more && (tables.has('warmups') || tables.has('chats')))
+        await mirrorWarmUpRuns(userId).catch((e) => console.warn('[orbit sync] warm-ups', e));
     }
     return { ok: true, changed, pages, tables: [...tables], more };
   }).finally(() => {

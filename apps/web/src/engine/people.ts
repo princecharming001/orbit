@@ -555,6 +555,7 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       db.socialAsks,
       db.socialLookups,
       db.socialTies,
+      db.warmups,
     ],
     async () => {
       // touches: one per source item and person, so a touch both records have is kept once
@@ -587,6 +588,8 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       await db.socialLookups.where('targetPersonId').equals(mergedId).modify({ targetPersonId: survivorId });
       await db.socialTies.where('aId').equals(mergedId).modify({ aId: survivorId });
       await db.socialTies.where('bId').equals(mergedId).modify({ bId: survivorId });
+      // a warm-up Orbit ran or is running for them follows the chat to the survivor
+      await db.warmups.where('personId').equals(mergedId).modify({ personId: survivorId });
       await db.messages.where('fromPersonId').equals(mergedId).modify({ fromPersonId: survivorId });
       // affiliations: the same employer or school on both is kept once
       const affKey = (a: { kind: string; organizationId?: string; nameRaw: string; title?: string }) =>

@@ -36,6 +36,7 @@ import type {
   Touchpoint,
   User,
   UserSettings,
+  WarmUpRun,
 } from '@orbit/core';
 import { normalizeCompany } from '@orbit/core';
 import Dexie, { type EntityTable } from 'dexie';
@@ -518,6 +519,7 @@ export class OrbitDB extends Dexie {
   socialLookups!: EntityTable<SocialLookupRow, 'id'>;
   socialTies!: EntityTable<SocialTieRow, 'id'>;
   roleMatches!: EntityTable<RoleMatchRow, 'id'>;
+  warmups!: EntityTable<WarmUpRun, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -705,6 +707,11 @@ export class OrbitDB extends Dexie {
     // search's place are kept in kv (roles:profile:<userId>, roles:search:<userId>)
     this.version(20).stores({
       roleMatches: 'id, userId',
+    });
+    // the automated LinkedIn warm-ups Orbit runs (pulled in account mode; the demo simulates them here), each with
+    // its steps; the chat's own warm-up plan mirrors the run (engine/warmupMirror.ts)
+    this.version(21).stores({
+      warmups: 'id, userId, personId, status',
     });
   }
 }

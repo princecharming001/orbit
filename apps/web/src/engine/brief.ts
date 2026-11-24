@@ -11,6 +11,7 @@ import type {
   Suggestion,
   SuggestionKind,
   User,
+  WarmUpPlan,
 } from '@orbit/core';
 import {
   buildWarmUpPlan,
@@ -1810,7 +1811,9 @@ export async function evaluateImmediateSuggestions(
         'report_back',
       ].includes(c.kind) ||
       // the reply to an email introduction is due now, not in the next morning's batch
-      !!c.signals.introducedBy,
+      !!c.signals.introducedBy ||
+      // and so is the first message once Orbit has finished a warm-up: it is offered when the last step has run
+      !!c.signals.warmUpByOrbit,
   );
   const scored = selectForBrief(cands, inp.dismissCounts, 5);
   const created = await upsertSuggestions(userId, scored, now);
@@ -2185,12 +2188,41 @@ export function needsWarmUp(
   );
 }
 
+/**
+ * Whether a first message to this person starts with a warm-up: a stranger known only from LinkedIn, with warm-ups
+ * on, who is not at the student's own club or job and whom nobody pointed the student to.
+ */
+export async function startsWithWarmUp(
+  user: Pick<User, 'id'>,
+  personId: string,
+  channel: 'gmail' | 'linkedin' = 'linkedin',
+): Promise<boolean> {
+  const person = await db.people.get(personId);
+  if (!person) return false;
+  const settings = await db.settings.get(user.id);
+  return (
+    needsWarmUp(
+      person,
+      channel,
+      settings?.warmUpEnabled ?? true,
+      sharesOrgNow(person, await currentResumeFacets(user.id)),
+    ) && !(await findReferrerFor(user.id, person))
+  );
+}
+
 export async function startWarmUpOrOutreach(
   user: User,
   personId: string,
   channel: 'gmail' | 'linkedin',
   source: CoffeeChat['source'] = 'manual',
-  opts: { skipWarmUp?: boolean } = {},
+  opts: {
+    skipWarmUp?: boolean;
+    /**
+     * the plan of a warm-up Orbit runs (engine/warmupAuto.ts): the chat goes to Warming up with this plan, whoever
+     * the person is, and a manual plan already under way is replaced by it
+     */
+    plan?: WarmUpPlan;
+  } = {},
 ): Promise<{ chat?: CoffeeChat; draft?: OutboundMessage }> {
   const settings = await db.settings.get(user.id);
   const person = (await db.people.get(personId))!;
@@ -2201,15 +2233,9 @@ export async function startWarmUpOrOutreach(
     .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
     .first();
   // a person someone pointed the student to is written to now, naming who suggested it: no warm-up
-  const cold =
-    !opts.skipWarmUp &&
-    needsWarmUp(
-      person,
-      channel,
-      settings?.warmUpEnabled ?? true,
-      sharesOrgNow(person, await currentResumeFacets(user.id)),
-    ) &&
-    !(await findReferrerFor(user.id, person));
+  const cold = !!opts.plan || (!opts.skipWarmUp && (await startsWithWarmUp(user, personId, channel)));
+  const planFor = () =>
+    opts.plan ?? buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4, user.timezone);
   // a first message the student already started for this person is the one they continue: a second click (or a page
   // that asks again while the first draft is still being written) never makes a second copy
   const started = await unsentDraftOf(personId, 'outreach');
@@ -2223,8 +2249,13 @@ export async function startWarmUpOrOutreach(
     return { draft };
   }
   // a card at To contact (Add a person) that a warm-up now starts on: the same card moves to Warming up
+  if (chat && chat.stage === 'warming' && opts.plan) {
+    // a manual warm-up handed to Orbit: the same card, with Orbit's plan in place of the reminders
+    await db.chats.update(chat.id, { warmUp: opts.plan, updatedAt: now.toISOString() });
+    chat = { ...chat, warmUp: opts.plan };
+  }
   if (chat && chat.stage === 'identified' && cold) {
-    const warmUp = buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4, user.timezone);
+    const warmUp = planFor();
     await db.chats.update(chat.id, {
       stage: 'warming',
       stageEnteredAt: now.toISOString(),
@@ -2260,9 +2291,7 @@ export async function startWarmUpOrOutreach(
       outreachChannel: channel,
       bumpCount: 0,
       priority: 2,
-      warmUp: cold
-        ? buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4, user.timezone)
-        : undefined,
+      warmUp: cold ? planFor() : undefined,
       referrerPersonId: referrer?.id,
       referrerName: referrer?.firstName,
       createdAt: now.toISOString(),
@@ -2340,6 +2369,8 @@ export async function markWarmUpAction(
 ): Promise<void> {
   const chat = await db.chats.get(chatId);
   if (!chat?.warmUp) return;
+  // a warm-up Orbit is running: its steps are marked by the run (engine/warmupMirror.ts), never by hand
+  if (chat.warmUp.auto?.status === 'running') return;
   const current = chat.warmUp.actions.find((a) => a.id === actionId);
   if (!current) return;
   // a second click on Done (or Skip) changes nothing: no duplicate touchpoint, no second feedback row

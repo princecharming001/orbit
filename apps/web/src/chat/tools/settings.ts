@@ -479,7 +479,7 @@ export const updateLimitsTool = defineTool({
   name: 'update_limits',
   kind: 'risky',
   description:
-    "Call this only when the student asks to change how much Orbit lets them write, or which kinds Orbit may send on its own (bumps, thank-yous, scheduling replies): first messages a week (1 to 350), hours between messages to the same person, emails per day (1 to 50), LinkedIn messages per day (1 to 30), follow-ups when no reply (0 to 2), warm-ups on or off and their length in working days (2 to 10), or the daily Claude request and token caps. These change what can go out, so they need the student's approval.",
+    "Call this only when the student asks to change how much Orbit lets them write, or which kinds Orbit may send on its own (bumps, thank-yous, scheduling replies): first messages a week (1 to 350), hours between messages to the same person, emails per day (1 to 50), LinkedIn messages per day (1 to 30), follow-ups when no reply (0 to 2), warm-ups on or off, their length in working days (2 to 10) and whether Orbit runs them itself, or the daily Claude request and token caps. These change what can go out, so they need the student's approval.",
   input: z.object({
     weeklyOutreachTarget: z.number().int().optional().describe('First messages a week, 1 to 350.'),
     perPersonCooldownHours: z
@@ -492,6 +492,12 @@ export const updateLimitsTool = defineTool({
     maxBumps: z.number().int().optional().describe('Follow-ups when someone has not replied (0 to 2).'),
     warmUpEnabled: z.boolean().optional().describe('Warm up before messaging strangers on LinkedIn.'),
     warmUpDays: z.number().int().optional().describe('Warm-up length in working days (2 to 10).'),
+    warmUpAuto: z
+      .boolean()
+      .optional()
+      .describe(
+        'Run warm-ups for me: with an Orbit account and LinkedIn connected, Orbit does the warm-up steps itself after the student approves the plan and the comment. False: Orbit only reminds, and the student does each step.',
+      ),
     llmDailyRequestCap: z.number().int().min(0).optional().describe('Claude requests per day.'),
     llmDailyTokenCap: z.number().int().min(0).optional().describe('Claude tokens per day.'),
     autoKinds: z
@@ -550,6 +556,7 @@ export const updateLimitsTool = defineTool({
             maxBumps: settings.maxBumps,
             warmUpEnabled: settings.warmUpEnabled,
             warmUpDays: settings.warmUpDays,
+            warmUpAuto: settings.warmUpAuto !== false,
           }
         : undefined,
       claudeCaps: {

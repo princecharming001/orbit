@@ -25,7 +25,9 @@ import { dismissSuggestion, restoreSuggestion } from '../engine/send';
 import { applyStage, decideProposedStage } from '../engine/stages';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { answerTrustOffer, LADDER_WORDS, type LadderKind } from '../engine/trust';
+import { opensWarmUpSheet } from '../engine/warmupAuto';
 import { useSession } from '../state/session';
+import { openWarmUpSheet } from '../state/warmUpSheet';
 import { Avatar, Button, Chip, cx, useToast, useWorking } from '../ui';
 import { runApproval } from './approve';
 import { BreakerCard } from './autopilot/NeedsYou';
@@ -33,6 +35,7 @@ import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
 import { MergePair } from './MergePair';
 import { SocialAskCard } from './SocialPeople';
+import { useAutoWarmUp } from './WarmUpCard';
 
 /** Kept here for older imports; the labels live in the engine so the chat and the cards share them. */
 export const KIND_LABEL = SUGGESTION_KIND_LABELS;
@@ -75,6 +78,8 @@ export function SuggestionCard({
   const toast = useToast();
   const [open, setOpen] = useState(!!defaultOpen);
   const [busy, setBusy] = useState(false);
+  // only a warm-up step card asks whether Orbit could run the rest (one small read, not one per card on the page)
+  const canAutoWarmUp = useAutoWarmUp(s.kind === 'warm_up_engage' ? (user ?? undefined) : undefined);
   const working = useWorking();
   const [dismissing, setDismissing] = useState(false);
   const [mergeAsk, setMergeAsk] = useState(false);
@@ -284,6 +289,11 @@ export function SuggestionCard({
     if (!person) return;
     setBusy(true);
     try {
+      // Orbit can run it: the start sheet shows the plan and the comment, and Start is pressed there
+      if (await opensWarmUpSheet(user, person.id)) {
+        openWarmUpSheet({ personId: person.id, source: 'recommendation' });
+        return;
+      }
       await startWarmUpOrOutreach(user, person.id, 'linkedin', 'recommendation');
       toast.push({
         text: `Warm-up started for ${person.firstName}. The first step is the new card in Drafts.`,
@@ -490,6 +500,16 @@ export function SuggestionCard({
               >
                 Skip this step
               </Button>
+              {canAutoWarmUp && person && chat && (
+                // an Orbit account with LinkedIn connected: the steps left can be handed to Orbit
+                <Button
+                  variant="ghost"
+                  onClick={() => openWarmUpSheet({ personId: person.id, source: chat.source })}
+                  data-testid="warmup-hand-over"
+                >
+                  Let Orbit run it
+                </Button>
+              )}
             </div>
           )}
           {s.kind === 'prep_brief' && person && (

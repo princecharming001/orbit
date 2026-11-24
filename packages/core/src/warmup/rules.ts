@@ -2,8 +2,13 @@ import type { WarmUpAction, WarmUpPlan } from '../types';
 
 /**
  * LinkedIn warm-up: before a cold LinkedIn message, spend a few days being visible to the person
- * (view profile, react to a recent post, leave one thoughtful comment). Done by the student by hand via deep links;
- * Orbit schedules, reminds, tracks, and only then suggests the outreach. No automation touches LinkedIn.
+ * (view profile, react to a recent post, leave one thoughtful comment). There are two ways to run it:
+ *
+ * - by hand (the local copy, the demo, and an account with "Run warm-ups for me" off or no LinkedIn connected): the
+ *   student does each step through a deep link; Orbit schedules, reminds, tracks, and only then suggests the outreach;
+ * - by Orbit (an Orbit account with the student's own LinkedIn connected): the student approves the plan and the exact
+ *   comment once, and the server runs the steps from their LinkedIn account on the same working-day schedule, inside
+ *   the daily caps of `WARMUP_AUTO_CAPS` (./auto.ts). The sequence never sends a message or a connection request.
  */
 export function linkedinActivityUrl(slug: string): string {
   return `https://www.linkedin.com/in/${slug}/recent-activity/all/`;
@@ -23,7 +28,7 @@ const DAY_MS = 86_400_000;
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
 /** Wall-clock parts of `ms` in `tz` (or in the runtime's zone when tz is unset), as a UTC timestamp. */
-function wallClock(ms: number, tz?: string): number {
+export function wallClock(ms: number, tz?: string): number {
   if (!tz) {
     const d = new Date(ms);
     return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds());
@@ -42,9 +47,9 @@ function wallClock(ms: number, tz?: string): number {
   return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'));
 }
 
-/** The instant that reads `hour`:00 on calendar day `key` (YYYY-MM-DD) in `tz`. */
-function atLocalHour(key: string, hour: number, tz?: string): Date {
-  const target = Date.parse(`${key}T${pad2(hour)}:00:00Z`);
+/** The instant that reads `hour`:`minute` on calendar day `key` (YYYY-MM-DD) in `tz`. */
+export function atLocalHour(key: string, hour: number, tz?: string, minute = 0): Date {
+  const target = Date.parse(`${key}T${pad2(hour)}:${pad2(minute)}:00Z`);
   let guess = target;
   // two passes settle the offset across a DST change
   for (let i = 0; i < 2; i++) guess = target - (wallClock(guess, tz) - guess);
@@ -113,7 +118,7 @@ export function warmUpStepDue(action: WarmUpAction, now: Date, tz?: string): boo
 }
 
 /** YYYY-MM-DD of `d` in `tz` (or the runtime's zone when tz is unset). */
-function wallKey(d: Date, tz?: string): string {
+export function wallKey(d: Date, tz?: string): string {
   return new Date(wallClock(d.getTime(), tz)).toISOString().slice(0, 10);
 }
 
@@ -145,6 +150,21 @@ export function warmUpProgress(
   const next = plan.actions.find((a) => !a.doneAt && !a.skippedAt);
   const resolved = done + skipped === plan.actions.length;
   const skippedAll = resolved && done === 0;
+  // a warm-up Orbit runs is over when the server says so, and not before (a step waiting for a daily cap is not a
+  // step the student skipped); the first message is offered as soon as the last step has run
+  if (plan.auto && plan.auto.status !== 'stopped') {
+    const over = plan.auto.status === 'done';
+    return {
+      done,
+      skipped,
+      total: plan.actions.length,
+      ready: over,
+      skippedAll: over && done === 0,
+      readyFrom: over ? (plan.auto.finishedAt ?? plan.readyAt) : plan.readyAt,
+      nextAction: over ? undefined : next,
+      overdue: false,
+    };
+  }
   const plannedReady = new Date(plan.readyAt).getTime();
   // the spread is counted in calendar days in the student's timezone: from the start of the day two days after the
   // warm-up began there (the browser's zone would move the boundary for a student whose machine is set elsewhere)
@@ -176,6 +196,8 @@ export function warmUpProgress(
  * that are already over. Returns undefined when nothing needs to move.
  */
 export function replanWarmUp(plan: WarmUpPlan, now: Date, tz?: string): WarmUpPlan | undefined {
+  // a warm-up Orbit runs keeps the server's times: a step waiting for a cap is moved there, not here
+  if (plan.auto && plan.auto.status !== 'stopped') return undefined;
   const next = plan.actions.find((a) => !a.doneAt && !a.skippedAt);
   if (!next) return undefined;
   const today = wallKey(now, tz);

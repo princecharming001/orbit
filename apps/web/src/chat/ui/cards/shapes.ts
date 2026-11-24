@@ -551,7 +551,10 @@ export interface SettingChange {
   to: string;
 }
 const SKIP = new Set(['href', 'id', 'userId', 'json', 'ranges', 'isDemo', 'model']);
+/** settings whose name read word by word says something else: the words the Settings page uses */
+const LABELS: Record<string, string> = { warmUpAuto: 'Run warm-ups for me' };
 const human = (k: string) =>
+  LABELS[k] ??
   k
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/_/g, ' ')

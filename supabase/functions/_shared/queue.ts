@@ -64,6 +64,8 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   // plan 44: the roles tick (boards, SimplifyJobs, discovery) every 10 minutes, and the nightly top-up per student
   'roles.tick': 'orbit_score',
   'roles.topup': 'orbit_score',
+  // the automated LinkedIn warm-up: one job per step whose time has come (orbit.enqueue_warmup_steps, every 5 min)
+  'warmup.step': 'orbit_cadence',
   noop: 'orbit_enrich',
 };
 

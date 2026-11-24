@@ -196,6 +196,7 @@ export type LimitsPatch = Partial<
     | 'maxBumps'
     | 'warmUpEnabled'
     | 'warmUpDays'
+    | 'warmUpAuto'
   >
 >;
 
@@ -225,8 +226,11 @@ export async function updateLimits(userId: string, patch: LimitsPatch): Promise<
     changes[key] = clamp(Math.round(v), lo, hi);
   }
   if (typeof patch.warmUpEnabled === 'boolean') changes.warmUpEnabled = patch.warmUpEnabled;
+  if (typeof patch.warmUpAuto === 'boolean') changes.warmUpAuto = patch.warmUpAuto;
   if (Object.keys(changes).length) await db.settings.update(userId, changes);
   const caps: ProfileSettingsRequest = {};
+  // "Run warm-ups for me" is the server's to honour: off stops the warm-ups it is running for this student
+  if (changes.warmUpAuto !== undefined) caps.warmUpAuto = changes.warmUpAuto;
   if (changes.dailySendCapGmail !== undefined) caps.dailySendCapGmail = changes.dailySendCapGmail;
   if (changes.dailySendCapLinkedin !== undefined) caps.dailySendCapLinkedin = changes.dailySendCapLinkedin;
   // the week's target paces the server's autopilot plan step (plan 29 §B4)

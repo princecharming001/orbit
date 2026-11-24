@@ -57,6 +57,7 @@ import { sourceRoutes } from './routes/source.ts';
 import { sourcesPatternRoute, sourcesRoutes } from './routes/sources.ts';
 import { textsRoutes } from './routes/texts.ts';
 import { voiceRoutes } from './routes/voice.ts';
+import { warmupRoutes } from './routes/warmups.ts';
 import { xRoutes } from './routes/x.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
 
@@ -211,6 +212,7 @@ const ROUTES: Record<string, Route> = {
   ...textsRoutes,
   // plan 44: Roles for you, behind the owner's feature switch
   ...rolesRoutes,
+  ...warmupRoutes,
 };
 
 /** The secrets a route needs that are not set. */

@@ -124,6 +124,8 @@ describe('orbit core migration', () => {
       'orbit-unipile-reconcile',
       // plan 29 §B2.4b: the nightly voice distillation, scheduled by 20261102_orbit_voice.sql
       'orbit-voice',
+      // the automated LinkedIn warm-up: steps whose time has come, every five minutes, 20261212_orbit_warmup_auto.sql
+      'orbit-warmup',
       'orbit-worker-tick',
       // plan 43 §5: X's DM reads and its 30-day expiry, hourly, scheduled by 20261203_orbit_x.sql
       'orbit-x',

@@ -80,7 +80,13 @@ import { liveLinkedInAvailable } from '../engine/linkedinLive';
 import { setMorningBrief } from '../engine/morning';
 import { saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
-import { googleStatus, refreshSyncStatus, subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
+import {
+  googleStatus,
+  pullNow,
+  refreshSyncStatus,
+  subscribeSyncStatus,
+  syncStatusNow,
+} from '../engine/serverSync';
 import {
   LIMIT_RANGES,
   removeTargetCompany,
@@ -100,7 +106,9 @@ import {
 import { useSocialOffered } from '../engine/social';
 import { addTargetCompanies } from '../engine/targets';
 import { approvalStreaks, LADDER_KINDS, LADDER_WORDS, OFFER_AT, setAutoKind } from '../engine/trust';
+import { tickDemoWarmUps } from '../engine/warmupAuto';
 import { fmtFailureTime } from '../integrations/anthropic';
+import { usesMockConnectors } from '../integrations/connectorsMock';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
 import { isAccountMode, isServerUser, startGoogleSignIn } from '../integrations/orbitApi';
 import {
@@ -1548,6 +1556,11 @@ function Limits() {
   const upd = async (p: Partial<typeof settings>) => {
     if ('schedulingLink' in p) await setSchedulingLink(user.id, p.schedulingLink);
     else await updateLimits(user.id, p);
+    // "Run warm-ups for me" turned off stops the warm-ups under way: show that now, not at the next sync
+    if (p.warmUpAuto === false) {
+      if (usesMockConnectors(user.id)) void tickDemoWarmUps(user).catch(() => undefined);
+      else if (isServerUser(user.id)) void pullNow(user.id).catch(() => undefined);
+    }
     setSavedAt(Date.now());
   };
   return (
@@ -1655,7 +1668,7 @@ function Limits() {
           />
           <SettingsRow
             label="Warm up before messaging strangers on LinkedIn"
-            description="A few days of viewing their profile and reacting to a post, by hand, before the message."
+            description="A few days of small steps on LinkedIn before the message: a profile view, a like, one comment."
             control={
               <Switch
                 checked={settings.warmUpEnabled}
@@ -1664,6 +1677,20 @@ function Limits() {
               />
             }
           />
+          {settings.warmUpEnabled && (isServerUser(user.id) || usesMockConnectors(user.id)) && (
+            <SettingsRow
+              label="Run warm-ups for me"
+              description="Orbit does the steps from your LinkedIn after you approve the plan and the comment. It needs LinkedIn connected. Off, Orbit reminds you and you do each step yourself."
+              control={
+                <Switch
+                  checked={settings.warmUpAuto !== false}
+                  onChange={(on) => upd({ warmUpAuto: on })}
+                  label="Run warm-ups for me"
+                  data-testid="settings-warmup-auto"
+                />
+              }
+            />
+          )}
           {settings.warmUpEnabled && (
             <SettingsRow
               htmlFor="lim-wdays"

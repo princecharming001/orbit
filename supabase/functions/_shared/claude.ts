@@ -54,6 +54,8 @@ export type Task =
   | 'role_requirements'
   /** plan 44 §6.3: the fixed questions about a student and five roles, each answer quoted */
   | 'role_score'
+  /** the automated warm-up: which recent post to engage with, and the one comment the student approves at Start */
+  | 'warmup_comment'
   /** earlier names of reply_classify, memory_extract and goal_infer, kept for callers that still use them */
   | 'classify'
   | 'extract_memory'
@@ -91,6 +93,8 @@ export const TASKS: Record<Task, TaskSetting> = {
   role_profile: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 3000 },
   role_requirements: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 6000 },
   role_score: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 8000 },
+  // the light model: one short comment about one post, read by the student before anything is posted
+  warmup_comment: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   classify: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
   extract_memory: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   extract_goal: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },

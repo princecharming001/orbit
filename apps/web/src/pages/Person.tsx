@@ -6,7 +6,6 @@ import {
   conflictingFacts,
   FACT_TYPE_LABELS,
   keepTouch,
-  linkedinActivityUrl,
   MESSAGE_KIND_LABELS,
   NOTE_SOURCE_LABELS,
   promiseText,
@@ -18,7 +17,7 @@ import {
   tieBand,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ChevronDown, ExternalLink, Linkedin, Mail, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Linkedin, Mail, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
@@ -38,6 +37,7 @@ import { TieScoreCard } from '../components/people/TieScoreCard';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
 import { PersonSocialCard, SocialHandles } from '../components/SocialPeople';
 import { SuggestionCard } from '../components/SuggestionCard';
+import { useAutoWarmUp, WarmUpCard } from '../components/WarmUpCard';
 import { db } from '../db/schema';
 import { isMessageSuggestion, refreshPersonSummary } from '../engine/brief';
 import {
@@ -70,6 +70,7 @@ import { pullUntilHere } from '../engine/sourcing';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
+import { openWarmUpSheet } from '../state/warmUpSheet';
 import {
   Avatar,
   Button,
@@ -276,6 +277,7 @@ export function PersonPage() {
   // the summary rewrite has its own, so it never holds up writing to them
   const summarizing = useWorking();
   const [warmUpChoice, setWarmUpChoice] = useState(false);
+  const canAutoWarmUp = useAutoWarmUp(user ?? undefined);
   const [asking, setAsking] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [early, setEarly] = useState<string>();
@@ -518,7 +520,10 @@ export function PersonPage() {
                     className="w-1.5 h-1.5 rounded-full"
                     style={{ background: STAGE_COLOR[chat.stage] }}
                   />
-                  {STAGE_LABELS[chat.stage]}
+                  {/* a warm-up Orbit has finished reads as done, not as still going */}
+                  {chat.stage === 'warming' && chat.warmUp?.auto?.status === 'done'
+                    ? 'Warmed up'
+                    : STAGE_LABELS[chat.stage]}
                   <ChevronDown size={12} aria-hidden className="text-ink-3" />
                   <div className="absolute inset-0 opacity-0">
                     <Select
@@ -834,12 +839,21 @@ export function PersonPage() {
         title={`Write to ${person.firstName}`}
       >
         <div className="space-y-3 text-[13.5px] text-ink-2" data-testid="warmup-choice">
-          <p>
-            You only have {person.firstName} on LinkedIn and you haven't talked yet. Cold messages get far
-            more replies when your name is already familiar, so Orbit suggests a short warm-up first: view
-            their profile, then react to or comment on one of their posts over the next few days. Each step
-            shows up in Drafts, and the message is drafted when the warm-up is done.
-          </p>
+          {canAutoWarmUp ? (
+            <p data-testid="warmup-choice-auto">
+              You only have {person.firstName} on LinkedIn and you haven't talked yet. Cold messages get far
+              more replies when your name is already familiar, so Orbit suggests a short warm-up first. Orbit
+              does it for you from your LinkedIn: it views their profile, likes one recent post and leaves one
+              comment that you approve first. Then it tells you it is done and offers your first message.
+            </p>
+          ) : (
+            <p>
+              You only have {person.firstName} on LinkedIn and you haven't talked yet. Cold messages get far
+              more replies when your name is already familiar, so Orbit suggests a short warm-up first: view
+              their profile, then react to or comment on one of their posts over the next few days. Each step
+              shows up in Drafts, and the message is drafted when the warm-up is done.
+            </p>
+          )}
           <div className="flex flex-wrap gap-2 pt-1">
             {/* the choice stays open while Claude writes, so the click shows; it closes once there is something */}
             <Button
@@ -847,9 +861,16 @@ export function PersonPage() {
               disabled={busy}
               loading={drafting.busy === 'warmup'}
               onClick={async () => {
+                // Orbit can run it: the plan and the comment are shown first, and Start is pressed there
+                if (canAutoWarmUp) {
+                  setWarmUpChoice(false);
+                  openWarmUpSheet({ personId: person.id, source: 'manual' });
+                  return;
+                }
                 await compose('outreach', { confirmed: true }, 'warmup');
                 setWarmUpChoice(false);
               }}
+              data-testid="warmup-first"
             >
               Warm up first (recommended)
             </Button>
@@ -1269,61 +1290,7 @@ export function PersonPage() {
             </button>
           </Card>
           <MutualConnections user={user} person={person} />
-          {chat?.warmUp && (
-            <Card>
-              <div className="font-medium mb-2">LinkedIn warm-up</div>
-              <ul className="space-y-2 text-[13px]">
-                {chat.warmUp.actions.map((a) => (
-                  <li key={a.id} className="flex items-center gap-2">
-                    <span
-                      className={cx(
-                        'w-4 h-4 rounded-full border inline-flex items-center justify-center text-[10px]',
-                        a.doneAt
-                          ? 'bg-good border-good text-white'
-                          : a.skippedAt
-                            ? 'bg-line border-line'
-                            : 'border-line',
-                      )}
-                    >
-                      {a.doneAt ? '✓' : ''}
-                    </span>
-                    <span className={cx('flex-1', (a.doneAt || a.skippedAt) && 'text-ink-3 line-through')}>
-                      {a.label}
-                    </span>
-                    <a
-                      href={a.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-ink-3 hover:text-ink"
-                      aria-label={`Open on LinkedIn: ${a.label}`}
-                      title="Open on LinkedIn"
-                    >
-                      <ExternalLink size={13} />
-                    </a>
-                  </li>
-                ))}
-              </ul>
-              <p className="text-[12px] text-ink-3 mt-2">
-                First message suggested after{' '}
-                {new Date(chat.warmUp.readyAt).toLocaleDateString('en-US', {
-                  weekday: 'short',
-                  month: 'short',
-                  day: 'numeric',
-                })}
-                .{' '}
-                {person.linkedinSlug && (
-                  <a
-                    className="underline"
-                    href={linkedinActivityUrl(person.linkedinSlug)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Their activity
-                  </a>
-                )}
-              </p>
-            </Card>
-          )}
+          {chat?.warmUp && <WarmUpCard user={user} person={person} chat={chat} />}
           {items.filter((i) => i.status === 'open').length > 0 && (
             <Card>
               <div className="font-medium mb-2">You promised</div>

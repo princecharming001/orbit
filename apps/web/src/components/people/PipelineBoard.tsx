@@ -364,7 +364,12 @@ function BoardCard({
       </div>
       {chat.warmUp && stage === 'warming' && (
         <div className="mt-2 text-[11px] text-ink-3">
-          Warm-up: {chat.warmUp.actions.filter((a) => a.doneAt || a.skippedAt).length} of{' '}
+          {chat.warmUp.auto?.status === 'done'
+            ? 'Warmed up'
+            : chat.warmUp.auto?.status === 'running'
+              ? 'Orbit is warming up'
+              : 'Warm-up'}
+          : {chat.warmUp.actions.filter((a) => a.doneAt || a.skippedAt).length} of{' '}
           {chat.warmUp.actions.length} steps
         </div>
       )}

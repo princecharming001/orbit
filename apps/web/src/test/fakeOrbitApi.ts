@@ -33,8 +33,10 @@ import type {
   VoiceNote,
   WarmHop,
   WarmPath,
+  WarmUpRefusal,
+  WarmUpRun,
 } from '@orbit/core';
-import { readiness, SOURCE_CONNECT_REASONS } from '@orbit/core';
+import { approvedCommentError, autoWarmUpSchedule, readiness, SOURCE_CONNECT_REASONS } from '@orbit/core';
 import { createRolesSim, type RolesSim } from '../engine/rolesSim';
 import type { AccountUser, TextDaysRequest } from '../integrations/orbitApi';
 
@@ -182,12 +184,29 @@ export interface FakeState {
     meetingLink?: 'zoom' | 'none';
     /** the student's own words (plan 24), as users.settings.about keeps them */
     about?: Record<string, unknown> | null;
+    /** "Run warm-ups for me" (users.settings.warmup_auto): false is off, unset is on */
+    warmUpAuto?: boolean;
   };
   /** what the next /memory/extract finds (each added like /memory/add) */
   extractable: { text: string; kind: MemoryKind }[];
   /** what /goals/infer proposes */
   proposals: ProposedGoal[];
   due: DueItem[];
+  /**
+   * The automated LinkedIn warm-up. `post` and `comment` are what the next /warmups/preview answers (post null: the
+   * person has no recent post); `refuse` answers a refusal instead; `started` keeps the comment each Start arrived
+   * with, exactly; `runs` are the runs as the server holds them (advanceWarmup moves one and sends it down the pull).
+   */
+  warmups: {
+    post: { url?: string; excerpt: string } | null;
+    comment: string | null;
+    refuse?: WarmUpRefusal;
+    previews: Map<string, { personId: string; hasPost: boolean }>;
+    started: { warmupId: string; personId: string; comment: string | null }[];
+    stopped: string[];
+    told: string[];
+    runs: WarmUpRun[];
+  };
   /** `sendError`: what the server's LinkedIn send answers with instead of sending (`linkedin_note_too_long`, ...) */
   linkedin: {
     status: string;
@@ -424,6 +443,18 @@ export function createFakeOrbitApi(
     pages: [],
     pushed: [],
     rejectPush: new Map(),
+    warmups: {
+      post: {
+        url: 'https://www.linkedin.com/posts/priya-rao_onboarding-activity-7332661864792854528-hcGT',
+        excerpt: 'New analysts should ship something real in their first week.',
+      },
+      comment: 'Did the week one rule hold once the team passed twenty people?',
+      previews: new Map(),
+      started: [],
+      stopped: [],
+      told: [],
+      runs: [],
+    },
     notify: {
       phone: null,
       country: null,
@@ -1936,10 +1967,121 @@ export function createFakeOrbitApi(
         if ('about' in body)
           state.profile.about =
             body.about && typeof body.about === 'object' ? (body.about as Record<string, unknown>) : null;
+        if (typeof body.warmUpAuto === 'boolean') {
+          state.profile.warmUpAuto = body.warmUpAuto ? undefined : false;
+          // off stops the warm-ups under way, as the server does
+          if (!body.warmUpAuto)
+            for (const r of state.warmups.runs.filter((x) => x.status === 'running'))
+              advanceWarmup({ state } as FakeOrbitApi, r.id, { stop: 'setting_off', at: iso(clock) });
+        }
         return json(200, state.profile);
       }
       case '/cadence/due':
         return json(200, { items: state.due });
+      // the automated LinkedIn warm-up (supabase/functions/orbit-api/routes/warmups.ts)
+      case '/warmups/preview': {
+        const w = state.warmups;
+        const personId = String(body.personId ?? '');
+        if (!w.refuse && state.profile.warmUpAuto === false) return json(200, { ok: false, reason: 'off' });
+        if (!w.refuse && state.linkedin.status !== 'active')
+          return json(200, {
+            ok: false,
+            reason: state.linkedin.status === 'needs_reauth' ? 'sign_in' : 'not_connected',
+          });
+        if (w.refuse) return json(200, { ok: false, reason: w.refuse });
+        const running = w.runs.find((r) => r.personId === personId && r.status === 'running');
+        if (running) return json(200, { ok: false, reason: 'running', run: running });
+        const id = uuid();
+        w.previews.set(id, { personId, hasPost: !!w.post });
+        const sched = autoWarmUpSchedule({
+          now: new Date(clock),
+          warmUpDays: typeof body.warmUpDays === 'number' ? body.warmUpDays : 4,
+          tz: state.profile.timezone,
+          hasPost: !!w.post,
+          withComment: !!w.post,
+          random: () => 0,
+        });
+        return json(200, {
+          ok: true,
+          preview: {
+            id,
+            personId,
+            post: w.post,
+            comment: w.post ? w.comment : null,
+            steps: sched.steps,
+            timezone: state.profile.timezone,
+          },
+        });
+      }
+      case '/warmups/start': {
+        const w = state.warmups;
+        const id = String(body.warmupId ?? '');
+        const pre = w.previews.get(id);
+        if (!pre) return error(404, 'not_found', 'no such warm-up');
+        if (body.comment !== null && typeof body.comment !== 'string')
+          return error(400, 'bad_request', 'comment is the text to post, or null to leave it out');
+        const comment = body.comment as string | null;
+        if (comment !== null && !pre.hasPost)
+          return error(400, 'bad_request', 'there is no post to comment on');
+        if (comment !== null && approvedCommentError(comment))
+          return error(400, 'bad_request', approvedCommentError(comment)!);
+        const sched = autoWarmUpSchedule({
+          now: new Date(clock),
+          warmUpDays: 4,
+          tz: state.profile.timezone,
+          hasPost: pre.hasPost,
+          withComment: pre.hasPost && comment !== null,
+          random: () => 0,
+        });
+        const run: WarmUpRun = {
+          id,
+          userId: state.user.id,
+          personId: pre.personId,
+          status: 'running',
+          ...(pre.hasPost && w.post
+            ? { post: { ...w.post, topic: 'new analysts shipping in week one' } }
+            : {}),
+          comment,
+          steps: sched.steps.map((x) => ({
+            id: uuid(),
+            seq: x.seq,
+            kind: x.kind,
+            dueAt: x.dueAt,
+            status: 'pending' as const,
+            attempts: 0,
+          })),
+          startedAt: iso(clock),
+          readyAt: sched.readyAt,
+          updatedAt: iso(clock),
+        };
+        w.previews.delete(id);
+        w.started.push({ warmupId: id, personId: pre.personId, comment });
+        w.runs.push(run);
+        return json(200, { ok: true, run });
+      }
+      case '/warmups/stop': {
+        const w = state.warmups;
+        const run = w.runs.find(
+          (r) =>
+            (body.warmupId ? r.id === body.warmupId : r.personId === body.personId) && r.status === 'running',
+        );
+        if (!run) return json(200, { stopped: false });
+        run.status = 'stopped';
+        run.stopReason = 'cancelled';
+        run.finishedAt = iso(clock);
+        run.steps = run.steps.map((x) =>
+          x.status === 'pending' ? { ...x, status: 'skipped' as const, note: 'stopped' } : x,
+        );
+        w.stopped.push(run.id);
+        return json(200, { stopped: true, run });
+      }
+      case '/warmups/told': {
+        const run = state.warmups.runs.find((r) => r.id === body.warmupId);
+        if (!run || run.toldAt) return json(200, { ok: false });
+        run.toldAt = iso(clock);
+        state.warmups.told.push(run.id);
+        return json(200, { ok: true });
+      }
       default:
         return error(404, 'not_found', 'no such route');
     }
@@ -1999,6 +2141,46 @@ function draftRow(
     createdAt: iso(clock),
     updatedAt: iso(clock),
   };
+}
+
+/**
+ * Stand in for the worker: run the next `n` steps of a warm-up (or skip them with a note, or stop the run) and send
+ * the run down the next /sync/pull, with the "changed" mark moved so the browser pulls. Returns the run as it now is.
+ */
+export function advanceWarmup(
+  api: FakeOrbitApi,
+  runId: string,
+  o: { steps?: number; skip?: string; stop?: string; at?: string } = {},
+): WarmUpRun {
+  const run = api.state.warmups.runs.find((r) => r.id === runId);
+  if (!run) throw new Error(`no warm-up ${runId} in the fake`);
+  const at = o.at ?? new Date().toISOString();
+  if (o.stop) {
+    run.status = 'stopped';
+    run.stopReason = o.stop;
+    run.finishedAt = at;
+    run.steps = run.steps.map((x) =>
+      x.status === 'pending' ? { ...x, status: 'skipped' as const, note: 'stopped' } : x,
+    );
+  } else {
+    let left = o.steps ?? 1;
+    run.steps = run.steps.map((x) => {
+      if (x.status !== 'pending' || left <= 0) return x;
+      left--;
+      return o.skip
+        ? { ...x, status: 'skipped' as const, note: o.skip, ranAt: at, attempts: 2 }
+        : { ...x, status: 'done' as const, ranAt: at, attempts: 1 };
+    });
+    if (run.steps.every((x) => x.status !== 'pending')) {
+      run.status = 'done';
+      run.finishedAt = at;
+    }
+  }
+  run.updatedAt = at;
+  api.state.pages.push({ changes: { warmups: [JSON.parse(JSON.stringify(run))] } });
+  const marks = api.state.status.marks ?? { changed: null, linkedin: null, autopilot: null };
+  api.state.status.marks = { ...marks, changed: `${at}#${api.state.pages.length}` };
+  return run;
 }
 
 /** A ready dossier for a person, with two sources. */
