@@ -34970,7 +34970,7 @@ function listingText(j) {
     j.degrees.length ? `Degree: ${j.degrees.join(", ")}` : ""
   ].filter(Boolean).join("\n");
 }
-async function readRows(s, deps, userId, stored2, rows) {
+async function readRows(s, deps, userId, stored2, rows, timeouts = ROLE_TIMEOUTS) {
   const out = { read: [], unread: [], failed: 0 };
   if (!rows.length) return out;
   const profile = stored2.profile;
@@ -34988,7 +34988,7 @@ async function readRows(s, deps, userId, stored2, rows) {
       const jr = jobs.get(row.job_id);
       if (!jr) return;
       const job = jobOf(jr);
-      const text3 = await withTimeout(deps.sources.text(s.db, net, job.id, access), ROLE_TIMEOUTS.text);
+      const text3 = await withTimeout(deps.sources.text(s.db, net, job.id, access), timeouts.text);
       const body = text3?.trim();
       const posting = body ? `${job.title}${job.team ? `
 Team: ${job.team}` : ""}
@@ -35003,7 +35003,7 @@ ${body}`.slice(0, POSTING_CHARS) : listingText(job);
   const notes = /* @__PURE__ */ new Set();
   await Promise.all(
     batches.map(async (b) => {
-      const reqNote = await requirementsFor(s, b);
+      const reqNote = await requirementsFor(s, b, timeouts);
       if (reqNote) notes.add(reqNote);
       const ready = b.filter((it) => it.reqs);
       for (const it of b) if (!it.reqs) out.unread.push(await release(s.db, it, stored2));
@@ -35015,7 +35015,7 @@ ${body}`.slice(0, POSTING_CHARS) : listingText(job);
         user: scoreUser(fence, ev.all, profile, ready),
         schema: scoreSchema,
         userId,
-        timeoutMs: ROLE_TIMEOUTS.score
+        timeoutMs: timeouts.score
       });
       if (!r.ok) {
         if ("budgetExceeded" in r || "unconfigured" in r) notes.add(LIMIT_NOTE);
@@ -35037,7 +35037,7 @@ ${body}`.slice(0, POSTING_CHARS) : listingText(job);
             user: scoreUser(makeFence(), ev.all, profile, [it]),
             schema: scoreSchema,
             userId,
-            timeoutMs: ROLE_TIMEOUTS.score
+            timeoutMs: timeouts.score
           });
           if (again.ok) answered = again.data.roles[0];
         }
@@ -35099,7 +35099,7 @@ ${fence.wrap("student", evidence)}
 
 ${postings.join("\n\n")}`;
 }
-async function requirementsFor(s, items) {
+async function requirementsFor(s, items, timeouts) {
   const need = [];
   const stored2 = new Map(
     (await s.db.sql`
@@ -35133,7 +35133,7 @@ ${fence.wrap("posting", it.posting)}`,
         schema: reqSchema,
         // shared work: no student pays for it; Orbit's own daily limit counts it
         userId: null,
-        timeoutMs: ROLE_TIMEOUTS.requirements
+        timeoutMs: timeouts.requirements
       });
       if (!r.ok) return "budgetExceeded" in r || "unconfigured" in r ? LIMIT_NOTE : NOT_READ_NOTE;
       const got = r.data.postings.find((p) => label(p.posting, "J") === 1) ?? r.data.postings[0];
@@ -35156,8 +35156,9 @@ async function readsToday(db2, userId, now) {
      where user_id = ${userId}::uuid and state = 'read' and read_at >= ${day2}::timestamptz`;
   return r?.n ?? 0;
 }
+var CLAIM_MS = 18e4;
 async function claimRows(db2, userId, o) {
-  const stale = new Date(o.now.getTime() - 12e4);
+  const stale = new Date(o.now.getTime() - CLAIM_MS);
   return db2.sql`
     update orbit.role_matches m set read_at = ${o.now}::timestamptz
      where m.id in (
@@ -35177,7 +35178,7 @@ async function claimRows(db2, userId, o) {
 var TOPUP_SIZE = 20;
 async function latestSearch(db2, userId) {
   const [r] = await db2.sql`
-    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, created_at
+    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, error, created_at
       from orbit.role_searches where user_id = ${userId}::uuid order by created_at desc, id desc limit 1`;
   return r;
 }

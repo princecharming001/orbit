@@ -23,7 +23,10 @@ import type { Ctx, Route } from '../api.ts';
 import { isOwner } from './admin.ts';
 import { body, uuid } from './body.ts';
 
-const deps = (ctx: Ctx): RolesDeps => ({ sources: ctx.roleSources ?? roleSources });
+const deps = (ctx: Ctx): RolesDeps => ({
+  sources: ctx.roleSources ?? roleSources,
+  ...(ctx.waitUntil ? { background: ctx.waitUntil } : {}),
+});
 
 /** The feature's gate: offered, or the owner. */
 async function offered(ctx: Ctx): Promise<void> {

@@ -13,6 +13,8 @@ import { offeredSources } from '../_shared/sources/states.ts';
 import { makeApiHandler } from './api.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
+// plan 44: Roles reads carry on after the answer has gone
+const runtime = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : undefined;
 const num = (name: string, fallback: number) => {
   const v = Number(Deno.env.get(name));
   return Number.isFinite(v) && v > 0 ? v : fallback;
@@ -44,6 +46,7 @@ const salt = env('ORBIT_LOG_SALT') ?? ((env('SUPABASE_SERVICE_ROLE_KEY') ?? '').
 
 Deno.serve(
   makeApiHandler({
+    waitUntil: runtime ? (p) => runtime.waitUntil(p) : undefined,
     env: {
       googleClientId: env('ORBIT_GOOGLE_CLIENT_ID'),
       googleClientSecret: env('ORBIT_GOOGLE_CLIENT_SECRET'),

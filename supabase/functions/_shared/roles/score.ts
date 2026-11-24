@@ -60,9 +60,18 @@ export const LIMIT_NOTE =
  * 25 seconds. The live bench raises these for the command line, which is slower to start.
  */
 export const ROLE_TIMEOUTS = { text: 6000, requirements: 9000, score: 12000 };
+export type RoleTimeouts = typeof ROLE_TIMEOUTS;
+
+/**
+ * The same steps read after the answer has gone (EdgeRuntime.waitUntil): nobody is waiting on them, so they get the
+ * time a slow model answer needs.
+ */
+export const BACKGROUND_TIMEOUTS: RoleTimeouts = { text: 10_000, requirements: 45_000, score: 55_000 };
 
 export interface RolesDeps {
   sources: RoleSources;
+  /** run work after the answer has gone (EdgeRuntime.waitUntil); absent in tests, where reads run in the request */
+  background?: (p: Promise<unknown>) => void;
 }
 
 // ---- requirements --------------------------------------------------------------------------------------------------
@@ -466,6 +475,7 @@ export async function readRows(
   userId: string,
   stored: StoredProfile,
   rows: MatchRow[],
+  timeouts: RoleTimeouts = ROLE_TIMEOUTS,
 ): Promise<ReadOutcome> {
   const out: ReadOutcome = { read: [], unread: [], failed: 0 };
   if (!rows.length) return out;
@@ -486,7 +496,7 @@ export async function readRows(
       const jr = jobs.get(row.job_id);
       if (!jr) return;
       const job = jobOf(jr);
-      const text = await withTimeout(deps.sources.text(s.db, net, job.id, access), ROLE_TIMEOUTS.text);
+      const text = await withTimeout(deps.sources.text(s.db, net, job.id, access), timeouts.text);
       const body = text?.trim();
       const posting = body
         ? `${job.title}${job.team ? `\nTeam: ${job.team}` : ''}\n${body}`.slice(0, POSTING_CHARS)
@@ -501,7 +511,7 @@ export async function readRows(
   const notes = new Set<string>();
   await Promise.all(
     batches.map(async (b) => {
-      const reqNote = await requirementsFor(s, b);
+      const reqNote = await requirementsFor(s, b, timeouts);
       if (reqNote) notes.add(reqNote);
       const ready = b.filter((it) => it.reqs);
       for (const it of b) if (!it.reqs) out.unread.push(await release(s.db, it, stored));
@@ -513,7 +523,7 @@ export async function readRows(
         user: scoreUser(fence, ev.all, profile, ready),
         schema: scoreSchema,
         userId,
-        timeoutMs: ROLE_TIMEOUTS.score,
+        timeoutMs: timeouts.score,
       });
       if (!r.ok) {
         if ('budgetExceeded' in r || 'unconfigured' in r) notes.add(LIMIT_NOTE);
@@ -535,7 +545,7 @@ export async function readRows(
             user: scoreUser(makeFence(), ev.all, profile, [it]),
             schema: scoreSchema,
             userId,
-            timeoutMs: ROLE_TIMEOUTS.score,
+            timeoutMs: timeouts.score,
           });
           if (again.ok) answered = again.data.roles[0];
         }
@@ -607,7 +617,11 @@ function scoreUser(
  * with no text (thin), else one shared call for the rest, counted against Orbit's daily limit. Items left without
  * requirements could not be read now; the note says why.
  */
-async function requirementsFor(s: Services, items: Item[]): Promise<string | undefined> {
+async function requirementsFor(
+  s: Services,
+  items: Item[],
+  timeouts: RoleTimeouts,
+): Promise<string | undefined> {
   const need: (Item & { hash: string })[] = [];
   const stored = new Map(
     (
@@ -647,7 +661,7 @@ async function requirementsFor(s: Services, items: Item[]): Promise<string | und
         schema: reqSchema,
         // shared work: no student pays for it; Orbit's own daily limit counts it
         userId: null,
-        timeoutMs: ROLE_TIMEOUTS.requirements,
+        timeoutMs: timeouts.requirements,
       });
       if (!r.ok) return 'budgetExceeded' in r || 'unconfigured' in r ? LIMIT_NOTE : NOT_READ_NOTE;
       const got = r.data.postings.find((p) => label(p.posting, 'J') === 1) ?? r.data.postings[0];
@@ -677,12 +691,15 @@ export async function readsToday(db: Db, userId: string, now: Date): Promise<num
  * Claims up to `n` rows to read: the best ranked rows still to be read in this search (or the given ids), none claimed
  * in the last two minutes by another call. The claim is `read_at` on a to-be-read row.
  */
+/** A claim older than this is taken again: the read that made it has ended or died. Longer than a background read. */
+export const CLAIM_MS = 180_000;
+
 export async function claimRows(
   db: Db,
   userId: string,
   o: { searchId?: string; ids?: string[]; n: number; now: Date },
 ): Promise<MatchRow[]> {
-  const stale = new Date(o.now.getTime() - 120_000);
+  const stale = new Date(o.now.getTime() - CLAIM_MS);
   return db.sql<MatchRow>`
     update orbit.role_matches m set read_at = ${o.now}::timestamptz
      where m.id in (

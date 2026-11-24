@@ -46,6 +46,8 @@ import {
 } from './candidates.ts';
 import { loadProfile, plain, type StoredProfile } from './profile.ts';
 import {
+  BACKGROUND_TIMEOUTS,
+  CLAIM_MS,
   claimRows,
   LIMIT_NOTE,
   MATCH_COLUMNS,
@@ -75,6 +77,8 @@ type SearchRow = {
   listed: number;
   read: number;
   sources: { full?: boolean; linkedin?: boolean };
+  /** set when a background read could read nothing: the browser stops asking until the next search */
+  error?: string | null;
   created_at: Date | string;
 };
 
@@ -88,7 +92,7 @@ async function needProfile(db: Db, userId: string): Promise<StoredProfile> {
 
 async function latestSearch(db: Db, userId: string): Promise<SearchRow | undefined> {
   const [r] = await db.sql<SearchRow>`
-    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, created_at
+    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, error, created_at
       from orbit.role_searches where user_id = ${userId}::uuid order by created_at desc, id desc limit 1`;
   return r;
 }
@@ -262,7 +266,7 @@ export async function startSearch(
     insert into orbit.role_searches (user_id, evidence_hash, wants_hash, status, listed, sources, created_at)
     values (${userId}::uuid, ${stored.evidenceHash}, ${stored.wantsHash}, 'reading', ${ranked.length}::int,
             ${{ full, linkedin: linkedin.account, linkedinSearched: linkedin.searched }}::jsonb, ${now}::timestamptz)
-    returning id::text as id, evidence_hash, wants_hash, status, listed, read, sources, created_at`;
+    returning id::text as id, evidence_hash, wants_hash, status, listed, read, sources, error, created_at`;
   await listMatches(s.db, userId, search!.id, ranked, stored.evidenceHash);
   return respond(s, userId, search!, stored);
 }
@@ -275,7 +279,7 @@ export async function more(
   searchId: string,
 ): Promise<RolesSearchResponse> {
   const [search] = await s.db.sql<SearchRow>`
-    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, created_at
+    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, error, created_at
       from orbit.role_searches where id = ${searchId}::uuid and user_id = ${userId}::uuid`;
   if (!search) throw new HttpError(404, 'not_found', 'no such search');
   const stored = await needProfile(s.db, userId);
@@ -309,11 +313,33 @@ export async function more(
       note: used >= READS_PER_DAY ? LIMIT_NOTE : NOT_READ_NOTE,
     };
   }
-  const rows = await claimRows(s.db, userId, {
-    searchId,
-    n: Math.min(MORE_SIZE, READS_PER_DAY - used),
-    now,
-  });
+  const n = Math.min(MORE_SIZE, READS_PER_DAY - used);
+  if (deps.background) {
+    // read after answering: the browser asks again in a few seconds and gets what is read by then
+    const [busy] = await s.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.role_matches
+       where search_id = ${searchId}::uuid and state = 'to_read' and read_at > ${new Date(now.getTime() - CLAIM_MS)}::timestamptz`;
+    if (search.error && !busy?.n) {
+      const res = await respond(s, userId, search, stored, { note: NOT_READ_NOTE });
+      return { ...res, done: true };
+    }
+    if (!busy?.n) {
+      const rows = await claimRows(s.db, userId, { searchId, n, now });
+      if (rows.length)
+        deps.background(
+          readRows(s, deps, userId, stored, rows, BACKGROUND_TIMEOUTS)
+            .then(async (out) => {
+              // nothing could be read: stop asking until the next search, the rows keep their rough parts
+              if (!out.read.length && out.unread.length)
+                await s.db.sql`update orbit.role_searches set error = ${out.note ?? NOT_READ_NOTE}
+                                where id = ${searchId}::uuid`;
+            })
+            .catch(() => undefined),
+        );
+    }
+    return respond(s, userId, search, stored);
+  }
+  const rows = await claimRows(s.db, userId, { searchId, n, now });
   const out = await readRows(s, deps, userId, stored, rows);
   const res = await respond(s, userId, search, stored, {
     matches: [...out.read, ...out.unread],

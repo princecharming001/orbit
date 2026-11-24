@@ -125,6 +125,8 @@ export interface ApiDeps {
   refreshProviderSecrets?: () => Promise<Pick<ApiEnv, 'unipileKey' | 'unipileBase'>>;
   /** plan 44: where roles come from (tests pass fakes); the source side's by default */
   roleSources?: RoleSources;
+  /** EdgeRuntime.waitUntil: work that carries on after the answer has gone (Roles reads); absent in tests */
+  waitUntil?: (p: Promise<unknown>) => void;
 }
 
 /** The values that are set: an undefined one never overwrites a value from somewhere else. */
@@ -155,6 +157,8 @@ export interface Ctx {
   offered: OptionalSource[];
   /** plan 44: where roles come from, when not the source side's own (tests) */
   roleSources?: RoleSources;
+  /** work that carries on after the answer has gone, when the runtime allows it */
+  waitUntil?: (p: Promise<unknown>) => void;
 }
 
 type Handler = (ctx: Ctx) => Promise<Response>;
@@ -356,6 +360,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
         services: () => (services ??= makeServices(agent, { db, now })),
         offered,
         ...(deps.roleSources ? { roleSources: deps.roleSources } : {}),
+        ...(deps.waitUntil ? { waitUntil: deps.waitUntil } : {}),
       };
       if (r.auth) {
         // the token's signature is checked here, without the database; a bad one still counts against the IP

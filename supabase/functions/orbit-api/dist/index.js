@@ -26849,6 +26849,7 @@ var POSTING_CHARS = 8e3;
 var NOT_READ_NOTE = "Not read closely yet";
 var LIMIT_NOTE = "Not read closely yet. Today's limit is reached, so these are ranked by what Orbit can read without the model.";
 var ROLE_TIMEOUTS = { text: 6e3, requirements: 9e3, score: 12e3 };
+var BACKGROUND_TIMEOUTS = { text: 1e4, requirements: 45e3, score: 55e3 };
 var REQUIREMENTS_SYSTEM = `You read job postings for Orbit and list what each one asks of a candidate. For each posting (J1, J2, ...) list at most twelve requirements, the most important first:
 - kind: skill (a tool, language, framework, method or body of knowledge a resume can show: Python, SQL, Figma, user research, financial modeling, A/B testing), experience (work done before, years in a field), education (a degree or field of study), eligibility (citizenship, a security clearance, work authorization, no visa sponsorship, a graduation window).
 - Leave out traits and soft skills entirely (communication, collaboration, teamwork, learning quickly, curiosity, ownership, attention to detail, working with a mentor, interpersonal skills, passion). Leave out general use of AI tools unless the posting names a specific tool as a requirement.
@@ -27112,7 +27113,7 @@ function listingText(j) {
     j.degrees.length ? `Degree: ${j.degrees.join(", ")}` : ""
   ].filter(Boolean).join("\n");
 }
-async function readRows(s, deps2, userId, stored2, rows) {
+async function readRows(s, deps2, userId, stored2, rows, timeouts = ROLE_TIMEOUTS) {
   const out = { read: [], unread: [], failed: 0 };
   if (!rows.length) return out;
   const profile3 = stored2.profile;
@@ -27130,7 +27131,7 @@ async function readRows(s, deps2, userId, stored2, rows) {
       const jr = jobs.get(row.job_id);
       if (!jr) return;
       const job = jobOf(jr);
-      const text3 = await withTimeout(deps2.sources.text(s.db, net, job.id, access), ROLE_TIMEOUTS.text);
+      const text3 = await withTimeout(deps2.sources.text(s.db, net, job.id, access), timeouts.text);
       const body2 = text3?.trim();
       const posting = body2 ? `${job.title}${job.team ? `
 Team: ${job.team}` : ""}
@@ -27145,7 +27146,7 @@ ${body2}`.slice(0, POSTING_CHARS) : listingText(job);
   const notes2 = /* @__PURE__ */ new Set();
   await Promise.all(
     batches.map(async (b) => {
-      const reqNote = await requirementsFor(s, b);
+      const reqNote = await requirementsFor(s, b, timeouts);
       if (reqNote) notes2.add(reqNote);
       const ready = b.filter((it) => it.reqs);
       for (const it of b) if (!it.reqs) out.unread.push(await release(s.db, it, stored2));
@@ -27157,7 +27158,7 @@ ${body2}`.slice(0, POSTING_CHARS) : listingText(job);
         user: scoreUser(fence, ev.all, profile3, ready),
         schema: scoreSchema,
         userId,
-        timeoutMs: ROLE_TIMEOUTS.score
+        timeoutMs: timeouts.score
       });
       if (!r.ok) {
         if ("budgetExceeded" in r || "unconfigured" in r) notes2.add(LIMIT_NOTE);
@@ -27179,7 +27180,7 @@ ${body2}`.slice(0, POSTING_CHARS) : listingText(job);
             user: scoreUser(makeFence(), ev.all, profile3, [it]),
             schema: scoreSchema,
             userId,
-            timeoutMs: ROLE_TIMEOUTS.score
+            timeoutMs: timeouts.score
           });
           if (again.ok) answered = again.data.roles[0];
         }
@@ -27241,7 +27242,7 @@ ${fence.wrap("student", evidence)}
 
 ${postings.join("\n\n")}`;
 }
-async function requirementsFor(s, items) {
+async function requirementsFor(s, items, timeouts) {
   const need = [];
   const stored2 = new Map(
     (await s.db.sql`
@@ -27275,7 +27276,7 @@ ${fence.wrap("posting", it.posting)}`,
         schema: reqSchema,
         // shared work: no student pays for it; Orbit's own daily limit counts it
         userId: null,
-        timeoutMs: ROLE_TIMEOUTS.requirements
+        timeoutMs: timeouts.requirements
       });
       if (!r.ok) return "budgetExceeded" in r || "unconfigured" in r ? LIMIT_NOTE : NOT_READ_NOTE;
       const got = r.data.postings.find((p) => label(p.posting, "J") === 1) ?? r.data.postings[0];
@@ -27298,8 +27299,9 @@ async function readsToday2(db2, userId, now) {
      where user_id = ${userId}::uuid and state = 'read' and read_at >= ${day3}::timestamptz`;
   return r?.n ?? 0;
 }
+var CLAIM_MS = 18e4;
 async function claimRows(db2, userId, o) {
-  const stale = new Date(o.now.getTime() - 12e4);
+  const stale = new Date(o.now.getTime() - CLAIM_MS);
   return db2.sql`
     update orbit.role_matches m set read_at = ${o.now}::timestamptz
      where m.id in (
@@ -27350,7 +27352,7 @@ async function needProfile(db2, userId) {
 }
 async function latestSearch(db2, userId) {
   const [r] = await db2.sql`
-    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, created_at
+    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, error, created_at
       from orbit.role_searches where user_id = ${userId}::uuid order by created_at desc, id desc limit 1`;
   return r;
 }
@@ -27478,13 +27480,13 @@ async function startSearch(s, deps2, userId, req = {}) {
     insert into orbit.role_searches (user_id, evidence_hash, wants_hash, status, listed, sources, created_at)
     values (${userId}::uuid, ${stored2.evidenceHash}, ${stored2.wantsHash}, 'reading', ${ranked.length}::int,
             ${{ full, linkedin: linkedin.account, linkedinSearched: linkedin.searched }}::jsonb, ${now}::timestamptz)
-    returning id::text as id, evidence_hash, wants_hash, status, listed, read, sources, created_at`;
+    returning id::text as id, evidence_hash, wants_hash, status, listed, read, sources, error, created_at`;
   await listMatches(s.db, userId, search5.id, ranked, stored2.evidenceHash);
   return respond2(s, userId, search5, stored2);
 }
 async function more(s, deps2, userId, searchId) {
   const [search5] = await s.db.sql`
-    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, created_at
+    select id::text as id, evidence_hash, wants_hash, status, listed, read, sources, error, created_at
       from orbit.role_searches where id = ${searchId}::uuid and user_id = ${userId}::uuid`;
   if (!search5) throw new HttpError(404, "not_found", "no such search");
   const stored2 = await needProfile(s.db, userId);
@@ -27518,11 +27520,29 @@ async function more(s, deps2, userId, searchId) {
       note: used >= READS_PER_DAY ? LIMIT_NOTE : NOT_READ_NOTE
     };
   }
-  const rows = await claimRows(s.db, userId, {
-    searchId,
-    n: Math.min(MORE_SIZE, READS_PER_DAY - used),
-    now
-  });
+  const n = Math.min(MORE_SIZE, READS_PER_DAY - used);
+  if (deps2.background) {
+    const [busy] = await s.db.sql`
+      select count(*)::int as n from orbit.role_matches
+       where search_id = ${searchId}::uuid and state = 'to_read' and read_at > ${new Date(now.getTime() - CLAIM_MS)}::timestamptz`;
+    if (search5.error && !busy?.n) {
+      const res2 = await respond2(s, userId, search5, stored2, { note: NOT_READ_NOTE });
+      return { ...res2, done: true };
+    }
+    if (!busy?.n) {
+      const rows2 = await claimRows(s.db, userId, { searchId, n, now });
+      if (rows2.length)
+        deps2.background(
+          readRows(s, deps2, userId, stored2, rows2, BACKGROUND_TIMEOUTS).then(async (out2) => {
+            if (!out2.read.length && out2.unread.length)
+              await s.db.sql`update orbit.role_searches set error = ${out2.note ?? NOT_READ_NOTE}
+                                where id = ${searchId}::uuid`;
+          }).catch(() => void 0)
+        );
+    }
+    return respond2(s, userId, search5, stored2);
+  }
+  const rows = await claimRows(s.db, userId, { searchId, n, now });
   const out = await readRows(s, deps2, userId, stored2, rows);
   const res = await respond2(s, userId, search5, stored2, {
     matches: [...out.read, ...out.unread],
@@ -27635,7 +27655,10 @@ var roleSources = {
 };
 
 // supabase/functions/orbit-api/routes/roles.ts
-var deps = (ctx) => ({ sources: ctx.roleSources ?? roleSources });
+var deps = (ctx) => ({
+  sources: ctx.roleSources ?? roleSources,
+  ...ctx.waitUntil ? { background: ctx.waitUntil } : {}
+});
 async function offered(ctx) {
   if (isOwner2(ctx)) return;
   if (!await featureOffered(ctx.db, "roles", ctx.env.features ?? []))
@@ -34045,7 +34068,8 @@ function makeApiHandler(deps2) {
         pullLagMs: deps2.pullLagMs ?? 2e3,
         services: () => services ??= makeServices(agent, { db: db2, now }),
         offered: offered2,
-        ...deps2.roleSources ? { roleSources: deps2.roleSources } : {}
+        ...deps2.roleSources ? { roleSources: deps2.roleSources } : {},
+        ...deps2.waitUntil ? { waitUntil: deps2.waitUntil } : {}
       };
       if (r.auth) {
         const claims = await verifyBearer(ctx.session, req.headers.get("authorization")).catch(async (e) => {
@@ -34093,6 +34117,7 @@ function makeApiHandler(deps2) {
 
 // supabase/functions/orbit-api/main.ts
 var env = (name) => Deno.env.get(name) || void 0;
+var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
 var num3 = (name, fallback) => {
   const v = Number(Deno.env.get(name));
   return Number.isFinite(v) && v > 0 ? v : fallback;
@@ -34114,6 +34139,7 @@ var [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri, 
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeApiHandler({
+    waitUntil: runtime ? (p) => runtime.waitUntil(p) : void 0,
     env: {
       googleClientId: env("ORBIT_GOOGLE_CLIENT_ID"),
       googleClientSecret: env("ORBIT_GOOGLE_CLIENT_SECRET"),

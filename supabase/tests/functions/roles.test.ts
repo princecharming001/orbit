@@ -280,8 +280,17 @@ function fakeSources() {
 
 const OWNER = '00000000-0000-4000-8000-0000000000ff';
 
-function harness(o: { features?: string[]; ownerId?: string; env?: AgentEnv } = {}) {
-  const claude = anthropic(fakeModel);
+function harness(
+  o: {
+    features?: string[];
+    ownerId?: string;
+    env?: AgentEnv;
+    waitUntil?: (p: Promise<unknown>) => void;
+  } = {},
+) {
+  // a kind in `failing` answers with nothing the schema accepts: the model is down for it
+  const failing = new Set<string>();
+  const claude = anthropic((req) => (failing.has(kind(req)) ? { nothing: true } : fakeModel(req)));
   const net = fakeNet(claude.answer);
   const src = fakeSources();
   const handler = makeApiHandler({
@@ -300,6 +309,7 @@ function harness(o: { features?: string[]; ownerId?: string; env?: AgentEnv } = 
     now,
     agent: agentConfig(net, o.env ?? ALL_KEYS),
     roleSources: src.sources,
+    ...(o.waitUntil ? { waitUntil: o.waitUntil } : {}),
   });
   const call = async <T = Record<string, unknown>>(
     path: string,
@@ -317,7 +327,8 @@ function harness(o: { features?: string[]; ownerId?: string; env?: AgentEnv } = 
     return { status: r.status, body: (await r.json()) as T };
   };
   const count = (k: string) => claude.requests.filter((r) => kind(r) === k).length;
-  return { call, claude, net, src, count, agent: agentConfig(net, o.env ?? ALL_KEYS) };
+  const fail = (k: string) => failing.add(k);
+  return { call, claude, net, src, count, fail, agent: agentConfig(net, o.env ?? ALL_KEYS) };
 }
 
 const profile = (over: Partial<RoleProfile> = {}): RoleProfile => ({
@@ -594,6 +605,40 @@ describe('/roles/search and /roles/more', () => {
     const again = await h.call<RolesSearchResponse>('/roles/search', u.token, {});
     expect(again.body.searchId).toBe(r.body.searchId);
     expect(again.body.matches).toHaveLength(20);
+  });
+
+  it('with the runtime, more() answers at once and reads after the answer; a read that reads nothing stops the asking', async () => {
+    const pending: Promise<unknown>[] = [];
+    const h = harness({ waitUntil: (p) => pending.push(p) });
+    const u = await student(h);
+    for (let i = 0; i < 4; i++) await addJob({ title: `Software Engineer Intern ${i}`, company: `Co${i}` });
+    const r = await h.call<RolesSearchResponse>('/roles/search', u.token, {});
+    const m = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
+    // nothing read yet: the read runs after the answer
+    expect(m.body.read).toBe(0);
+    expect(m.body.done).toBe(false);
+    expect(pending).toHaveLength(1);
+    // asked again while the read is still going: no second read starts
+    await h.call('/roles/more', u.token, { searchId: r.body.searchId });
+    expect(pending).toHaveLength(1);
+    await Promise.all(pending);
+    const m2 = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
+    expect(m2.body.read).toBe(4);
+    expect(m2.body.matches.every((x) => x.fit)).toBe(true);
+    expect(m2.body.done).toBe(true);
+
+    // the model answers nothing: one read, then the search says so and stops
+    const pending2: Promise<unknown>[] = [];
+    const h2 = harness({ waitUntil: (p) => pending2.push(p) });
+    const u2 = await student(h2);
+    h2.fail('score');
+    const r2 = await h2.call<RolesSearchResponse>('/roles/search', u2.token, {});
+    await h2.call('/roles/more', u2.token, { searchId: r2.body.searchId });
+    await Promise.all(pending2);
+    const m3 = await h2.call<RolesSearchResponse>('/roles/more', u2.token, { searchId: r2.body.searchId });
+    expect(m3.body.done).toBe(true);
+    expect(m3.body.note).toBe('Not read closely yet');
+    expect(pending2).toHaveLength(1);
   });
 
   it('a dismissed role never returns, and status survives a profile change', async () => {
