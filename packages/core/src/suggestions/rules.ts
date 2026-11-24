@@ -1228,7 +1228,11 @@ export function joinReasons(texts: string[], firstName = 'they'): string {
       return i ? `${firstName}'s background overlaps with yours` : t;
     return i && /^(You|Reachable)\b/.test(t) ? t[0]!.toLowerCase() + t.slice(1) : t;
   };
-  return texts.map(subject).join(', and ');
+  // a reason written as a full sentence (Discover's scorer) joins without its full stop
+  return texts
+    .map((t) => t.trim().replace(/\.$/, ''))
+    .map(subject)
+    .join(', and ');
 }
 
 // own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in

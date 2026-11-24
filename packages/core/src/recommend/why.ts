@@ -496,7 +496,20 @@ export function whyThem(s: WhySignals, opts: WhyOptions = {}): WhyReason[] {
   const h = s.history;
   if (h) {
     const t = h.talk;
-    const via = t?.channel && t.channel !== 'mixed' ? ` ${t.channel === 'text' ? 'text' : t.channel}` : '';
+    const ch = t?.channel && t.channel !== 'mixed' ? t.channel : undefined;
+    // the channel in the words a person uses: "by email", "your LinkedIn message", "You texted them"
+    const by =
+      ch === 'email' ? ' by email' : ch === 'LinkedIn' ? ' on LinkedIn' : ch === 'text' ? ' by text' : '';
+    const yourMessage =
+      ch === 'email' ? 'email' : ch === 'LinkedIn' ? 'LinkedIn message' : ch === 'text' ? 'text' : 'message';
+    const youWrote =
+      ch === 'email'
+        ? 'You emailed them'
+        : ch === 'LinkedIn'
+          ? 'You messaged them on LinkedIn'
+          : ch === 'text'
+            ? 'You texted them'
+            : 'You wrote to them';
     const about = subjectLine(t?.subject);
     const aboutPart = about ? ` about ${about}` : '';
     const recent = (iso?: string) => {
@@ -514,8 +527,8 @@ export function whyThem(s: WhySignals, opts: WhyOptions = {}): WhyReason[] {
       const unanswered = t?.lastFrom === 'them';
       const text =
         total >= 3 && t?.firstAt && monthOf(t.firstAt, s.now)
-          ? `You have written to each other ${times(total)}${via ? ` over${via}` : ''} since ${monthOf(t.firstAt, s.now)}${aboutPart}; the last was ${unanswered ? `their reply on ${dayOf(t.lastAt ?? h.repliedAt, s.now)}` : `your message on ${dayOf(t.lastAt, s.now)}`}.`
-          : `Replied on ${dayOf(h.repliedAt, s.now)} to your${via || ' message'}${via ? ' message' : ''}${aboutPart}${unanswered ? '; you have not written back since' : ''}.`;
+          ? `You have written to each other ${times(total)}${by} since ${monthOf(t.firstAt, s.now)}${aboutPart}; the last was ${unanswered ? `their reply on ${dayOf(t.lastAt ?? h.repliedAt, s.now)}` : `your message on ${dayOf(t.lastAt, s.now)}`}.`
+          : `Replied to your ${yourMessage} on ${dayOf(h.repliedAt, s.now)}${aboutPart}${unanswered ? '; you have not written back since' : ''}.`;
       say('history', text, 78, 'tie', {
         clause: `replied to you in ${monthOf(h.repliedAt, s.now)}`,
         timely: recent(h.repliedAt) && unanswered,
@@ -523,9 +536,10 @@ export function whyThem(s: WhySignals, opts: WhyOptions = {}): WhyReason[] {
     } else if (h.theyWroteAt && monthOf(h.theyWroteAt, s.now)) {
       const unanswered = !t || t.lastFrom === 'them';
       const more = t && t.fromThem > 1 ? `, the last of ${plural(t.fromThem, 'message')} from them` : '';
+      const answered = !unanswered && dayOf(t?.lastAt, s.now);
       say(
         'history',
-        `Wrote to you${via ? ` on${via}` : ''} on ${dayOf(h.theyWroteAt, s.now)}${aboutPart}${more}${unanswered ? '; you have not replied yet' : ''}.`,
+        `Wrote to you${by} on ${dayOf(h.theyWroteAt, s.now)}${aboutPart}${more}${unanswered ? '; you have not replied yet' : answered ? `; you wrote back on ${answered}` : ''}.`,
         74,
         'tie',
         { clause: `wrote to you in ${monthOf(h.theyWroteAt, s.now)}`, timely: recent(h.theyWroteAt) },
@@ -535,7 +549,7 @@ export function whyThem(s: WhySignals, opts: WhyOptions = {}): WhyReason[] {
       const n = t?.fromYou ?? 0;
       say(
         'history',
-        `You wrote to them${via ? ` on${via}` : ''} on ${dayOf(h.wroteAt, s.now)}${aboutPart}${n > 1 ? ` (${plural(n, 'message')} in all)` : ''} and have not heard back${ago ? `; that was ${ago}` : ''}.`,
+        `${youWrote} on ${dayOf(h.wroteAt, s.now)}${aboutPart}${n > 1 ? ` (${plural(n, 'message')} in all)` : ''} and have not heard back${ago ? `; that was ${ago}` : ''}.`,
         55,
       );
     } else if (h.knownALittle) {
@@ -696,15 +710,21 @@ export function whyCard(reasons: WhyReason[], firstName?: string): WhyCard {
   const lead = reasons[0];
   if (!lead?.clause) return { bullets: reasons };
   const who = firstName?.trim() || 'this person';
-  let second = reasons
+  const joinable = reasons
     .slice(1)
-    .find(
+    .filter(
       (r) =>
         r.clause &&
         r.kind !== lead.kind &&
         SUMMARY_KINDS.has(r.kind) &&
         (r.anchor || r.timely || r.kind === 'school' || r.kind === 'like'),
     );
+  // what they do, when the lead is something else (a way in, your history); else a reason to write now (a reply
+  // waiting on the student, a new role); else the next strongest
+  let second =
+    (lead.kind !== 'goal' ? joinable.find((r) => r.kind === 'goal') : undefined) ??
+    joinable.find((r) => r.timely) ??
+    joinable[0];
   const sentence = (parts: WhyReason[]) => {
     // what they do reads first: "works at Stripe, ..., and is one introduction away through Lena"
     const [a, b] = parts.length === 2 && parts[1]!.kind === 'goal' ? [parts[1]!, parts[0]!] : parts;

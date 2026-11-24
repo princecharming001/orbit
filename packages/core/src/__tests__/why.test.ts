@@ -256,7 +256,7 @@ describe('each reason says something specific and true', () => {
       },
     });
     expect(wrote.text).toBe(
-      'Wrote to you on email on May 12 about “Your summer internship search”; you have not replied yet.',
+      'Wrote to you by email on May 12 about “Your summer internship search”; you have not replied yet.',
     );
     expect(wrote.clause).toBe('wrote to you in May');
     expect(wrote.anchor).toBe('tie');
@@ -276,13 +276,13 @@ describe('each reason says something specific and true', () => {
       },
     });
     expect(talked.text).toBe(
-      'You have written to each other three times over email since September about “Coffee chat follow up”; the last was their reply on September 22.',
+      'You have written to each other three times by email since September about “Coffee chat follow up”; the last was their reply on September 22.',
     );
     // a recent reply waiting on the student is a reason to write now
     expect(talked.timely).toBe(true);
     // a single reply, with nothing more on record: only what is known
     expect(texts({ history: { repliedAt: '2025-03-12T10:00:00' } })[0]).toBe(
-      'Replied on March 12, 2025 to your message.',
+      'Replied to your message on March 12, 2025.',
     );
     expect(texts({ history: { metAt: '2026-06-02T10:00:00', meetings: 2 } })[0]).toBe(
       'You met on June 2, the last of 2 meetings with them, 4 months ago.',
@@ -296,7 +296,7 @@ describe('each reason says something specific and true', () => {
         },
       })[0],
     ).toBe(
-      'You wrote to them on LinkedIn on September 2 (2 messages in all) and have not heard back; that was 4 weeks ago.',
+      'You messaged them on LinkedIn on September 2 (2 messages in all) and have not heard back; that was 4 weeks ago.',
     );
     expect(texts({ history: { connectedOn: '2024-05-02' } })[0]).toBe(
       'Connected with you on LinkedIn since May 2024, though you have not written to each other.',
@@ -467,9 +467,38 @@ describe('the summary: why this person, now, in one sentence', () => {
     // the goal line is said in full by the summary; the reply keeps its own line for its dates
     expect(card.bullets.map((b) => b.kind)).toEqual(['history', 'school', 'city']);
     expect(card.bullets[0]!.text).toBe(
-      'Replied on September 22 to your email message; you have not written back since.',
+      'Replied to your email on September 22; you have not written back since.',
     );
     wellWritten(maya, card.summary);
+  });
+
+  it('prefers a reason to write now (a reply waiting on the student) over a stronger one that can wait', () => {
+    const r = whyThem({
+      firstName: 'Hannah',
+      company: 'Figma',
+      goal: { company: { name: 'Figma', priority: 1 }, role: { title: 'Product Manager' } },
+      mutuals: { names: ['Zara', 'Priya', 'Mateo'] },
+      history: {
+        repliedAt: '2026-10-05T09:00:00',
+        talk: {
+          fromThem: 1,
+          fromYou: 1,
+          channel: 'email',
+          lastFrom: 'them',
+          subject: 'Your move from design to PM',
+        },
+      },
+      now,
+    });
+    expect(r.map((x) => x.kind)).toEqual(['goal', 'mutuals', 'history']);
+    const card = whyCard(r, 'Hannah');
+    expect(card.summary).toBe(
+      'Worth writing to now because Hannah is a Product Manager at Figma, one of your top target companies, and replied to you in October.',
+    );
+    expect(card.bullets.map((b) => b.text)).toEqual([
+      'Knows Zara, Priya and Mateo, all three people you know well.',
+      'Replied to your email on October 5 about “Your move from design to PM”; you have not written back since.',
+    ]);
   });
 
   it('says what they do first, even when a way in leads', () => {

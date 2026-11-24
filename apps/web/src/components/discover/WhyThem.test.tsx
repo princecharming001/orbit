@@ -69,7 +69,7 @@ describe('Why them on a card', () => {
     const lines = shown('[data-testid="why-reason"]').map((l) => l.textContent?.replace(/^•/, ''));
     expect(lines).toEqual([
       'Lena Novak, who worked with Amara at Ramp (2021 to 2023), could introduce you.',
-      'Wrote to you on email on May 12 about “Summer internships”; you have not replied yet.',
+      'Wrote to you by email on May 12 about “Summer internships”; you have not replied yet.',
       'Also went to Cornell University (BS, class of 2021), 6 years ahead of you.',
     ]);
     // the summary and three reasons show; nothing hides the substance
