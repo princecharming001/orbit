@@ -313,6 +313,13 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.social_lookups (user_id, platform, target_person_id, target_account_id) values ('${u}', 'instagram', '${p2}', 'ig_ann');
       insert into orbit.text_days (user_id, person_id, day, in_count, out_count) values ('${u}', '${p2}', '2026-11-01', 1, 1);
       insert into orbit.dead_letters (queue, message) values ('orbit_sync', '{"kind":"x","userId":"${u}"}');
+      insert into orbit.role_profiles (user_id, profile, evidence_hash, wants_hash) values ('${u}', '{}', 'e', 'w');
+      insert into orbit.role_searches (id, user_id, evidence_hash, wants_hash) values ('00000000-0000-4000-8000-0000000000a1', '${u}', 'e', 'w');
+      insert into orbit_private.jobs (id, source, external_id, company_key, company_name, title, title_key, url)
+        values ('00000000-0000-4000-8000-0000000000a2', 'greenhouse', 'del-1', 'acme', 'Acme', 'Analyst', 'analyst', 'https://example.com/j/1');
+      insert into orbit.role_matches (user_id, job_id, search_id, evidence_hash) values ('${u}', '00000000-0000-4000-8000-0000000000a2', '00000000-0000-4000-8000-0000000000a1', 'e');
+      insert into orbit.role_watches (user_id, company_key, company_name) values ('${u}', 'acme', 'Acme');
+      insert into orbit.role_source_reads (user_id, source, query_key) values ('${u}', 'linkedin', 'q');
     `);
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: u, payload: {} }}::jsonb)`;
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: other, payload: {} }}::jsonb)`;

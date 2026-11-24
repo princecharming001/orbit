@@ -582,7 +582,8 @@ describe('POST /source/search, a people search', () => {
       filters: { titles: ['investor', 'partner'], locations: ['London'] },
     });
     expect(r.status).toBe(200);
-    expect(s.exa.map((b) => b.query)).toEqual([
+    // the two queries go out side by side, so their order is whichever answered first
+    expect(s.exa.map((b) => b.query).sort()).toEqual([
       'investor or partner based in London',
       'investors at venture capital firms in London',
     ]);
