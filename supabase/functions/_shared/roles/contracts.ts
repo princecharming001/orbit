@@ -4,7 +4,7 @@
  * calls them. Tests use fakes of the same shapes.
  */
 
-import type { Job, JobListing, JobRequirement } from '../../../packages/core/src/roles/types.ts';
+import type { Job, JobListing, JobRequirement } from '../../../../packages/core/src/roles/types.ts';
 import type { Db } from '../db.ts';
 
 export interface RoleNet {
