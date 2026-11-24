@@ -1849,7 +1849,33 @@ function Privacy() {
             ))}
           </ul>
         </SettingsCard>
-        <SettingsCard title="Your data">
+        <SettingsCard
+          title="Your data"
+          description={
+            <span>
+              How Orbit handles your data is set out in the{' '}
+              <a
+                href={`${import.meta.env.BASE_URL}privacy/`}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-ink"
+                data-testid="settings-privacy-policy"
+              >
+                privacy policy
+              </a>{' '}
+              and the{' '}
+              <a
+                href={`${import.meta.env.BASE_URL}terms/`}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-ink"
+              >
+                terms
+              </a>
+              .
+            </span>
+          }
+        >
           <SettingsRow
             label="Download a copy"
             description={

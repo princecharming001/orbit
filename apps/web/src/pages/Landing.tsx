@@ -139,7 +139,7 @@ export function Landing() {
             <a className="hover:text-ink transition-colors" href="#map">
               The map
             </a>
-            <a className="hover:text-ink transition-colors" href="#privacy">
+            <a className="hover:text-ink transition-colors" href={`${import.meta.env.BASE_URL}privacy/`}>
               Privacy
             </a>
             <a className="hover:text-ink transition-colors" href="#faq">
@@ -444,11 +444,6 @@ export function Landing() {
           <nav className="text-[14px]" aria-label="Footer">
             <p className="label-mono mb-3">Trust</p>
             <ul className="space-y-2 text-ink-2">
-              <li>
-                <a className="hover:text-ink transition-colors" href="#privacy">
-                  Privacy
-                </a>
-              </li>
               <li>
                 <a className="hover:text-ink transition-colors" href="#faq">
                   FAQ
