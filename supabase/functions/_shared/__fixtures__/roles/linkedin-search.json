@@ -1,0 +1,67 @@
+{
+  "object": "LinkedinSearch",
+  "items": [
+    {
+      "type": "JOB",
+      "id": "4478635358",
+      "reference_id": "urn:li:fsd_jobPosting:4478635358",
+      "title": "Software Engineer Intern - Summer 2027",
+      "company": {
+        "id": "165158",
+        "name": "Orchard Streaming",
+        "profile_url": "https://www.linkedin.com/company/orchard-streaming",
+        "public_identifier": "orchard-streaming",
+        "profile_picture_url": "https://media.licdn.com/dms/image/v2/orchard/company-logo_200_200"
+      },
+      "location": "Los Gatos, CA (On-site)",
+      "posted_at": "2026-11-22T17:03:11.000Z",
+      "benefits": [],
+      "reposted": false,
+      "promoted": false,
+      "easy_apply": false,
+      "url": "https://www.linkedin.com/jobs/view/4478635358"
+    },
+    {
+      "type": "JOB",
+      "id": "4479011220",
+      "reference_id": "urn:li:fsd_jobPosting:4479011220",
+      "title": "Software Engineer, New Grad - Frontend",
+      "company": {
+        "id": "2135371",
+        "name": "Nimbus Pay",
+        "profile_url": "https://www.linkedin.com/company/nimbuspay",
+        "public_identifier": "nimbuspay",
+        "profile_picture_url": null
+      },
+      "location": "San Francisco, CA (Hybrid)",
+      "posted_at": "2026-11-23T09:12:40.000Z",
+      "benefits": ["Medical", "Retirement plan"],
+      "reposted": true,
+      "promoted": true,
+      "easy_apply": false,
+      "url": "https://www.linkedin.com/jobs/view/4479011220"
+    },
+    {
+      "type": "JOB",
+      "id": "4477100001",
+      "reference_id": "urn:li:fsd_jobPosting:4477100001",
+      "title": "Data Analyst",
+      "company": {
+        "id": "99001",
+        "name": "Kestrel Health",
+        "profile_url": "https://www.linkedin.com/company/kestrel-health",
+        "public_identifier": "kestrel-health",
+        "profile_picture_url": null
+      },
+      "location": "United States (Remote)",
+      "posted_at": "2026-11-20T12:00:00.000Z",
+      "benefits": [],
+      "reposted": false,
+      "promoted": false,
+      "easy_apply": true,
+      "url": "https://www.linkedin.com/jobs/view/4477100001"
+    }
+  ],
+  "paging": { "start": 0, "page_count": 3, "total_count": 247 },
+  "cursor": "eyJzdGFydCI6M30="
+}

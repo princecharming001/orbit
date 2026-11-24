@@ -9,6 +9,7 @@
  * each still billed), with Osmo's and other accounts counted apart; null when the reconciler has not run.
  */
 import type { Db } from '../../_shared/db.ts';
+import { type RolesDigest, rolesDigest, rolesDigestLines } from '../../_shared/roles/digest.ts';
 import type { Mailer } from '../../_shared/services.ts';
 import type { JobHandler } from '../worker.ts';
 
@@ -96,6 +97,8 @@ export interface CostDigest {
   /** every account on the shared Unipile key at the last reconcile; null before it first runs */
   unipileAccounts: number | null;
   unipile: UnipileDigest | null;
+  /** plan 44 §9.5: boards, roles, discovery and the SimplifyJobs lists for the day; null before the tables exist */
+  roles: RolesDigest | null;
   thresholds: CostThresholds;
   crossed: { key: string; value: number; limit: number }[];
   mailed: boolean;
@@ -229,6 +232,7 @@ export async function buildCostDigest(db: Db, now: Date, thresholds: CostThresho
     ).map((r) => r.provider);
 
   const unipile = await unipileDigest(db, now);
+  const roles = await rolesDigest(db, day);
 
   const crossed: CostDigest['crossed'] = [];
   const check = (key: string, value: number | null, limit: number) => {
@@ -257,6 +261,7 @@ export async function buildCostDigest(db: Db, now: Date, thresholds: CostThresho
     switchedOff,
     unipileAccounts: unipile?.total ?? null,
     unipile,
+    roles,
     thresholds,
     crossed,
     mailed: false,
@@ -332,6 +337,7 @@ export function costDigestText(d: CostDigest): string {
     if (u.missingAtUnipile.length)
       lines.push(`Orbit rows whose account Unipile no longer has: ${u.missingAtUnipile.length}.`);
   }
+  if (d.roles) lines.push(...rolesDigestLines(d.roles));
   if (d.providers.length) {
     lines.push('', 'By provider:');
     for (const p of d.providers.slice(0, 12))

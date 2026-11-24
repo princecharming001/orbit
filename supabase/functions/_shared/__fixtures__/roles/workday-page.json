@@ -1,0 +1,42 @@
+{
+  "total": 5,
+  "jobPostings": [
+    {
+      "title": "Senior SRE Engineer",
+      "externalPath": "/job/Israel-Tel-Aviv/Senior-SRE-Engineer_JR2029097",
+      "locationsText": "2 Locations",
+      "postedOn": "Posted Today",
+      "bulletFields": ["JR2029097"]
+    },
+    {
+      "title": "Networking SW QA Engineer",
+      "externalPath": "/job/Israel-Tel-Hai/Networking-SW-QA-Engineer_JR2029939",
+      "locationsText": "Israel, Tel Hai",
+      "postedOn": "Posted Today",
+      "bulletFields": ["JR2029939"]
+    },
+    {
+      "title": "Senior Technical Trainer and Content Developer, AI Compute Systems",
+      "externalPath": "/job/US-TX-Remote/Senior-Technical-Trainer-and-Content-Developer--AI-Compute-Systems_JR2030132",
+      "locationsText": "3 Locations",
+      "postedOn": "Posted Today",
+      "bulletFields": ["JR2030132"]
+    },
+    {
+      "title": "Senior Technical Trainer and Content Developer, AI Data Centers",
+      "externalPath": "/job/US-CA-Santa-Clara/Senior-Technical-Trainer-and-Content-Developer--AI-Data-Centers_JR2030345",
+      "locationsText": "6 Locations",
+      "postedOn": "Posted Today",
+      "bulletFields": ["JR2030345"]
+    },
+    {
+      "title": "Software Engineer, Storage",
+      "externalPath": "/job/Israel-Raanana/Software-Engineer--Storage_JR2029278",
+      "locationsText": "Israel, Raanana",
+      "postedOn": "Posted Today",
+      "bulletFields": ["JR2029278"]
+    }
+  ],
+  "facets": [],
+  "userAuthenticated": false
+}

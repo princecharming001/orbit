@@ -1,0 +1,98 @@
+{
+  "nextPage": null,
+  "results": [
+    {
+      "id": 6285741,
+      "shortcode": "2F83B48969",
+      "title": "Senior Software Engineer, Bot Detection (Client-Side & Signals) - EMEA Remote",
+      "remote": true,
+      "location": {
+        "city": "",
+        "country": "France",
+        "countryCode": "FR",
+        "region": null
+      },
+      "locations": [
+        {
+          "city": "",
+          "country": "France",
+          "countryCode": "FR",
+          "hidden": true,
+          "region": null
+        }
+      ],
+      "state": "published",
+      "isInternal": false,
+      "code": "",
+      "published": "2026-11-20T00:00:00.000Z",
+      "type": "full",
+      "language": "en",
+      "department": ["Product"],
+      "accountUid": "940cf17f-c078-40ac-95e8-07704e754048",
+      "approvalStatus": "approved",
+      "workplace": "remote"
+    },
+    {
+      "id": 6285753,
+      "shortcode": "2EC9909936",
+      "title": "Senior Software Engineer, Bot Detection (Client-Side & Signals) - US Remote",
+      "remote": true,
+      "location": {
+        "city": "New York",
+        "country": "United States",
+        "countryCode": "US",
+        "region": "New York"
+      },
+      "locations": [
+        {
+          "city": "New York",
+          "country": "United States",
+          "countryCode": "US",
+          "hidden": true,
+          "region": "New York"
+        }
+      ],
+      "state": "published",
+      "isInternal": false,
+      "code": "",
+      "published": "2026-11-20T00:00:00.000Z",
+      "type": "full",
+      "language": "en",
+      "department": ["Product"],
+      "accountUid": "940cf17f-c078-40ac-95e8-07704e754048",
+      "approvalStatus": "approved",
+      "workplace": "remote"
+    },
+    {
+      "id": 6285755,
+      "shortcode": "08E488BFBA",
+      "title": "Senior Software/Data Engineer, Bot Detection - EMEA Remote",
+      "remote": true,
+      "location": {
+        "city": "",
+        "country": "France",
+        "countryCode": "FR",
+        "region": null
+      },
+      "locations": [
+        {
+          "city": "",
+          "country": "France",
+          "countryCode": "FR",
+          "hidden": true,
+          "region": null
+        }
+      ],
+      "state": "published",
+      "isInternal": false,
+      "code": "",
+      "published": "2026-11-20T00:00:00.000Z",
+      "type": "full",
+      "language": "en",
+      "department": ["Product"],
+      "accountUid": "940cf17f-c078-40ac-95e8-07704e754048",
+      "approvalStatus": "approved",
+      "workplace": "remote"
+    }
+  ]
+}

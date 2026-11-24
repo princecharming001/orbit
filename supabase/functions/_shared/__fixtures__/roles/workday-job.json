@@ -1,0 +1,25 @@
+{
+  "jobPostingInfo": {
+    "id": "c1f0e2a4b5d6",
+    "title": "Senior SRE Engineer",
+    "jobDescription": "<p><b>What you will be doing:</b></p><ul><li>Run the production systems behind Lumen's cloud services.</li><li>Build tooling in Go and Python for deployment and on-call.</li></ul><p><b>What we need to see:</b></p><ul><li>BS in Computer Science or equivalent experience.</li><li>5+ years of experience running Kubernetes in production.</li></ul><p>The base salary range is $148,000 - $287,500 USD.</p>",
+    "location": "Israel, Tel Aviv",
+    "additionalLocations": ["Israel, Yokneam"],
+    "postedOn": "Posted Today",
+    "startDate": "2026-11-24",
+    "timeType": "Full time",
+    "jobReqId": "JR2029097",
+    "jobPostingId": "Senior-SRE-Engineer_JR2029097",
+    "jobPostingSiteId": "LumenExternalCareerSite",
+    "country": { "descriptor": "Israel", "id": "084fd1" },
+    "canApply": true,
+    "posted": true,
+    "includeResumeParsing": true,
+    "remoteType": "Hybrid",
+    "externalUrl": "https://lumen.wd5.myworkdayjobs.com/LumenExternalCareerSite/job/Israel-Tel-Aviv/Senior-SRE-Engineer_JR2029097",
+    "questionnaireId": "0d1"
+  },
+  "hiringOrganization": { "name": "Lumen", "url": "" },
+  "similarJobs": [],
+  "userAuthenticated": false
+}

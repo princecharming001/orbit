@@ -103,7 +103,7 @@ export async function postingKey(raw: string): Promise<string> {
 }
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   return s
     .replace(/&#(\d+);/g, (_, n: string) => String.fromCharCode(Number(n)))
     .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCharCode(Number.parseInt(n, 16)))
@@ -232,7 +232,7 @@ export function boardJobKey(job: BoardJob): string {
 }
 
 /** "neuralink.com", "careers.neuralink.com", "jobs.acme.co.uk": the names a company's board is likely kept under. */
-function siteNames(raw: string): string[] {
+export function siteNames(raw: string): string[] {
   try {
     const labels = new URL(raw).hostname
       .toLowerCase()
@@ -319,7 +319,7 @@ async function greenhouseJob(
 }
 
 /** Board names written into a page: Greenhouse's embed script (job_board/js?for=X) and links to the board. */
-function boardNamesIn(html: string | undefined, re: RegExp): string[] {
+export function boardNamesIn(html: string | undefined, re: RegExp): string[] {
   if (!html) return [];
   const out = new Set<string>();
   for (const m of decodeEntities(html).matchAll(re)) if (m[1] && SLUG.test(m[1])) out.add(m[1].toLowerCase());

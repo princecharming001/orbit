@@ -1,0 +1,88 @@
+{
+  "id": "743999659136348",
+  "name": "Editorial Assistant",
+  "uuid": "941a8d3e-f28f-4930-a6a2-49d8ec3af858",
+  "jobId": "d4e9e6b5-dde6-4964-9cae-606f444c40c5",
+  "jobAdId": "3e01f871-2cc2-4372-af01-8d481f02ecc7",
+  "defaultJobAd": true,
+  "refNumber": "REF122L",
+  "company": {
+    "name": " Velvet Media, LLC",
+    "identifier": "VelvetMediaLLC"
+  },
+  "location": {
+    "city": "London",
+    "region": "England",
+    "country": "gb",
+    "remote": false,
+    "hybrid": false,
+    "latitude": "51.5073509",
+    "longitude": "-0.12775829999998223",
+    "fullLocation": "London, England, United Kingdom"
+  },
+  "customField": [
+    {
+      "fieldId": "COUNTRY",
+      "fieldLabel": "Country/Region",
+      "valueId": "gb",
+      "valueLabel": "United Kingdom"
+    },
+    {
+      "fieldId": "58b85ec1e4b08fd8c9056bb4",
+      "fieldLabel": "Brands",
+      "valueId": "default",
+      "valueLabel": " Velvet Media, LLC"
+    }
+  ],
+  "releasedDate": "2017-09-04T23:26:11.000Z",
+  "creator": {
+    "name": "",
+    "avatarUrl": ""
+  },
+  "postingUrl": "https://jobs.smartrecruiters.com/VelvetMediaLLC/743999659136348-editorial-assistant",
+  "applyUrl": "https://jobs.smartrecruiters.com/VelvetMediaLLC/743999659136348-editorial-assistant?oga=true",
+  "referralUrl": "https://jobs.smartrecruiters.com/external-referrals/company/VelvetMediaLLC/publication/941a8d3e-f28f-4930-a6a2-49d8ec3af858?dcr_ci=VelvetMediaLLC",
+  "jobAd": {
+    "sections": {
+      "companyDescription": {
+        "title": "Company Description",
+        "text": "<p>Orla is a luxury lifestyle magazine currently serving Chicago, Los Angeles and New York. The pages of this glossy publication cover the latest trends in fashion, fine dining, nightlife, arts and culture. Featuring ultra luxe fashion profiles, restaurants, and the season’s must-have accessories from the world’s top writers and stylists.</p><p>Velvet Media, LLC and Orla Magazine are the marketing names of The Aparecio Foundation, NFP (“TAF”). Velvet Media, LLC. is committed to developing a fun and productive work culture that is conducive to positive results! </p><p>We offer a uniquely open environment that demands initiative and imagination from every single team member that are heard, tested, and genuinely empowered to lead by example and create lasting impacts on our organization, its programs, and the community. </p><p> This is an internship/volunteer opportunity with standard industry sales Commission Only.</p>"
+      },
+      "jobDescription": {
+        "title": "Job Description",
+        "text": "<p>The job of the editorial assistant is to work with the Editor in chief of Orla Magazine.</p>"
+      },
+      "qualifications": {
+        "title": "Qualifications",
+        "text": "<p><b></b></p><p><span>Tasks:</span></p><ul><li><p><span>Prepare memos, letters, and other documents, using word processing, spreadsheets, database, or presentation software</span></p></li><li><p><span>Answer phone calls and direct calls to appropriate parties or take messages.</span></p></li><li><p><span>Attend meeting to record minutes</span></p></li></ul><p><br /></p><p><span>Qualifications:</span></p><ul><li><p><span>Technology skills (Microsoft office, basic computer skills, phone skills, scanners, photocopiers)</span></p></li><li><p><span>Fluent in English</span></p></li><li><p><span>Knowledge of business and management principles involved in strategic planning, resource allocation, and coordination of people and resources.</span></p></li><li><p><span>Active listener:  Give full attention to what other people are saying, taking time to understand the points being made, asking questions as appropriate, and not interrupting at inappropriate times.</span></p></li><li><p><span>Service oriented: actively looking for ways to help people </span></p></li><li><p><span>Exhibits integrity and trust </span></p></li></ul><p><br /></p><p><span>Education</span></p><ul><li><p><span>Some Bachelor’s degree or Associate’s degree</span></p></li><li><p><span>High School diploma or equivalent</span></p></li></ul>"
+      },
+      "additionalInformation": {
+        "title": "Additional Information",
+        "text": "<p>All your information will be kept confidential according to EEO guidelines.</p>"
+      }
+    }
+  },
+  "active": true,
+  "visibility": "PUBLIC",
+  "industry": {
+    "id": "writing_and_editing",
+    "label": "Writing And Editing"
+  },
+  "function": {
+    "id": "art_creative",
+    "label": "Art/Creative"
+  },
+  "experienceLevel": {
+    "id": "mid_senior_level",
+    "label": "Mid-Senior Level"
+  },
+  "typeOfEmployment": {
+    "id": "intern",
+    "label": "Intern"
+  },
+  "language": {
+    "code": "en",
+    "label": "English",
+    "labelNative": "English (US)"
+  }
+}

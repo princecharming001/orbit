@@ -1,0 +1,277 @@
+{
+  "jobs": [
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8260982",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3574475,
+      "location": {
+        "name": "N/A"
+      },
+      "metadata": null,
+      "id": 8260982,
+      "updated_at": "2026-11-19T12:10:13-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Softwareentwickler, Zahlungen",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-10-23T12:19:34-04:00",
+      "language": "de",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8186367",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": true
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3542524,
+      "location": {
+        "name": "Singapore"
+      },
+      "metadata": null,
+      "id": 8186367,
+      "updated_at": "2026-11-19T12:10:04-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Integration Reliability Engineer Intern, Technical Operations",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-09-22T15:33:06-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=7202630",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3231528,
+      "location": {
+        "name": "NYC"
+      },
+      "metadata": null,
+      "id": 7202630,
+      "updated_at": "2026-11-19T12:12:19-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Staff Product Designer, Link",
+      "company_name": "Nimbus Pay",
+      "first_published": "2025-09-26T11:40:08-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8077887",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3499744,
+      "location": {
+        "name": "SF, NYC, SEA, CHI"
+      },
+      "metadata": null,
+      "id": 8077887,
+      "updated_at": "2026-11-19T12:12:22-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Account Executive, Bridge ",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-07-22T13:15:53-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8256027",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": true
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3572595,
+      "location": {
+        "name": "Singapore"
+      },
+      "metadata": null,
+      "id": 8256027,
+      "updated_at": "2026-11-24T06:15:38-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Engineering Manager, Payments",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-10-22T05:32:50-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8168550",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_optional",
+      "internal_job_id": 3535054,
+      "location": {
+        "name": "Mexico City"
+      },
+      "metadata": null,
+      "id": 8168550,
+      "updated_at": "2026-11-23T23:06:53-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Fraud Operations Associate, Bridge (CDMX)",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-10-27T22:30:21-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8130927",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3520829,
+      "location": {
+        "name": "Barcelona"
+      },
+      "metadata": null,
+      "id": 8130927,
+      "updated_at": "2026-11-19T12:10:00-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Software Engineer, New Grad - Frontend",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-08-31T18:35:45-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8172510",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3537063,
+      "location": {
+        "name": "Seattle, San Francisco, New York City"
+      },
+      "metadata": null,
+      "id": 8172510,
+      "updated_at": "2026-11-19T12:12:24-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Abuse Investigator",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-09-09T10:50:29-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8138044",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3522152,
+      "location": {
+        "name": "San Francisco, CA"
+      },
+      "metadata": null,
+      "id": 8138044,
+      "updated_at": "2026-11-19T12:12:23-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Account Executive, AI Sales",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-09-18T13:27:51-04:00",
+      "language": "en",
+      "application_deadline": null
+    },
+    {
+      "absolute_url": "https://nimbuspay.example/jobs/search?gh_jid=8332467",
+      "data_compliance": [
+        {
+          "type": "gdpr",
+          "requires_consent": false,
+          "requires_processing_consent": false,
+          "requires_retention_consent": false,
+          "retention_period": null,
+          "demographic_data_consent_applies": false
+        }
+      ],
+      "education": "education_required",
+      "internal_job_id": 3601697,
+      "location": {
+        "name": "San Francisco, CA"
+      },
+      "metadata": null,
+      "id": 8332467,
+      "updated_at": "2026-11-19T12:12:30-05:00",
+      "requisition_id": "See Opening ID",
+      "title": "Account Executive, AI Sales",
+      "company_name": "Nimbus Pay",
+      "first_published": "2026-11-06T10:32:55-05:00",
+      "language": "en",
+      "application_deadline": null
+    }
+  ],
+  "meta": {
+    "total": 10
+  }
+}

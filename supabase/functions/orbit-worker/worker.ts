@@ -28,6 +28,7 @@ import { friendHandlers } from './handlers/friends.ts';
 import { gmailHandlers } from './handlers/gmail.ts';
 import { linkedinHandlers } from './handlers/linkedin.ts';
 import { rolesTopupHandlers } from './handlers/rolesTopup.ts';
+import { rolesHandlers } from './handlers/roles.ts';
 import { scoreHandlers } from './handlers/score.ts';
 import { searchHandlers } from './handlers/search.ts';
 import { socialHandlers } from './handlers/social.ts';
@@ -99,6 +100,7 @@ export function defaultHandlers(
     ...xHandlers(deps),
     // plan 44: the nightly top-up of one student's roles
     ...rolesTopupHandlers(agents),
+    ...rolesHandlers(deps),
   };
   for (const kind of PLACEHOLDER_KINDS)
     handlers[kind] = async () => {
@@ -164,6 +166,8 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'enrich.dossier': 100_000,
   // plan 44: four close reads of five roles
   'roles.topup': 40_000,
+  // plan 44: the roles tick works for up to 40 s (TICK_MS) and stops itself before
+  'roles.tick': 50_000,
 };
 export const DEFAULT_RESERVE_MS = 8_000;
 
