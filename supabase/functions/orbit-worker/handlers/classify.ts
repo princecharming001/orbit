@@ -57,6 +57,10 @@ async function maybeBounce(db: Db, userId: string, messageId: string, now: Date)
   });
 }
 
+/** The dedupe key of the rescoring a classified reply asks for: the person and the UTC hour. */
+export const scorePersonKey = (userId: string, personId: string, now: Date): string =>
+  `score.person:${userId}:rapport:${personId}:${now.toISOString().slice(0, 13)}`;
+
 export function classifyHandlers(
   deps: HandlerDeps,
   agents: AgentConfig = { env: {} },
@@ -78,12 +82,14 @@ export function classifyHandlers(
       if (r.skipped === 'automated' && p.history !== true) await maybeBounce(ctx.db, userId, id, ctx.now());
       if (!r.replyClass) return;
       const { personId } = await readRapport(ctx.db, userId, id, { claude: deps.claude, llm: r.rapport });
+      // one rescoring per person per hour, not one per classified message: score.person is a heavy job (one a
+      // worker tick), and a key per message queued one for every reply of a busy thread
       if (personId)
         await ctx.queue.enqueue({
           kind: 'score.person',
           userId,
           payload: { personIds: [personId] },
-          dedupeKey: `score.person:${userId}:rapport:${id}`,
+          dedupeKey: scorePersonKey(userId, personId, ctx.now()),
         });
       // idempotent per message, so a retry after a failure here classifies again and picks up where it stopped. A
       // reply read from the user's history came before Orbit: an unsubscribe still counts, but nothing is drafted.

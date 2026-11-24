@@ -10,6 +10,10 @@
  *        below           → a new person.
  * Role inboxes, applicant-tracking and other automated senders never become people (§1.7). The self person is
  * found through its identities only. Identities are inserted with on conflict do nothing.
+ *
+ * One call is one transaction under a per-user advisory lock, so two ingests for the same user (the webhook storing a
+ * message while the worker files a page of relations) resolve one after the other: the second finds the person the
+ * first created instead of creating them again.
  */
 import {
   doNotMergeKey,
@@ -119,17 +123,31 @@ function nameOf(i: Incoming) {
   return parseName(i.name);
 }
 
+/**
+ * The user's organization of this name, created when it is new. A known one is only read: the upsert that returned
+ * its id rewrote the row every time (96,719 updates of 2,807 rows), and the name a row was created with is kept
+ * anyway. `known` (normalized name → id) spares the read within one batch.
+ */
 export async function upsertOrganization(
   db: Db,
   userId: string,
   name: string | undefined,
+  known?: Map<string, string>,
 ): Promise<string | null> {
   const norm = normalizeCompany(name);
   if (!name || !norm) return null;
-  const [row] = await db.sql<{ id: string }>`
-    insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, ${name.trim()}, ${norm})
-    on conflict (user_id, name_norm) do update set name = orbit.organizations.name
-    returning id`;
+  const cached = known?.get(norm);
+  if (cached) return cached;
+  const [have] = await db.sql<{ id: string }>`
+    select id from orbit.organizations where user_id = ${userId}::uuid and name_norm = ${norm}`;
+  // on conflict: another writer created it between the read and the insert
+  const [row] = have
+    ? [have]
+    : await db.sql<{ id: string }>`
+        insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, ${name.trim()}, ${norm})
+        on conflict (user_id, name_norm) do update set name = orbit.organizations.name
+        returning id`;
+  if (row?.id) known?.set(norm, row.id);
   return row?.id ?? null;
 }
 
@@ -141,7 +159,14 @@ interface Ctx {
   doNotMerge: Set<string>;
   orgDomains: Map<string, string[]>;
   result: ResolveResult;
+  /** identities the user already has (`kind:value_norm`), whoever owns them: inserting one again does nothing */
+  identities: Set<string>;
+  /** organizations met in this batch (normalized name → id) */
+  orgIds: Map<string, string>;
 }
+
+/** The lock two ingests for one user queue on (resolvePeople); held to the end of the caller's transaction. */
+export const peopleLockKey = (userId: string) => `orbit.people:${userId}`;
 
 export async function resolvePeople(
   db: Db,
@@ -159,28 +184,50 @@ export async function resolvePeople(
     items.push(raw);
   }
   if (!items.length) return result;
+  // 34 pairs of people shared a linkedin_member_id on 2026-11-24, each pair created within 5 seconds: the webhook
+  // and the worker both looked, both found nobody and both created. The lock makes the second wait for the first's
+  // commit, and it then reads the person the first created. Inside a caller's transaction the lock is held until
+  // that one commits, which is when its people become visible to anyone else.
+  return db.begin(async (tx) => {
+    await tx.sql`select pg_advisory_xact_lock(hashtextextended(${peopleLockKey(userId)}, 0))`;
+    return resolveLocked(tx, userId, items, { now: opts.now, create }, result);
+  });
+}
 
+async function resolveLocked(
+  db: Db,
+  userId: string,
+  items: Incoming[],
+  opts: { now: Date; create: boolean },
+  result: ResolveResult,
+): Promise<ResolveResult> {
+  const { create } = opts;
   // 1. exact identities
   const emails = [...new Set(items.filter((i) => i.email).map((i) => normalizeEmail(i.email!)))];
   const members = [...new Set(items.map((i) => i.linkedinMemberId).filter((x): x is string => !!x))];
   const slugs = [...new Set(items.map(slugOf).filter((x): x is string => !!x))];
-  const hits = await db.sql<{ kind: string; value: string; person_id: string }>`
-    select pi.kind, pi.value_norm as value, coalesce(p.merged_into, p.id) as person_id
+  const attendees = [...new Set(items.map((i) => i.unipileAttendeeId).filter((x): x is string => !!x))];
+  const hits = await db.sql<{ kind: string; value: string; person_id: string; stored: boolean }>`
+    select pi.kind, pi.value_norm as value, coalesce(p.merged_into, p.id) as person_id, true as stored
       from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
      where pi.user_id = ${userId}::uuid and p.deleted_at is null
        and ((pi.kind = 'email' and pi.value_norm = any(${emails}::text[]))
          or (pi.kind = 'linkedin_member' and pi.value_norm = any(${members}::text[]))
-         or (pi.kind = 'linkedin_slug' and pi.value_norm = any(${slugs}::text[])))
+         or (pi.kind = 'linkedin_slug' and pi.value_norm = any(${slugs}::text[]))
+         or (pi.kind = 'unipile_attendee' and pi.value_norm = any(${attendees}::text[])))
     union all
-    select 'email', p.primary_email, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'email', p.primary_email, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.primary_email = any(${emails}::text[])
     union all
-    select 'linkedin_member', p.linkedin_member_id, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'linkedin_member', p.linkedin_member_id, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_member_id = any(${members}::text[])
     union all
-    select 'linkedin_slug', p.linkedin_slug, coalesce(p.merged_into, p.id) from orbit.people p
+    select 'linkedin_slug', p.linkedin_slug, coalesce(p.merged_into, p.id), false from orbit.people p
      where p.user_id = ${userId}::uuid and p.deleted_at is null and p.linkedin_slug = any(${slugs}::text[])`;
   const byIdentity = new Map(hits.map((h) => [`${h.kind}:${h.value}`, h.person_id]));
+  // the identity rows among the hits: nine in ten identities an ingest brings are stored already, and are not
+  // inserted again only to conflict (a people column that matched is not an identity row, so it is not in here)
+  const identities = new Set(hits.filter((h) => h.stored).map((h) => `${h.kind}:${h.value}`));
   const found = (i: Incoming): string | undefined =>
     (i.linkedinMemberId && byIdentity.get(`linkedin_member:${i.linkedinMemberId}`)) ||
     (i.email && byIdentity.get(`email:${normalizeEmail(i.email)}`)) ||
@@ -249,6 +296,8 @@ export async function resolvePeople(
     doNotMerge: new Set(dnm.map((d) => doNotMergeKey(d.person_a, d.person_b))),
     orgDomains: new Map(orgs.map((o) => [o.id, o.domains])),
     result,
+    identities,
+    orgIds: new Map(),
   };
 
   for (const k of known) {
@@ -338,11 +387,14 @@ async function insertIdentities(ctx: Ctx, personId: string, i: Incoming) {
   const slug = slugOf(i);
   if (slug) rows.push(['linkedin_slug', slug, urlOf(i) ?? slug]);
   if (i.unipileAttendeeId) rows.push(['unipile_attendee', i.unipileAttendeeId, i.unipileAttendeeId]);
-  for (const [kind, norm, raw] of rows)
+  for (const [kind, norm, raw] of rows) {
+    if (ctx.identities.has(`${kind}:${norm}`)) continue;
     await ctx.db.sql`
       insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, created_at)
       values (${ctx.userId}::uuid, ${personId}::uuid, ${kind}, ${norm}, ${raw}, ${src}, ${at}::timestamptz)
       on conflict (user_id, kind, value_norm) do nothing`;
+    ctx.identities.add(`${kind}:${norm}`);
+  }
 }
 
 /** A stored photo a newer LinkedIn link may replace: LinkedIn's own (they expire) or a Gravatar. */
@@ -370,15 +422,25 @@ async function attach(ctx: Ctx, personId: string, i: Incoming) {
   const p = ctx.people.find((x) => x.id === personId);
   const n = nameOf(i);
   const rename = !!p && !!n.full && isPlaceholderName(p);
-  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw, ctx.orgIds) : null;
   const slug = slugOf(i) ?? null;
+  // an address the person wrote from takes the place of one Orbit only built or found invalid, and nothing is left
+  // saying it is unconfirmed (a guess used to stay for good, even after they replied from their real address)
+  const email = i.email ? normalizeEmail(i.email) : null;
   await ctx.db.sql`
     update orbit.people set
       display_name = case when ${rename}::boolean then ${n.full} else display_name end,
       first_name = case when ${rename}::boolean then ${n.first || null} else first_name end,
       last_name = case when ${rename}::boolean then ${n.last || null} else last_name end,
       name_norm = case when ${rename}::boolean then ${n.normalized || null} else name_norm end,
-      primary_email = coalesce(primary_email, ${i.email ? normalizeEmail(i.email) : null}),
+      primary_email = case
+        when ${email}::text is not null
+             and (primary_email is null or email_confidence in ('pattern', 'guess', 'invalid'))
+          then ${email}
+        else primary_email end,
+      email_confidence = case
+        when ${email}::text is not null and email_confidence in ('pattern', 'guess', 'invalid') then null
+        else email_confidence end,
       linkedin_member_id = coalesce(linkedin_member_id, ${i.linkedinMemberId ?? null}),
       linkedin_slug = coalesce(linkedin_slug, ${slug}),
       linkedin_url = coalesce(linkedin_url, ${urlOf(i) ?? null}),
@@ -424,7 +486,7 @@ async function createPerson(ctx: Ctx, i: Incoming): Promise<string> {
       )
     : '';
   const display = n.full || handle || slugOf(i) || 'Unknown';
-  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw) : null;
+  const orgId = i.companyRaw ? await upsertOrganization(ctx.db, ctx.userId, i.companyRaw, ctx.orgIds) : null;
   const slug = slugOf(i) ?? null;
   const [row] = await ctx.db.sql<Record<string, unknown>>`
     insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, primary_email, headline, title,

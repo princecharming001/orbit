@@ -22,7 +22,10 @@ beforeEach(async () => {
     delete from orbit.users;`);
 });
 
-const NOW = new Date('2026-11-22T09:17:00Z');
+// The day's ledger lives in the database, whose clock is the real one: a count kept under a day that is already over
+// reads as none. So the sweep runs "this morning", not on a fixed date (a fixed one passed only on that day).
+const NOW = new Date(`${new Date().toISOString().slice(0, 10)}T09:17:00Z`);
+const TODAY = NOW.toISOString().slice(0, 10);
 const BASE = 'https://api1.unipile.test';
 const logo = (n: string) => `https://media.licdn.com/dms/image/v2/${n}/company-logo_200_200?e=1900000000&t=x`;
 
@@ -120,7 +123,7 @@ describe('logos.sweep', () => {
     ]);
     // reads came from the account's company ledger
     const [used] = await t.db.sql<{ count: number }>`
-      select count from public.orbit_proxy_counters where bucket = ${`connectors:li:company:2026-11-22:acc-a`}`;
+      select count from public.orbit_proxy_counters where bucket = ${`connectors:li:company:${TODAY}:acc-a`}`;
     expect(used!.count).toBeGreaterThan(0);
 
     // next week: everything is kept, nothing is asked
@@ -138,7 +141,7 @@ describe('logos.sweep', () => {
     // each name takes one read (a search); the share is SWEEP_SHARE of 150
     expect(r.stopped).toBe('limit');
     const [used] = await t.db.sql<{ count: number }>`
-      select count from public.orbit_proxy_counters where bucket = ${`connectors:li:company:2026-11-22:acc-b`}`;
+      select count from public.orbit_proxy_counters where bucket = ${`connectors:li:company:${TODAY}:acc-b`}`;
     expect(used!.count).toBe(Math.round(150 * SWEEP_SHARE));
     expect(r.remaining).toBeGreaterThan(0);
     const [kept] = await t.db.sql<{
@@ -183,6 +186,6 @@ describe('logos.sweep', () => {
         sleep: async () => {},
       }),
     ).rejects.toThrow('no_accounts');
-    expect(isoWeek(NOW)).toBe('2026-47');
+    expect(isoWeek(new Date('2026-11-22T09:17:00Z'))).toBe('2026-47');
   });
 });

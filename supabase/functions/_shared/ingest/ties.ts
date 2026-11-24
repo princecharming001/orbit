@@ -17,6 +17,7 @@
  */
 import { decayedTieWeight, inferTies, type TieKind } from '@orbit/core/graph/ties';
 import { affiliationFromRow, type Row } from '@orbit/core/server/mappers';
+import { normalizeEmail } from '@orbit/core/text/normalize';
 import type { CalendarEvent, EmailMessage, EmailThread, Organization } from '@orbit/core/types';
 import type { Db } from '../db.ts';
 import { chunks, day, iso, toPerson } from './util.ts';
@@ -106,27 +107,6 @@ export async function refreshTies(
   const employment = keep.has('co_tenure') || keep.has('same_current_company');
   const education = keep.has('same_school_cohort');
 
-  // people (all: inferTies needs the address book to read who wrote to whom)
-  const rows = await db.query<Record<string, unknown>>(
-    `select ${TIE_PERSON_COLUMNS} from orbit.people p
-      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
-      order by p.id`,
-    [userId],
-  );
-  const idRows = !interactions
-    ? []
-    : await db.sql<{ person_id: string; kind: string; value_norm: string }>`
-        select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
-          join orbit.people p on p.id = pi.person_id
-         where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self`;
-  const idsBy = new Map<string, { kind: string; value_norm: string }[]>();
-  for (const r of idRows) {
-    const arr = idsBy.get(r.person_id) ?? [];
-    arr.push(r);
-    idsBy.set(r.person_id, arr);
-  }
-  const people = rows.map((r) => toPerson(r, idsBy.get(r.id as string)));
-
   // threads (small ones only) and their messages
   const threadRows = !interactions
     ? []
@@ -215,6 +195,59 @@ export async function refreshTies(
     })),
     attendeePersonIds: e.attendee_person_ids,
   }));
+
+  // people. A whole-network run reads everyone: inferTies needs the address book to read who wrote to whom. A run for
+  // some people that infers the interaction kinds only (score.person, one job per new message or reply) reads the
+  // people its threads and meetings can touch: those people, everyone on the threads and events read above, and the
+  // owners of the addresses in them. Loading all 7,700 people and every address for one person's rescoring was most of
+  // the job. The order is the same either way, so core meets them as the whole inference does.
+  const narrow = scoped && !employment && !education && !keep.has('same_city');
+  const near = new Set<string>(focus);
+  const addrs = new Set<string>();
+  if (narrow) {
+    for (const t of threadRows) for (const id of t.participant_person_ids ?? []) near.add(id);
+    for (const e of eventRows) {
+      for (const id of e.attendee_person_ids ?? []) near.add(id);
+      for (const a of e.attendees ?? []) if (a.email) addrs.add(normalizeEmail(a.email));
+    }
+    for (const m of msgRows) {
+      if (m.from_person_id) near.add(m.from_person_id);
+      for (const a of [m.from_addr, ...(m.to_addrs ?? []), ...(m.cc_addrs ?? [])])
+        if (a) addrs.add(normalizeEmail(a));
+    }
+  }
+  // people.primary_email is not always stored normalized (a send or a found address writes it as typed), so it is
+  // normalized here the way core does: lower case, and Gmail's dots and plus tags dropped
+  const rows = await db.query<Record<string, unknown>>(
+    `select ${TIE_PERSON_COLUMNS} from orbit.people p
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+        and (not $2::boolean or p.id = any($3::uuid[])
+          or exists (select 1 from orbit.person_identities pi
+                      where pi.user_id = $1::uuid and pi.person_id = p.id and pi.kind = 'email'
+                        and pi.value_norm = any($4::text[]))
+          or (p.primary_email is not null and
+              case when lower(trim(p.primary_email)) ~ '@(gmail|googlemail)\\.com$'
+                   then replace(split_part(split_part(lower(trim(p.primary_email)), '@', 1), '+', 1), '.', '')
+                        || '@gmail.com'
+                   else lower(trim(p.primary_email)) end = any($4::text[])))
+      order by p.id`,
+    [userId, narrow, [...near], [...addrs]],
+  );
+  const loaded = rows.map((r) => r.id as string);
+  const idRows = !interactions
+    ? []
+    : await db.sql<{ person_id: string; kind: string; value_norm: string }>`
+        select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
+          join orbit.people p on p.id = pi.person_id
+         where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self
+           and (not ${narrow}::boolean or pi.person_id = any(${narrow ? loaded : []}::uuid[]))`;
+  const idsBy = new Map<string, { kind: string; value_norm: string }[]>();
+  for (const r of idRows) {
+    const arr = idsBy.get(r.person_id) ?? [];
+    arr.push(r);
+    idsBy.set(r.person_id, arr);
+  }
+  const people = rows.map((r) => toPerson(r, idsBy.get(r.id as string)));
 
   // affiliations and organizations (the affiliation kinds only): jobs for co_tenure and same_current_company,
   // schools for same_school_cohort. Every row is read in a fixed order either way, and the kind this run does not
@@ -309,7 +342,12 @@ export async function refreshTies(
   return { upserted, deleted: gone.length };
 }
 
-/** Many (pair, kind) rows in one statement; see upsertTie. */
+/**
+ * Many (pair, kind) rows in one statement; see upsertTie. A row that comes without a last-seen date (the affiliation
+ * kinds and same_city: their evidence has no date) keeps the one it has: defaulting it to `now` made every such tie
+ * differ on every run, so a score run rewrote 20,505 of 20,907 ties, every browser pulled them again, and delta
+ * scoring (changedPeople reads ties.updated_at) rescored everyone. Only a new row takes `now`.
+ */
 export async function upsertTies(db: Db, userId: string, rows: TieRow[], now: Date): Promise<void> {
   const payload = rows
     .map((t) => {
@@ -332,8 +370,11 @@ export async function upsertTies(db: Db, userId: string, rows: TieRow[], now: Da
                             last_seen_at)
     select ${userId}::uuid, (r ->> 'a')::uuid, (r ->> 'b')::uuid, r ->> 'kind', (r ->> 'w')::real, (r ->> 'c')::real,
            r -> 'evidence', coalesce((r ->> 'first')::timestamptz, ${now}::timestamptz),
-           coalesce((r ->> 'last')::timestamptz, ${now}::timestamptz)
+           coalesce((r ->> 'last')::timestamptz, t.last_seen_at, ${now}::timestamptz)
       from jsonb_array_elements(${JSON.stringify(payload)}::jsonb) r
+      left join orbit.ties t
+        on t.user_id = ${userId}::uuid and t.a_person_id = (r ->> 'a')::uuid and t.b_person_id = (r ->> 'b')::uuid
+       and t.kind = r ->> 'kind'
     on conflict (user_id, a_person_id, b_person_id, kind) do update set
       weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
       first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
@@ -344,7 +385,10 @@ export async function upsertTies(db: Db, userId: string, rows: TieRow[], now: Da
        or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
 }
 
-/** One (pair, kind) row; a < b is enforced here. Unchanged rows are left alone so pulls stay small. */
+/**
+ * One (pair, kind) row; a < b is enforced here. Unchanged rows are left alone so pulls stay small: a row without a
+ * last-seen date keeps the stored one (see upsertTies).
+ */
 export async function upsertTie(db: Db, userId: string, t: TieRow, now: Date): Promise<void> {
   const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
   if (a === b) return;
@@ -355,7 +399,11 @@ export async function upsertTie(db: Db, userId: string, t: TieRow, now: Date): P
                             last_seen_at)
     values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
             coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
-            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
+            coalesce(${t.lastSeenAt ?? null}::timestamptz,
+                     (select x.last_seen_at from orbit.ties x
+                       where x.user_id = ${userId}::uuid and x.a_person_id = ${a}::uuid and x.b_person_id = ${b}::uuid
+                         and x.kind = ${t.kind}),
+                     ${now}::timestamptz))
     on conflict (user_id, a_person_id, b_person_id, kind) do update set
       weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
       first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),

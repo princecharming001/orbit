@@ -146,7 +146,8 @@ describe('reply rapport on the server (plan 27)', () => {
     const net = fakeHaiku();
     const claude = makeClaude({ apiKey: 'sk-placeholder', fetch: net.fetch, db: t.db });
     await classify(u, second);
-    await drain(t, defaultHandlers({ claude }), () => new Date(NOW));
+    // an hour on: a person is rescored once an hour after classified replies, and the first reply's was this hour's
+    await drain(t, defaultHandlers({ claude }), () => new Date(NOW + 3_600_000));
     expect(net.calls.some((c) => c.body.includes('how the sender feels about the student'))).toBe(false);
     const [s] = await t.db.sql<{ rapport: number }>`
       select (features ->> 'rapport')::float8 as rapport from orbit.tie_scores

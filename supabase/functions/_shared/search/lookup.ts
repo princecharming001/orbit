@@ -10,7 +10,7 @@
  * younger than SCAN_FRESH_DAYS answers from what it stored, with no LinkedIn call.
  */
 import type { Db } from '../db.ts';
-import { censusPeople, filePage, spendCensus } from './census.ts';
+import { censusPeople, filePage, LINKEDIN_TIMEOUT_MS, spendCensus, timedOut } from './census.ts';
 
 export const FACETS_SHARE = 0.7;
 export const LOOKUP_PAGES = 3;
@@ -32,7 +32,7 @@ export interface LookupResult {
   personIds: string[];
   complete: boolean;
   cached?: boolean;
-  reason?: 'unknown' | 'ledger' | 'refused';
+  reason?: 'unknown' | 'ledger' | 'refused' | 'timeout';
 }
 
 const PARAM_TYPE: Record<LookupKind, string> = { place: 'LOCATION', school: 'SCHOOL', company: 'COMPANY' };
@@ -52,6 +52,7 @@ async function parameterId(
   });
   const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, '')}/api/v1/linkedin/search/parameters?${q}`, {
     headers: { 'X-API-KEY': deps.apiKey, accept: 'application/json' },
+    signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS),
   });
   if (!res.ok) return undefined;
   const b = (await res.json()) as { items?: { id?: string | number }[] };
@@ -95,7 +96,14 @@ export async function runFacetLookup(
     complete: false,
     reason,
   });
-  const id = await parameterId(deps, accountId, kind, value);
+  // a request LinkedIn does not answer in time ends the lookup with a reason, as a refusal does
+  let id: string | undefined;
+  try {
+    id = await parameterId(deps, accountId, kind, value);
+  } catch (e) {
+    if (!timedOut(e)) throw e;
+    return fail('timeout');
+  }
   if (!id) return fail('unknown');
   const base = deps.baseUrl.replace(/\/+$/, '');
   const found = new Set<string>();
@@ -109,22 +117,31 @@ export async function runFacetLookup(
     }
     const q = new URLSearchParams({ account_id: accountId, limit: '10' });
     if (cursor) q.set('cursor', cursor);
-    const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
-      method: 'POST',
-      headers: { 'X-API-KEY': deps.apiKey, 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({
-        api: 'classic',
-        category: 'people',
-        network_distance: [1],
-        [FILTER_KEY[kind]]: [id],
-      }),
-    });
-    if (res.status >= 400 && res.status < 500) {
-      if (!pages) return fail('refused');
+    let body: { items?: unknown; cursor?: string | null };
+    try {
+      const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
+        method: 'POST',
+        headers: { 'X-API-KEY': deps.apiKey, 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({
+          api: 'classic',
+          category: 'people',
+          network_distance: [1],
+          [FILTER_KEY[kind]]: [id],
+        }),
+        signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS),
+      });
+      if (res.status >= 400 && res.status < 500) {
+        if (!pages) return fail('refused');
+        break;
+      }
+      if (!res.ok) throw new Error(`unipile ${res.status}`);
+      body = (await res.json()) as { items?: unknown; cursor?: string | null };
+    } catch (e) {
+      if (!timedOut(e)) throw e;
+      // the pages read so far are kept, and the scan is stored as incomplete
+      if (!pages) return fail('timeout');
       break;
     }
-    if (!res.ok) throw new Error(`unipile ${res.status}`);
-    const body = (await res.json()) as { items?: unknown; cursor?: string | null };
     pages++;
     const people = censusPeople(body.items);
     await filePage(db, userId, people, now);

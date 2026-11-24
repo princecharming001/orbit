@@ -492,6 +492,11 @@ export function unparkState(li: Record<string, unknown>): Record<string, unknown
   const parked = li.parked as { since?: unknown; at?: unknown } | undefined;
   const since = typeof parked?.since === 'string' && parked.since ? parked.since : undefined;
   if (!since) return undefined;
+  return { ...resumeFrom(li, since), unparkedAt: new Date().toISOString() };
+}
+
+/** The sync state of a pass that resumes at `since` under a new Unipile account (see unparkState). */
+function resumeFrom(li: Record<string, unknown>, since: string): Record<string, unknown> {
   const { parked: _drop, ...rest } = li;
   return {
     ...rest,
@@ -503,7 +508,34 @@ export function unparkState(li: Record<string, unknown>): Record<string, unknown
     chatsAfter: since,
     resume: true,
     floor: typeof li.floor === 'string' && li.floor > since ? li.floor : since,
-    unparkedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * A link that was never parked coming back under a different Unipile account id (the student went through the hosted
+ * sign-in again). The new account has new chat and message ids just as a parked one's does, so the unique key on a
+ * message's id cannot tell an old message from a new one: without a floor the next pass stored the whole history a
+ * second time. With a finished pass behind it the link resumes from that pass's end, as an unparked one does. With
+ * none (the first walk was still going) the walk starts over, because the saved cursors page the old account; what
+ * it already stored is then recognised by what it says (ingest/linkedin.ts storeChat). Undefined when there is no
+ * sync state to carry over.
+ */
+export function reconnectState(li: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!Object.keys(li).length) return undefined;
+  const since = [li.syncedAt, li.recentAt]
+    .filter((d): d is string => typeof d === 'string' && !!d)
+    .sort()
+    .at(-1);
+  if (since) return { ...resumeFrom(li, since), reconnectedAt: new Date().toISOString() };
+  const { parked: _drop, chatsAfter: _after, ...rest } = li;
+  return {
+    ...rest,
+    stage: 'relations',
+    cursor: null,
+    chatsCursor: null,
+    chatIndex: 0,
+    short: false,
+    resume: false,
   };
 }
 
@@ -531,15 +563,23 @@ export async function unipileAccount(
     select 1 from orbit.integration_accounts
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
   if (taken.length) return { result: 'account_in_use', userId };
-  const [prior] = await db.sql<{ status: string; linkedin: Record<string, unknown> | null }>`
-    select status, sync_state -> 'linkedin' as linkedin from orbit.integration_accounts
+  const [prior] = await db.sql<{
+    status: string;
+    external_account_id: string | null;
+    linkedin: Record<string, unknown> | null;
+  }>`
+    select status, external_account_id, sync_state -> 'linkedin' as linkedin from orbit.integration_accounts
      where user_id = ${userId}::uuid and provider = 'linkedin'`;
   await db.sql`
     insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
     values (${userId}::uuid, 'linkedin', ${accountId}, 'active', null)
     on conflict (user_id, provider) do update set
       external_account_id = excluded.external_account_id, status = 'active', last_error = null`;
-  const resumed = prior?.status === 'parked' ? unparkState(prior.linkedin ?? {}) : undefined;
+  const unparked = prior?.status === 'parked' ? unparkState(prior.linkedin ?? {}) : undefined;
+  // any other link whose Unipile account id is not the one it had: the floor applies to it as well, not only to a
+  // parked one (a parked row has no account id, so a parked link without a `since` is covered here too)
+  const moved = !!prior && prior.external_account_id !== accountId;
+  const resumed = unparked ?? (moved ? reconnectState(prior.linkedin ?? {}) : undefined);
   if (resumed)
     await db.sql`
       update orbit.integration_accounts
@@ -547,8 +587,8 @@ export async function unipileAccount(
        where user_id = ${userId}::uuid and provider = 'linkedin'`;
   await db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, details)
-    values (${userId}::uuid, 'system', ${resumed ? 'linkedin.unparked' : 'linkedin.connected'}, 'integration_accounts',
-            ${{ status, ...(resumed ? { since: resumed.floor } : {}) }}::jsonb)`;
+    values (${userId}::uuid, 'system', ${unparked ? 'linkedin.unparked' : 'linkedin.connected'}, 'integration_accounts',
+            ${{ status, ...(typeof resumed?.floor === 'string' ? { since: resumed.floor } : {}) }}::jsonb)`;
   await queue.enqueue({
     kind: 'sync.linkedin',
     userId,

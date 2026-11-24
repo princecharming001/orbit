@@ -5,7 +5,9 @@
  *               affiliation read from the headline ("Designer at Figma"); a new employer closes the old one (§1.7);
  *   chats     → threads (provider linkedin) and messages for chats with at most 3 attendees. A message is the
  *               user's own (outbound) when Unipile marks it is_sender or its sender is the user's member id; it is
- *               never stored as inbound.
+ *               never stored as inbound. Unipile's chat and message ids belong to one Unipile account, so after a
+ *               reconnect under a new account the same message arrives under a new id: one that is stored already
+ *               (same person, direction, time and words) is not stored again.
  * Used by sync.linkedin and by the Unipile webhooks.
  */
 import { normalizeLinkedInUrl } from '@orbit/core/text/normalize';
@@ -225,13 +227,11 @@ export async function storeChat(
     providerId ? res.byKey.get(`li:${providerId}`) : undefined;
   const otherIds = [...new Set(others.map((a) => personOf(a.providerId)).filter((x): x is string => !!x))];
 
-  const [thread] = await db.sql<{ id: string }>`
-    insert into orbit.threads (user_id, provider, external_id, category, is_networking)
-    values (${userId}::uuid, 'linkedin', ${chat.id}, 'networking', true)
-    on conflict (user_id, provider, external_id) do update set is_networking = true
-    returning id`;
-  const threadId = thread!.id;
-  const out: StoredChat = { threadId, inbound: [], inserted: 0, personIds: otherIds };
+  // what there is to store, less the messages stored already under another id (an earlier Unipile account's). The
+  // match is the person, the direction, the time and the words; a body that retention has cleared is matched by its
+  // snippet. One read for the chat, by (user_id, sent_at), which messages_sent_idx serves.
+  const wanted: { m: ChatMessageInput; text: string; sentAt: string; own: boolean; from: string | null }[] =
+    [];
   for (const m of messages) {
     if (m.skip) continue;
     const text = (m.text ?? '').trim();
@@ -239,6 +239,42 @@ export async function storeChat(
     if (!text || !sentAt) continue;
     const own = isOwnMessage(m, ownIds);
     const from = own ? null : (personOf(m.senderId) ?? (otherIds.length === 1 ? otherIds[0]! : null));
+    wanted.push({ m, text, sentAt, own, from });
+  }
+  // text[] parameters, not JSON: the snippet is cut at 200 UTF-16 units as the stored one was, and travels the same way
+  const twins = wanted.length
+    ? await db.sql<{ i: number | string; thread_id: string }>`
+        select r.i, x.thread_id
+          from unnest(${wanted.map((w) => w.m.id)}::text[], ${wanted.map((w) => w.sentAt)}::timestamptz[],
+                      ${wanted.map((w) => w.own)}::boolean[], ${wanted.map((w) => w.from)}::uuid[],
+                      ${wanted.map((w) => w.text)}::text[], ${wanted.map((w) => w.text.slice(0, 200))}::text[])
+               with ordinality as r(id, at, own, from_id, body, snip, i)
+          join orbit.messages x
+            on x.user_id = ${userId}::uuid and x.provider = 'linkedin' and x.sent_at = r.at
+           and x.external_id <> r.id and x.direction = case when r.own then 'out' else 'in' end
+           and x.from_person_id is not distinct from r.from_id
+           and x.to_person_ids @> (case when r.own then ${otherIds}::uuid[] else '{}'::uuid[] end)
+           and x.to_person_ids <@ (case when r.own then ${otherIds}::uuid[] else '{}'::uuid[] end)
+           and (x.body_text = r.body or (x.body_text is null and x.snippet = r.snip))`
+    : [];
+  const already = new Set(twins.map((t) => Number(t.i) - 1));
+  const fresh = wanted.filter((_, i) => !already.has(i));
+  // every message of the chat is stored already, in the thread of the chat's earlier id: no second, empty thread
+  if (!fresh.length && twins.length) {
+    const [known] = await db.sql<{ id: string }>`
+      select id from orbit.threads
+       where user_id = ${userId}::uuid and provider = 'linkedin' and external_id = ${chat.id}`;
+    if (!known) return { threadId: twins[0]!.thread_id, inbound: [], inserted: 0, personIds: otherIds };
+  }
+
+  const [thread] = await db.sql<{ id: string }>`
+    insert into orbit.threads (user_id, provider, external_id, category, is_networking)
+    values (${userId}::uuid, 'linkedin', ${chat.id}, 'networking', true)
+    on conflict (user_id, provider, external_id) do update set is_networking = true
+    returning id`;
+  const threadId = thread!.id;
+  const out: StoredChat = { threadId, inbound: [], inserted: 0, personIds: otherIds };
+  for (const { m, text, sentAt, own, from } of fresh) {
     const to = own ? otherIds : [];
     const [row] = await db.sql<{ id: string }>`
       insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,

@@ -1,20 +1,22 @@
 /**
  * orbit-worker (§9.1): drains Orbit's pgmq queues once per pg_cron tick.
  *
- * For each queue in priority order it reads up to 10 messages (visibility 120 s), runs each message's handler by
- * `kind`, and starts again from the top after every batch, until the queues are empty or the time budget (110 s by
- * default) is spent. A message whose dedupeKey ran successfully in the last 24 hours is dropped. Success deletes the
- * message; failure hides it for 30·2^(read_ct−1) s (30 s, 1, 2, 4, 8 min); a sixth failed read (read_ct > 5) archives
- * it and copies it to orbit.dead_letters. Kinds that later phases implement throw NotImplemented, and a handler whose
- * provider is not configured or connected throws JobSkipped: those messages are dropped as `skipped`, never retried.
- * Every run is a row in orbit.job_runs.
+ * For each queue in priority order it reads up to 10 messages (visibility 120 s; one at a time from the queue of the
+ * CPU-heavy kinds, of which a tick runs one), runs each message's handler by `kind`, and starts again from the top
+ * after every batch, until the queues are empty or the time budget (110 s by default) is spent. A message whose
+ * dedupeKey ran successfully in the last 24 hours is dropped. Success deletes the message; failure hides it for
+ * 30·2^(attempt−1) s (30 s, 1, 2, 4, 8 min); a sixth failed attempt archives it and copies it to orbit.dead_letters.
+ * An attempt is a run that started (a row in orbit.job_runs), not a read: a message read and handed back unrun (no
+ * time left, or the tick's heavy job already ran) has lost nothing. Kinds that later phases implement throw
+ * NotImplemented, and a handler whose provider is not configured or connected throws JobSkipped: those messages are
+ * dropped as `skipped`, never retried. Every run is a row in orbit.job_runs.
  */
 
 import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import { HttpError, json, type Logger, silentLogger, unconfigured } from '../_shared/http.ts';
 import { isPaidError } from '../_shared/paid.ts';
-import { QUEUES, type Queue, type QueueName, sqlQueue } from '../_shared/queue.ts';
+import { KIND_QUEUE, QUEUES, type Queue, type QueueName, sqlQueue } from '../_shared/queue.ts';
 import type { AgentConfig } from '../_shared/services.ts';
 import { agentHandlers } from './handlers/agents.ts';
 import { calendarHandlers } from './handlers/calendar.ts';
@@ -106,9 +108,10 @@ export const VT_SEC = 120;
 export const BATCH = 10;
 export const MAX_READS = 5;
 /**
- * A message read this many times never reached a clean finish: its runs keep dying with the isolate (a time or
- * memory limit), which skips the dead-letter path in runOne. It is set aside before it runs again. Above MAX_READS,
- * since a batch's unrun tail is handed back and read again without failing.
+ * A message whose runs started this many times never reached a clean finish: they keep dying with the isolate (a time
+ * or memory limit), which skips the dead-letter path in runOne. It is set aside before it runs again. Runs are counted
+ * from orbit.job_runs, never from pgmq's read_ct: a batch's unrun tail is handed back with read_ct already raised, and
+ * counting those reads dead-lettered heavy jobs that had not run once (136 of them by 2026-11-24).
  */
 export const MAX_READS_UNFINISHED = MAX_READS + 5;
 export const DEFAULT_BUDGET_MS = 110_000;
@@ -129,6 +132,13 @@ export const HEAVY_KINDS: ReadonlySet<string> = new Set([
  * with the isolate on 2026-11-08.
  */
 export const HEAVY_PER_TICK = 1;
+/**
+ * The queues the heavy kinds are on (orbit_score). A tick reads these only as many at a time as it may run: read ten
+ * at once, nine were handed straight back every tick.
+ */
+export const HEAVY_QUEUES: ReadonlySet<QueueName> = new Set(
+  [...HEAVY_KINDS].map((k) => KIND_QUEUE[k]).filter((q): q is QueueName => !!q),
+);
 /** Kinds that run once a worker run, alone in their CPU budget (the LinkedIn sync files pages, which is CPU). */
 export const ONCE_PER_TICK: ReadonlySet<string> = new Set(['sync.linkedin']);
 /** a heavy job is not started once the tick has already run this many jobs of any kind */
@@ -152,7 +162,7 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
 };
 export const DEFAULT_RESERVE_MS = 8_000;
 
-export const backoffSec = (readCt: number) => 30 * 2 ** Math.max(0, readCt - 1);
+export const backoffSec = (attempt: number) => 30 * 2 ** Math.max(0, attempt - 1);
 
 /**
  * Plan 34 A6: a handler that threw after a paid call (Claude, Hunter, Exa) marks its error `paid: true`. Such a job
@@ -240,10 +250,11 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
   outer: while (clock() < deadline) {
     for (const q of QUEUES) {
       if (closed.has(q)) continue;
-      const batch = await queue.read(q, VT_SEC, BATCH);
+      const batch = await queue.read(q, VT_SEC, HEAVY_QUEUES.has(q) ? HEAVY_PER_TICK : BATCH);
       if (!batch.length) continue;
       const readAt = clock();
-      // hand messages back right away instead of waiting out their visibility timeout
+      // hand messages back right away instead of waiting out their visibility timeout (their read_ct stays raised,
+      // which is why attempts are counted from the runs that started)
       const handBack = async (rest: typeof batch) => {
         for (const r of rest) await queue.setVt(q, r.msgId, 0);
       };
@@ -305,18 +316,26 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
 
   async function runOne(q: QueueName, msgId: number, readCt: number, message: unknown) {
     const started = clock();
+    // the runs of this message that started before: failed ones, and ones still 'running' because the isolate died
+    // under them (the sweep above closes those as errors later). A read that was handed back unrun left no row.
+    const [before] = await db.sql<{ n: number | string }>`
+      select (select count(*) from orbit.job_runs
+               where queue = ${q} and msg_id = ${msgId}::bigint and status = 'error')
+           + (select count(*) from orbit.job_runs
+               where queue = ${q} and msg_id = ${msgId}::bigint and status = 'running') as n`;
+    const attempt = Number(before?.n ?? 0) + 1;
     const m = parse(message);
     if (!m) {
       await db.sql`insert into orbit.job_runs (queue, msg_id, kind, status, attempt, error, finished_at, duration_ms)
-        values (${q}, ${msgId}::bigint, 'invalid', 'error', ${readCt}::int, 'malformed message', ${now()}::timestamptz, 0)`;
+        values (${q}, ${msgId}::bigint, 'invalid', 'error', ${attempt}::int, 'malformed message', ${now()}::timestamptz, 0)`;
       await deadLetter(q, msgId, message, 'malformed message');
       s.failed++;
       return;
     }
     const job: Job = { ...m, queue: q, msgId, readCt };
-    if (readCt > MAX_READS_UNFINISHED) {
+    if (attempt > MAX_READS_UNFINISHED) {
       await record('error', 'never finished');
-      await deadLetter(q, msgId, message, `read ${readCt} times without finishing`);
+      await deadLetter(q, msgId, message, `started ${attempt - 1} times without finishing`);
       s.failed++;
       return;
     }
@@ -352,7 +371,7 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
 
     const [run] = await db.sql<{ id: number | string }>`
       insert into orbit.job_runs (queue, msg_id, user_id, kind, dedupe_key, status, attempt, started_at)
-      values (${q}, ${msgId}::bigint, ${m.userId}::uuid, ${m.kind}, ${m.dedupeKey ?? null}, 'running', ${readCt}::int,
+      values (${q}, ${msgId}::bigint, ${m.userId}::uuid, ${m.kind}, ${m.dedupeKey ?? null}, 'running', ${attempt}::int,
               ${now()}::timestamptz)
       returning id`;
     const runId = Number(run!.id);
@@ -397,8 +416,9 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
             )[0]?.n ?? 0,
           )
         : 0;
-      if (readCt > MAX_READS || paidFailures > ATTEMPTS_AFTER_SPEND) await deadLetter(q, msgId, message, err);
-      else await queue.setVt(q, msgId, backoffSec(readCt));
+      if (attempt > MAX_READS || paidFailures > ATTEMPTS_AFTER_SPEND)
+        await deadLetter(q, msgId, message, err);
+      else await queue.setVt(q, msgId, backoffSec(attempt));
       await log.log({
         fn: 'orbit-worker',
         kind: m.kind,
@@ -413,7 +433,7 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
       await db.sql`insert into orbit.job_runs (queue, msg_id, user_id, kind, dedupe_key, status, attempt, error,
           finished_at, duration_ms)
         values (${q}, ${msgId}::bigint, ${m!.userId}::uuid, ${m!.kind}, ${m!.dedupeKey ?? null}, ${status},
-                ${readCt}::int, ${error}, ${now()}::timestamptz, 0)`;
+                ${attempt}::int, ${error}, ${now()}::timestamptz, 0)`;
     }
   }
 }

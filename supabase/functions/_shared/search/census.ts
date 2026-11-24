@@ -19,6 +19,16 @@ export const SEARCH_LEDGER_TOTAL = 100;
 /** orbit-connectors LEDGER_CEILINGS.search.census */
 export const CENSUS_SHARE = 0.4;
 export const CENSUS_JOB_MS = 50_000;
+/**
+ * How long one LinkedIn request through Unipile may take (the provider adapters' default, providers/request.ts).
+ * Without it a request that never answered held the job until the worker's isolate was killed.
+ */
+export const LINKEDIN_TIMEOUT_MS = 15_000;
+/** True for what fetch throws when its AbortSignal.timeout fires (or the request is aborted). */
+export const timedOut = (e: unknown): boolean => {
+  const name = (e as { name?: unknown } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+};
 export const PASS_AGAIN_DAYS = 30;
 
 export interface CensusDeps {
@@ -45,7 +55,7 @@ export interface CensusStep {
   seen: number;
   matched: number;
   done: boolean;
-  stopped?: 'ledger' | 'time' | 'fresh' | 'refused';
+  stopped?: 'ledger' | 'time' | 'fresh' | 'refused' | 'timeout';
 }
 
 const txt = (v: unknown, n = 200) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : undefined);
@@ -202,18 +212,28 @@ export async function runCensusStep(
     if (step.pages > 0) await deps.sleep(1500 + Math.floor(deps.random() * 2500));
     const q = new URLSearchParams({ account_id: accountId, limit: '10' });
     if (cursor) q.set('cursor', cursor);
-    const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
-      method: 'POST',
-      headers: { 'X-API-KEY': deps.apiKey, 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ api: 'classic', category: 'people', network_distance: [1] }),
-    });
-    if (res.status >= 400 && res.status < 500) {
-      lastError = `refused ${res.status}`;
-      step.stopped = 'refused';
+    let body: { items?: unknown; cursor?: string | null };
+    try {
+      const res = await deps.fetch(`${base}/api/v1/linkedin/search?${q}`, {
+        method: 'POST',
+        headers: { 'X-API-KEY': deps.apiKey, 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ api: 'classic', category: 'people', network_distance: [1] }),
+        signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS),
+      });
+      if (res.status >= 400 && res.status < 500) {
+        lastError = `refused ${res.status}`;
+        step.stopped = 'refused';
+        break;
+      }
+      if (!res.ok) throw new Error(`unipile ${res.status}`);
+      body = (await res.json()) as { items?: unknown; cursor?: string | null };
+    } catch (e) {
+      if (!timedOut(e)) throw e;
+      // LinkedIn did not answer in time: the pass keeps its place and the next step carries on from it
+      lastError = 'timeout';
+      step.stopped = 'timeout';
       break;
     }
-    if (!res.ok) throw new Error(`unipile ${res.status}`);
-    const body = (await res.json()) as { items?: unknown; cursor?: string | null };
     const people = censusPeople(body.items);
     const knew = await filePage(db, userId, people, now);
     step.pages++;

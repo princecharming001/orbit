@@ -143,6 +143,18 @@ export function freeWindows(
   return out;
 }
 
+/** How long Google Calendar may take to answer (meet.ts allows its calls the same). */
+const GOOGLE_TIMEOUT_MS = 20_000;
+/** True for what fetch throws when its AbortSignal.timeout fires. */
+const timedOut = (e: unknown): boolean => {
+  const name = (e as { name?: unknown } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+};
+
+/**
+ * One POST to Google Calendar. A call Google does not answer in time is an HttpError like any other upstream failure,
+ * so free/busy falls back to the synced calendar and a booking fails with a reason instead of hanging.
+ */
 async function googleCall(
   s: Services,
   userId: string,
@@ -152,11 +164,18 @@ async function googleCall(
   if (!s.tokens) throw new HttpError(503, 'unconfigured', 'Google is not configured');
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await s.tokens.accessToken(userId);
-    const res = await s.fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await s.fetch(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (timedOut(e)) throw new HttpError(504, 'upstream_timeout', 'calendar timed out');
+      throw e;
+    }
     if (res.status === 401 && attempt === 0) {
       s.tokens.invalidate(userId);
       await res.body?.cancel();
@@ -165,7 +184,9 @@ async function googleCall(
     let json: Record<string, unknown> = {};
     try {
       json = (await res.json()) as Record<string, unknown>;
-    } catch {
+    } catch (e) {
+      // an answer cut off by the timeout is no answer: an empty body would read as a free calendar
+      if (timedOut(e)) throw new HttpError(504, 'upstream_timeout', 'calendar timed out');
       json = {};
     }
     return { status: res.status, json };

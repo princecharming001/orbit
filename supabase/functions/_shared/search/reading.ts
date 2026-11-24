@@ -37,6 +37,7 @@ import type { Claude, ClaudeResult } from '../claude.ts';
 import type { Db } from '../db.ts';
 import type { TargetTake } from '../linkedinTargets.ts';
 import type { ProfileOrg } from '../providers/linkedinCompanies.ts';
+import { LINKEDIN_TIMEOUT_MS, timedOut } from './census.ts';
 
 /** orbit-connectors DEFAULT_LEDGER: profile reads and company pages per account per day. */
 export const LEDGER_TOTAL = { profile: 100, company: 150 } as const;
@@ -99,7 +100,7 @@ export interface ReadingStep {
   profiles: number;
   readPeople: number;
   readCompanies: number;
-  stopped?: 'ledger' | 'time' | 'refused' | 'throttled';
+  stopped?: 'ledger' | 'time' | 'refused' | 'throttled' | 'timeout';
   /** the people this step read or found fresh (the ask-time answer) */
   readIds: string[];
   /** profiles left for later because other accounts looked them up lately (the swarm limit) */
@@ -263,17 +264,29 @@ export function pageOf(id: string, raw: Record<string, unknown>): CompanyPage | 
 
 // ---- fetching ---------------------------------------------------------------------------------------------------------
 
-type Got<T> = { ok: true; value: T } | { ok: false; status: 'not_found' | 'refused' | 'throttled' };
+type Got<T> =
+  | { ok: true; value: T }
+  | { ok: false; status: 'not_found' | 'refused' | 'throttled' | 'timeout' };
 
+/**
+ * One LinkedIn read. A request that does not answer within LINKEDIN_TIMEOUT_MS is `timeout`: the step stops as it
+ * does when throttled, with nothing marked, so a later step reads the same page or profile.
+ */
 async function getJson(deps: ReadingDeps, path: string): Promise<Got<Record<string, unknown>>> {
-  const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, '')}${path}`, {
-    headers: { 'X-API-KEY': deps.apiKey, accept: 'application/json' },
-  });
-  if (res.status === 404 || res.status === 422) return { ok: false, status: 'not_found' };
-  if (res.status === 429) return { ok: false, status: 'throttled' };
-  if (res.status >= 400 && res.status < 500) return { ok: false, status: 'refused' };
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  return { ok: true, value: (await res.json()) as Record<string, unknown> };
+  try {
+    const res = await deps.fetch(`${deps.baseUrl.replace(/\/+$/, '')}${path}`, {
+      headers: { 'X-API-KEY': deps.apiKey, accept: 'application/json' },
+      signal: AbortSignal.timeout(LINKEDIN_TIMEOUT_MS),
+    });
+    if (res.status === 404 || res.status === 422) return { ok: false, status: 'not_found' };
+    if (res.status === 429) return { ok: false, status: 'throttled' };
+    if (res.status >= 400 && res.status < 500) return { ok: false, status: 'refused' };
+    if (!res.ok) throw new Error(`unipile ${res.status}`);
+    return { ok: true, value: (await res.json()) as Record<string, unknown> };
+  } catch (e) {
+    if (timedOut(e)) return { ok: false, status: 'timeout' };
+    throw e;
+  }
 }
 
 function profilePath(accountId: string, identifier: string): string {
@@ -922,8 +935,8 @@ async function readCompanyIds(
       `/api/v1/linkedin/company/${encodeURIComponent(id)}?account_id=${encodeURIComponent(accountId)}`,
     );
     if (!got.ok) {
-      if (got.status === 'throttled') {
-        step.stopped = 'throttled';
+      if (got.status === 'throttled' || got.status === 'timeout') {
+        step.stopped = got.status;
         return;
       }
       await markCompany(db, id, got.status, now);
@@ -972,8 +985,8 @@ async function readProfiles(
     if (fetched++ > 0) await deps.sleep((mode === 'ask' ? 300 : 2500) + Math.floor(deps.random() * 2500));
     const got = await getJson(deps, profilePath(accountId, p.member));
     if (!got.ok) {
-      if (got.status === 'throttled') {
-        step.stopped = 'throttled';
+      if (got.status === 'throttled' || got.status === 'timeout') {
+        step.stopped = got.status;
         return;
       }
       await markProfile(db, userId, p.id, p.member, got.status, mode, now);
@@ -1010,7 +1023,7 @@ export async function runReadingStep(
     // most of the time for the profiles, the rest for their companies and the reading
     await readProfiles(db, deps, userId, accountId, todo, now, mode, step, started, budgetMs * 0.6);
     const companies = await wantedCompanies(db, userId, ASK_MAX, ids);
-    if (step.stopped !== 'throttled')
+    if (step.stopped !== 'throttled' && step.stopped !== 'timeout')
       await readCompanyIds(db, deps, accountId, companies, now, mode, step, started, budgetMs * 0.8);
     step.readPeople = await readPeople(db, deps.claude, userId, ASK_MAX, ids);
     step.readCompanies = await readCompanies(db, deps.claude, userId, ASK_MAX, now);
@@ -1020,7 +1033,7 @@ export async function runReadingStep(
   await readCompanyIds(db, deps, accountId, companies, now, mode, step, started, budgetMs * 0.4);
   const stoppedAtCompanies = step.stopped;
   step.stopped = undefined;
-  if (stoppedAtCompanies !== 'throttled') {
+  if (stoppedAtCompanies !== 'throttled' && stoppedAtCompanies !== 'timeout') {
     const people = await pickPeople(db, userId, PROFILES_PER_STEP);
     await readProfiles(db, deps, userId, accountId, people, now, mode, step, started, budgetMs * 0.75);
   }

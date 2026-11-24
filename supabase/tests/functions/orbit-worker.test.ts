@@ -151,15 +151,71 @@ describe('runTick', () => {
 
   it('sets aside a message whose runs keep dying before they finish, without running it again', async () => {
     const ran = vi.fn(async () => {});
-    await sqlQueue(t.db).enqueue({ kind: 'heavy', userId: null, payload: {} }, { queue: 'orbit_sync' });
-    // eleven reads that never reached the handler's finish (the isolate died each time)
-    await t.pg.exec('update pgmq.q_orbit_sync set read_ct = 10');
+    const id = await sqlQueue(t.db).enqueue(
+      { kind: 'heavy', userId: null, payload: {} },
+      { queue: 'orbit_sync' },
+    );
+    // ten runs that started and never reached the handler's finish (the isolate died each time): the first five
+    // already swept as errors, the rest still 'running'
+    for (let n = 1; n <= 10; n++)
+      await t.db.sql`insert into orbit.job_runs (queue, msg_id, kind, status, attempt, error, started_at)
+        values ('orbit_sync', ${id}::bigint, 'heavy', ${n <= 5 ? 'error' : 'running'}, ${n}::int,
+                ${n <= 5 ? 'died with the isolate' : null}, now() - interval '5 minutes')`;
     const s = await runTick({ db: t.db, handlers: { heavy: ran } });
     expect(ran).not.toHaveBeenCalled();
     expect(s.deadLettered).toBe(1);
     expect(await left('orbit_sync')).toBe(0);
     const [dl] = await t.db.sql<{ error: string }>`select error from orbit.dead_letters`;
-    expect(dl!.error).toBe('read 11 times without finishing');
+    expect(dl!.error).toBe('started 10 times without finishing');
+  });
+
+  it('a heavy job handed back unrun tick after tick keeps all its attempts (backend audit A)', async () => {
+    // 136 dead letters said "read N times without finishing" for jobs that had never run: each tick read ten from
+    // the heavy queue, ran at most one and handed the rest back with read_ct raised. Here eleven busy ticks in a row
+    // (six lighter jobs first, so the heavy job is not started) each read the scoring job and hand it back.
+    const ran = vi.fn(async () => {});
+    const handlers = { 'score.person': ran, noop: async () => {} };
+    await sqlQueue(t.db).enqueue({ kind: 'score.person', userId: null, payload: { n: 1 } });
+    for (let tick = 0; tick < 11; tick++) {
+      for (let i = 0; i < 6; i++) await send('orbit_send', { kind: 'noop', userId: null, payload: {} });
+      const busy = await runTick({ db: t.db, handlers });
+      expect(busy).toMatchObject({ processed: 6, stoppedBy: 'cpu' });
+    }
+    expect(ran).not.toHaveBeenCalled();
+    const [m] = await t.db.sql<{ read_ct: number }>`select read_ct from pgmq.q_orbit_score`;
+    expect(m!.read_ct).toBe(11);
+    // a free tick: it runs, as its first attempt
+    const s = await runTick({ db: t.db, handlers });
+    expect(ran).toHaveBeenCalledTimes(1);
+    expect(s).toMatchObject({ ok: 1, deadLettered: 0 });
+    expect(await left('orbit_score')).toBe(0);
+    expect(await t.db.sql`select 1 from orbit.dead_letters`).toHaveLength(0);
+    const scored = (await runs()).filter((r) => r.kind === 'score.person');
+    expect(scored).toEqual([{ kind: 'score.person', status: 'ok', error: null, attempt: 1 }]);
+  });
+
+  it('a job that fails after being handed back waits the first backoff, not one for every read', async () => {
+    const failing: JobHandler = async () => {
+      throw new Error('upstream 500');
+    };
+    await sqlQueue(t.db).enqueue({ kind: 'score.person', userId: null, payload: {} });
+    // seven reads that were handed back unrun
+    await t.pg.exec('update pgmq.q_orbit_score set read_ct = 7');
+    const s = await runTick({ db: t.db, handlers: { 'score.person': failing } });
+    expect(s).toMatchObject({ failed: 1, deadLettered: 0 });
+    const [m] = await t.db.sql<{ secs: number }>`
+      select extract(epoch from vt - now())::int as secs from pgmq.q_orbit_score`;
+    expect(Math.round(m!.secs / 10) * 10).toBe(30);
+    expect((await runs()).map((r) => [r.status, r.attempt])).toEqual([['error', 1]]);
+  });
+
+  it('reads the heavy queue only as far as it may run, so the jobs behind are not read at all', async () => {
+    for (let i = 0; i < 4; i++)
+      await sqlQueue(t.db).enqueue({ kind: 'score.page', userId: null, payload: { i } });
+    await runTick({ db: t.db, handlers: { 'score.page': async () => {} } });
+    // one ran; the next was read to learn it is heavy and handed back; the two behind it were never read
+    const rest = await t.db.sql<{ read_ct: number }>`select read_ct from pgmq.q_orbit_score order by msg_id`;
+    expect(rest.map((r) => r.read_ct)).toEqual([1, 0, 0]);
   });
 
   it('§9.4 test 2: a failing handler is retried with growing timeouts and dead-lettered after 6 reads', async () => {
