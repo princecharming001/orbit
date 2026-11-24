@@ -4,7 +4,8 @@
  * gets (the words bound by hash, the day's limit, the wait after an unanswered message, a reply since) still holds.
  *
  * Who can go: someone with an email address, who did not ask not to be contacted, and to whom a message fits now.
- * LinkedIn is never scheduled, so someone with no address is listed for a tap instead.
+ * LinkedIn is never scheduled, so someone with no address is listed for a tap instead. An address Orbit built or
+ * guessed can go, marked as not confirmed; one a verifier refused steps aside like no address at all.
  * An account's drafts are written on the server (`/drafts/compose`, which also looks for a missing address) and held
  * there until their time, so they go with the tab closed; elsewhere they wait in this browser's outbox.
  */
@@ -12,6 +13,7 @@ import type { OutboundMessage, Person, User } from '@orbit/core';
 import { newId, SEND_CAPS } from '@orbit/core';
 import { type BatchRow, db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
+import { addressUnconfirmed, UNCONFIRMED_NOTE } from './addressNote';
 import { fillTemplate } from './batchText';
 import { type BatchItem, type BatchPace, companyKey, planBatch, type TakenSend } from './batchTime';
 import { composeDraft, nextMessageKind, setDraftText } from './drafts';
@@ -22,9 +24,12 @@ export type { BatchRow };
 
 /** Where one person stands for a batch. */
 export type RecipientState =
-  | { state: 'ready' }
+  /** `unconfirmed`: ready, but the address is one Orbit built or guessed and nothing has confirmed it */
+  | { state: 'ready'; unconfirmed?: true }
   /** no address yet: an account can look one up; otherwise LinkedIn by hand */
   | { state: 'no_email' }
+  /** the only address Orbit has for them failed a check: a message to it would be held, not sent */
+  | { state: 'bad_email' }
   | { state: 'do_not_contact' }
   | { state: 'hidden' }
   /** a message does not fit yet (they were written to and have not answered) */
@@ -40,14 +45,19 @@ export async function recipientState(
   const next = await nextMessageKind(user, person.id, now);
   if ('wait' in next) return { state: 'wait', until: next.wait.until };
   if (!person.primaryEmail) return { state: 'no_email' };
-  return { state: 'ready' };
+  if (person.emailConfidence === 'invalid') return { state: 'bad_email' };
+  return addressUnconfirmed(person) ? { state: 'ready', unconfirmed: true } : { state: 'ready' };
 }
 
-/** Why someone steps aside, in a few words. */
+/** Why someone steps aside, in a few words; for someone ready, the note that their address is not confirmed. */
 export function stateWords(s: RecipientState, firstName: string): string | undefined {
   switch (s.state) {
+    case 'ready':
+      return s.unconfirmed ? UNCONFIRMED_NOTE : undefined;
     case 'no_email':
       return 'No email address';
+    case 'bad_email':
+      return 'The address Orbit had did not work';
     case 'do_not_contact':
       return `${firstName} asked not to be contacted`;
     case 'hidden':

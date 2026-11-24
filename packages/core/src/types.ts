@@ -588,6 +588,12 @@ export interface Person {
   primaryEmail?: string;
   /** the primary address as the student's source wrote it ("marcus.bell@gmail.com"); `primaryEmail` is the matching key */
   primaryEmailAsWritten?: string;
+  /**
+   * how the primary address was found, when Orbit found it for someone sourced (plan 35 C3): `verified` or read on a
+   * `page`, built from the company's `pattern`, a `guess`, or `invalid` once a verifier refused it. Absent for an
+   * address from the student's own mail or contacts. A pattern or guess is shown as unconfirmed before a send
+   */
+  emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess' | 'invalid';
   emails: string[];
   /** phone numbers, as +15551234567 (from the student's Contacts when they import their texts) */
   phones?: string[];

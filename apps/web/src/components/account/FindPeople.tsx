@@ -190,7 +190,11 @@ export function FindPeople({
           emailConfidence: r.value.emailConfidence,
           emailStatus: undefined,
         });
-      else patch(row.key, { emailStatus: 'not found' });
+      // a lookup that could not ask its sources just now is not "no email": the row says so and can be tried again
+      else
+        patch(row.key, {
+          emailStatus: r.value.emailStatus === 'could not check' ? 'could not check' : 'not found',
+        });
     } finally {
       setFinding(undefined);
     }

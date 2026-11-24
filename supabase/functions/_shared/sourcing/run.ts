@@ -18,7 +18,7 @@ import { normalizeEmail } from '@orbit/core/text/normalize';
 import { GOAL_KINDS, type Person } from '@orbit/core/types';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
-import { bestReach, ensurePerson, loadGraph, resolvePersonRef, type UserGraph } from '../paths/find.ts';
+import { bestReach, createPerson, loadGraph, resolvePersonRef, type UserGraph } from '../paths/find.ts';
 import { cleanLinkedInUrl, linkedInSlugOf } from '../providers/unipileResearch';
 import { createParallelSearch, createSerperSearch } from '../providers/webSearch';
 import { claudeDep, sqlBudget } from '../research/bind.ts';
@@ -34,8 +34,12 @@ import {
   domainsOf,
   EMAIL_DEADLINE_MS,
   fillEmails,
+  isCompanyDomain,
+  isEvidence,
   type KnownAddress,
+  type LookupNote,
   orgDomainsOf,
+  ownSiteDomain,
   withDeadline,
 } from './email';
 import { indexKnown, type KnownRow, matchKnown } from './known';
@@ -349,10 +353,19 @@ export async function runSourcing(
     budget,
     cache,
   };
-  const lookup = emailLookup({
+  const paidLookup = emailLookup({
     ...emailDeps,
-    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url),
+    // the page they were found on only when it is their company's own site, never a news or directory page's
+    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? ownSiteDomain(c),
   });
+  // "looked up" is said only of a lookup that really answered: one cut short by a timeout or a cap leaves the
+  // person as not looked up, so the student can ask again instead of reading "not found"
+  const lookup = async (c: Candidate) => {
+    const note: LookupNote = {};
+    const found = await paidLookup(c, note);
+    if (found || !note.unchecked) c.emailLookedUp = true;
+    return found;
+  };
   const template = domainTemplate(emailDeps);
   const cached = cachedTemplate(cache);
   const emailsFor = async (cands: Candidate[]) => {
@@ -367,7 +380,6 @@ export async function runSourcing(
     if (!wantsEmails) return;
     const top = cands.filter((c) => c.entity === 'person').slice(0, ASKED_LOOKUPS);
     const todo = top.filter((c) => !c.email && !c.lastNameObfuscated);
-    for (const c of todo) c.emailLookedUp = true;
     await fillEmails(todo, {
       known: ctx.known,
       orgDomains: ctx.orgDomains,
@@ -532,7 +544,13 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
     await withDeadline(
       Promise.all(
         needs.map(async (r) => {
-          const found = await findEmailFor(s, userId, r.candidate, { tools }).catch(() => undefined);
+          const note: LookupNote = {};
+          const found = await findEmailFor(s, userId, r.candidate, { tools, note }).catch(() => {
+            note.unchecked = true;
+            return undefined;
+          });
+          // a lookup that could not ask a source is not a miss: the row stays "not looked up" for a later try
+          if (!found && note.unchecked) return;
           r.candidate = found
             ? { ...r.candidate, email: found.email, emailConfidence: found.confidence, emailLookedUp: true }
             : { ...r.candidate, emailLookedUp: true };
@@ -546,7 +564,8 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
     const c = rec.candidate;
     const personId =
       rec.person_id ??
-      (await ensurePerson(
+      (await knownPersonFor(db, userId, c)) ??
+      (await createPerson(
         db,
         userId,
         {
@@ -602,6 +621,40 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
     out.push({ id: personId, displayName: p?.display_name ?? firstNameOf({ display_name: c.name }), chatId });
   }
   return { people: out };
+}
+
+/**
+ * The student's own person a chosen candidate already is, or null: by LinkedIn profile, by email, else by name
+ * together with where they work (known.ts, the rule a search uses to say "you know them"). A name on its own never
+ * joins two people: a classmate David Kim with no address is not the investor David Kim, and the investor's address,
+ * chat and facts must not land on the classmate. With no match the candidate becomes a new person.
+ */
+export async function knownPersonFor(db: Db, userId: string, c: Candidate): Promise<string | null> {
+  const byProfile = await resolvePersonRef(db, userId, {
+    name: '',
+    linkedinUrl: c.linkedinUrl,
+    memberId: c.memberId,
+  });
+  if (byProfile) return byProfile;
+  const email = c.email ? normalizeEmail(c.email) : null;
+  const name = c.name.trim().toLowerCase();
+  if (!email && !name) return null;
+  const rows = await db.sql<KnownRow>`
+    select p.id, p.display_name, p.org_raw, p.headline, p.primary_email, p.linkedin_slug, p.linkedin_member_id,
+           coalesce((select array_agg(i.value_norm) from orbit.person_identities i
+                      where i.person_id = p.id and i.kind = 'email'), '{}') as emails,
+           '{}'::text[] as linkedin_ids
+      from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+       and (lower(p.display_name) = ${name} or lower(p.primary_email) = ${email}
+         or exists (select 1 from orbit.person_identities i
+                     where i.person_id = p.id and i.kind = 'email' and i.value_norm = ${email}))
+     order by p.id limit 50`;
+  const hit = matchKnown(indexKnown(rows), c, {
+    email: email ?? undefined,
+    orgDomain: c.domains?.[0],
+  });
+  return hit?.id ?? null;
 }
 
 /** The open chat for a person and goal, or a new one at `identified`. */
@@ -681,8 +734,14 @@ async function warmContext(
     db.sql<{ parsed: Record<string, unknown> | null }>`
       select parsed from orbit.uploads
        where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`,
-    db.sql<{ id: string; display_name: string; org_raw: string | null; email: string }>`
-      select id, display_name, org_raw, primary_email as email from orbit.people
+    db.sql<{
+      id: string;
+      display_name: string;
+      org_raw: string | null;
+      email: string;
+      email_confidence: string | null;
+    }>`
+      select id, display_name, org_raw, primary_email as email, email_confidence from orbit.people
        where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
        limit 5000`,
     graph(),
@@ -699,20 +758,29 @@ async function warmContext(
     gradYear: u?.grad_year,
     homeCity: typeof homeCity === 'string' ? homeCity.slice(0, 80) : undefined,
   });
-  const known = emails.map((e) => ({ name: e.display_name, email: e.email }));
+  // what teaches a company's pattern and domain: addresses from the student's mail and contacts, verified ones and
+  // ones read on a page. An address Orbit built or guessed is left out, or it would confirm its own pattern
+  const real = emails.filter((e) => isEvidence(e.email_confidence));
+  const known = real.map((e) => ({ name: e.display_name, email: e.email }));
   const emailOf = new Map(emails.map((e) => [e.id, e.email]));
-  // the domain most contacts at an org use
-  const tally = new Map<string, Map<string, number>>();
-  for (const e of emails) {
+  // the domain most contacts at an org use, when it is the org's: one contact's university or personal domain is
+  // not where their colleagues get mail (`isCompanyDomain`)
+  const tally = new Map<string, { org: string; domains: Map<string, number> }>();
+  for (const e of real) {
     const d = workDomain(e.email);
     if (!d || !e.org_raw) continue;
     const k = norm(e.org_raw);
-    const m = tally.get(k) ?? new Map<string, number>();
-    m.set(d, (m.get(d) ?? 0) + 1);
-    tally.set(k, m);
+    const t = tally.get(k) ?? { org: e.org_raw, domains: new Map<string, number>() };
+    t.domains.set(d, (t.domains.get(d) ?? 0) + 1);
+    tally.set(k, t);
   }
   const orgDomains = new Map<string, string>();
-  for (const [k, m] of tally) orgDomains.set(k, [...m].sort((a, b) => b[1] - a[1])[0]![0]);
+  for (const [k, t] of tally) {
+    const best = [...t.domains]
+      .sort((a, b) => b[1] - a[1])
+      .find(([d, count]) => isCompanyDomain(d, t.org, { count }));
+    if (best) orgDomains.set(k, best[0]);
+  }
   const warm: WarmContact[] = [...gr.people.values()]
     .filter((p) => p.score >= WARM_SCORE && !p.hidden && !p.doNotContact)
     .sort((a, b) => b.score - a.score)

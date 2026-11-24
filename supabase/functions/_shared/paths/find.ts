@@ -677,7 +677,19 @@ export async function ensurePerson(
   source: string,
 ): Promise<string> {
   const found = await resolvePersonRef(db, userId, p);
-  if (found) return found;
+  return found ?? createPerson(db, userId, p, source);
+}
+
+/**
+ * A new person for the reference, whoever else has the name (sources = [source]). For a caller that has already
+ * decided nobody the student has is this person (sourcing's add, which never joins two people on a name alone).
+ */
+export async function createPerson(
+  db: Db,
+  userId: string,
+  p: PersonRef & { org?: string; title?: string; email?: string; location?: string },
+  source: string,
+): Promise<string> {
   const url = cleanLinkedInUrl(p.linkedinUrl);
   const slug = linkedInSlugOf(url);
   const name = p.name.trim() || slug || 'Unknown';

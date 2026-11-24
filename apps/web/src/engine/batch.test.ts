@@ -64,6 +64,26 @@ describe('who can go (plan 38 §B1)', () => {
     expect(stateWords({ state: 'no_email' }, 'Sam')).toBe('No email address');
     expect(stateWords({ state: 'do_not_contact' }, 'Sam')).toBe('Sam asked not to be contacted');
   });
+  it('an address Orbit guessed is ready but said to be unconfirmed; one that failed a check steps aside', async () => {
+    const [p] = await emailed(1);
+    const fresh = (over: Partial<Person>) => {
+      const row = { ...p!, id: newId('p'), ...over } as Person;
+      return db.people.add(row).then(() => row);
+    };
+    // nobody written to yet, so only the address decides
+    const guessed = await fresh({ primaryEmail: 'jo.park@beta.io', emailConfidence: 'guess' });
+    const state = await recipientState(user, guessed);
+    expect(state).toEqual({ state: 'ready', unconfirmed: true });
+    expect(stateWords(state, 'Jo')).toBe('Guessed address, not confirmed');
+    const built = await fresh({ primaryEmail: 'jpark@beta.io', emailConfidence: 'pattern' });
+    expect(await recipientState(user, built)).toEqual({ state: 'ready', unconfirmed: true });
+    const sure = await fresh({ primaryEmail: 'jo@beta.io', emailConfidence: 'verified' });
+    expect(await recipientState(user, sure)).toEqual({ state: 'ready' });
+    expect(stateWords({ state: 'ready' }, 'Jo')).toBeUndefined();
+    const failed = await fresh({ primaryEmail: 'j.park@beta.io', emailConfidence: 'invalid' });
+    expect(await recipientState(user, failed)).toEqual({ state: 'bad_email' });
+    expect(stateWords({ state: 'bad_email' }, 'Jo')).toBe('The address Orbit had did not work');
+  });
   it('a batch of recruiters is named for them', () => {
     const day = new Date('2026-11-12T12:00:00Z');
     expect(batchName([{ currentTitle: 'University Recruiter', relationshipType: 'unknown' }], day)).toMatch(

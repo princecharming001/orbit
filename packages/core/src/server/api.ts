@@ -147,9 +147,10 @@ export interface SourcedCandidate {
   emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess';
   /**
    * no email yet (plan 35 C3): 'not looked up' until the student adds them or asks to email them (POST /source/email),
-   * 'not found' once a lookup found nothing
+   * 'not found' once a lookup found nothing, 'could not check' when the lookup could not ask its sources just now
+   * (never stored on the server: the row stays 'not looked up' there, so the next ask tries again)
    */
-  emailStatus?: 'not looked up' | 'not found';
+  emailStatus?: 'not looked up' | 'not found' | 'could not check';
   /** how warm the student is to them: 1 in your world, 2 one hop away, 3 shared background, 4 open door, 5 cold */
   tier?: 1 | 2 | 3 | 4 | 5;
   /** the one reason for the tier, in plain words */
@@ -253,7 +254,11 @@ export interface SourceEmailRequest {
 export interface SourceEmailResponse {
   email?: string;
   emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess';
-  emailStatus: 'found' | 'not found';
+  /**
+   * 'could not check': a source timed out, was over its daily cap or had no credits, so nothing was found but the
+   * person may well have an address; shown as "Could not check just now", and asking again looks again
+   */
+  emailStatus: 'found' | 'not found' | 'could not check';
 }
 export interface SourceAddRequest {
   recommendationIds: string[];

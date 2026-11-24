@@ -26,6 +26,7 @@ import {
   type WebQuery,
   type WebSource,
 } from '../research/web';
+import { isRoleAddress } from './email';
 import type { Candidate, SourcingGoal } from './search';
 import { isSchoolOrg } from './warmth';
 
@@ -322,8 +323,41 @@ const nameTokens = (name: string) =>
     .filter((w) => w.length >= 2 && !['dr', 'prof', 'professor', 'phd', 'md'].includes(w));
 
 /**
+ * How well a mailto's local part (letters only) reads as this person's: their last name with their first name (3),
+ * with the start of it (2) or with their initials (1) on either side, or the last name alone (1). 0 when the last
+ * name is not at either end, or what stands beside it is someone else's first name or initial: on a page that lists
+ * Wei Zhang and Li Zhang, "lzhang" is Li's and never Wei's.
+ */
+export function mailtoFit(local: string, first: string, last: string): number {
+  const f = first.replace(/[^a-z]/g, '');
+  const l = last.replace(/[^a-z]/g, '');
+  if (l.length < 3 || !f) return 0;
+  const rests = [
+    ...(local.startsWith(l) ? [local.slice(l.length)] : []),
+    ...(local.endsWith(l) ? [local.slice(0, local.length - l.length)] : []),
+  ];
+  let best = 0;
+  for (const rest of rests) {
+    const fit =
+      rest === ''
+        ? 1
+        : rest === f
+          ? 3
+          : rest.length >= 2 && (f.startsWith(rest) || rest.startsWith(f))
+            ? 2
+            : rest.length <= 2 && rest[0] === f[0]
+              ? 1
+              : 0;
+    best = Math.max(best, fit);
+  }
+  return best;
+}
+
+/**
  * For each listed person, the profile link and any mailto address the directory page itself gives them: the anchor
- * whose words are their name, and a mailto whose address starts or ends with their last name or is their initials.
+ * whose words are their name, and a mailto whose address is their last name with their first name or initial. A
+ * shared last name is not enough: an address goes to the person it fits best, and to nobody when two people on the
+ * page fit it equally (two Zhangs and a bare "zhang@"). A shared inbox (info@, admissions@) is nobody's.
  */
 export function linksFor(
   anchors: { href: string; text: string }[],
@@ -341,6 +375,12 @@ export function linksFor(
     .filter((a) => /^mailto:/i.test(a.href))
     .map((a) => cleanEmail(a.href.replace(/^mailto:/i, '').split('?')[0]))
     .filter((e): e is string => !!e);
+  const named = people
+    .map((p) => ({ name: p.name, toks: nameTokens(p.name) }))
+    .filter((p) => p.toks.length >= 2)
+    .map((p) => ({ name: p.name, first: p.toks[0]!, last: p.toks[p.toks.length - 1]! }));
+  const fitOf = (e: string, who: { first: string; last: string }) =>
+    mailtoFit(e.split('@')[0]!.replace(/[^a-z]/g, ''), who.first, who.last);
   const social = /linkedin\.com|twitter\.com|x\.com|facebook\.com|scholar\.google/i;
   for (const p of people) {
     const toks = nameTokens(p.name);
@@ -375,16 +415,11 @@ export function linksFor(
       });
       if (byPath) entry.profile = byPath.href;
     }
-    const mine = mailtos.find((e) => {
-      const local = e.split('@')[0]!.replace(/[^a-z]/g, '');
-      return (
-        lastKey.length >= 3 &&
-        (local.startsWith(lastKey) ||
-          local.endsWith(lastKey) ||
-          local === `${first[0]}${lastKey}` ||
-          local === `${first}${lastKey}`)
-      );
-    });
+    // the address that fits them best, and only when nobody else listed on the page fits it as well
+    const mine = mailtos
+      .map((e) => ({ e, fit: fitOf(e, { first, last }) }))
+      .filter((m) => m.fit > 0 && !named.some((o) => o.name !== p.name && fitOf(m.e, o) >= m.fit))
+      .sort((a, b) => b.fit - a.fit)[0]?.e;
     if (mine) entry.email = mine;
     if (entry.profile || entry.email) out.set(p.name, entry);
   }
@@ -632,6 +667,7 @@ function fill(into: Listed, from: Listed): void {
   if (!into.note && from.note) into.note = from.note;
 }
 
+/** An address as a person's own: written out, well formed, and not a shared inbox (info@, admissions@). */
 function cleanEmail(e: string | null | undefined): string | undefined {
   if (!e) return undefined;
   const s = e
@@ -640,7 +676,7 @@ function cleanEmail(e: string | null | undefined): string | undefined {
     .replace(/\s*[[(]\s*dot\s*[\])]\s*/gi, '.')
     .replace(/^mailto:/i, '')
     .toLowerCase();
-  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(s) ? s : undefined;
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(s) && !isRoleAddress(s) ? s : undefined;
 }
 
 const titleCase = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());

@@ -27,7 +27,8 @@ import {
   keepWrittenDraft,
 } from '../../_shared/sending/send.ts';
 import { isOffered, sourceIsOn } from '../../_shared/sources/states.ts';
-import { lookupPersonEmail } from '../../_shared/sourcing/ondemand.ts';
+import { EMAIL_DEADLINE_MS } from '../../_shared/sourcing/email.ts';
+import { lookupPersonEmail, lookupWithin } from '../../_shared/sourcing/ondemand.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid, UUID, uuid } from './body.ts';
 
@@ -60,9 +61,14 @@ async function compose(ctx: Ctx): Promise<Response> {
   // an email to someone Orbit has no address for: the student asked to email them, so the address is looked up now
   // (plan 35 C3), the free sources first; without one the draft is written all the same, as before
   if (b.channel === 'gmail' && kind !== 'reply') {
-    const [p] = await ctx.db.sql<{ primary_email: string | null }>`
-      select primary_email from orbit.people where id = ${personId}::uuid and user_id = ${ctx.userId!}::uuid`;
-    if (p && !p.primary_email) await lookupPersonEmail(s, ctx.userId!, personId).catch(() => undefined);
+    const [p] = await ctx.db.sql<{ primary_email: string | null; email_confidence: string | null }>`
+      select primary_email, email_confidence from orbit.people
+       where id = ${personId}::uuid and user_id = ${ctx.userId!}::uuid`;
+    // an address that failed the verifier is as good as none: the lookup runs again for another
+    if (p && (!p.primary_email || p.email_confidence === 'invalid'))
+      await lookupWithin(lookupPersonEmail(s, ctx.userId!, personId), EMAIL_DEADLINE_MS).catch(
+        () => undefined,
+      );
   }
   const r = await composeDraft(s, {
     userId: ctx.userId!,

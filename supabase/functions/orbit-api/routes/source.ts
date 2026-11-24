@@ -3,11 +3,16 @@
  *   POST /source/search {goalId?, purpose, query?, homeCity?, filters?, limit?}  → {batchId, results, unconfigured, relaxed}
  *   POST /source/add {recommendationIds}                              → {people: [{id, displayName, chatId}]}
  *   POST /source/email {recommendationId} | {personId}                → {email?, emailConfidence?, emailStatus}
- *        one person's address looked up on demand (plan 35 C3): a search no longer pays for everyone's
+ *        one person's address looked up on demand (plan 35 C3): a search no longer pays for everyone's. Answers
+ *        within EMAIL_LOOKUP_DEADLINE_MS, under the browser's own wait: 'could not check' when the providers are slow
  */
 import type { SourceSearchRequest } from '@orbit/core/server/api';
 import { badRequest, json } from '../../_shared/http.ts';
-import { lookupPersonEmail, lookupRecommendationEmail } from '../../_shared/sourcing/ondemand.ts';
+import {
+  lookupPersonEmail,
+  lookupRecommendationEmail,
+  lookupWithin,
+} from '../../_shared/sourcing/ondemand.ts';
 import { addSourced, runSourcing } from '../../_shared/sourcing/run.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid } from './body.ts';
@@ -94,9 +99,11 @@ async function email(ctx: Ctx): Promise<Response> {
   const s = ctx.services();
   return json(
     200,
-    recommendationId
-      ? await lookupRecommendationEmail(s, ctx.userId!, recommendationId)
-      : await lookupPersonEmail(s, ctx.userId!, personId!),
+    await lookupWithin(
+      recommendationId
+        ? lookupRecommendationEmail(s, ctx.userId!, recommendationId)
+        : lookupPersonEmail(s, ctx.userId!, personId!),
+    ),
   );
 }
 

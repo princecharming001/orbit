@@ -380,15 +380,18 @@ const EMAILS: EmailCase[] = [
     orgDomains: [['acme', 'acme.com']],
   },
   { id: 'E10 one name only', c: { name: 'Cher', org: 'Acme' }, orgDomains: [['acme', 'acme.com']] },
-  { id: 'E11 no mail server, no guess', c: { name: 'Al Kim', url: 'https://nomail.io/about' } },
+  {
+    id: 'E11 no mail server, no guess',
+    c: { name: 'Al Kim', org: 'Nomail', url: 'https://nomail.io/about' },
+  },
   {
     id: 'E12 a company site alone gives no blind first.last (right 1 time in 5)',
-    c: { name: 'Jo Park', url: 'https://beta.io/team' },
+    c: { name: 'Jo Park', org: 'Beta', url: 'https://beta.io/team' },
     mxOk: ['beta.io'],
   },
   {
     id: 'E13 the company pattern from Hunter, confirmed, at a subdomain site',
-    c: { name: 'Jo Park', url: 'https://team.beta.io/jo' },
+    c: { name: 'Jo Park', org: 'Beta', url: 'https://team.beta.io/jo' },
     mxOk: ['beta.io'],
     template: { 'beta.io': '{first}' },
     verify: { 'jo@beta.io': 'valid' },
@@ -397,12 +400,12 @@ const EMAILS: EmailCase[] = [
   },
   {
     id: 'E14 university gets no guess',
-    c: { name: 'Lu Wang', url: 'https://eecs.berkeley.edu/faculty/lu' },
+    c: { name: 'Lu Wang', org: 'UC Berkeley', url: 'https://eecs.berkeley.edu/faculty/lu' },
     mxOk: ['berkeley.edu'],
   },
   {
     id: 'E15 one university example is not a pattern',
-    c: { name: 'Lu Wang', url: 'https://bioeng.berkeley.edu/lu' },
+    c: { name: 'Lu Wang', org: 'UC Berkeley', url: 'https://bioeng.berkeley.edu/lu' },
     mxOk: ['berkeley.edu'],
   },
   {
@@ -422,7 +425,7 @@ const EMAILS: EmailCase[] = [
   },
   {
     id: 'E19 UK company domain, Hunter pattern f+last',
-    c: { name: 'Jo Park', url: 'https://www.beta.co.uk/team' },
+    c: { name: 'Jo Park', org: 'Beta', url: 'https://www.beta.co.uk/team' },
     mxOk: ['beta.co.uk'],
     template: { 'beta.co.uk': '{f}{last}' },
     verify: { 'jpark@beta.co.uk': 'valid' },
@@ -437,7 +440,7 @@ const EMAILS: EmailCase[] = [
   },
   {
     id: 'E23 no pattern anywhere: no blind first.last even if a verifier would pass it',
-    c: { name: 'Jo Park', url: 'https://beta.io/team' },
+    c: { name: 'Jo Park', org: 'Beta', url: 'https://beta.io/team' },
     mxOk: ['beta.io'],
     template: {},
     verify: { 'jo.park@beta.io': 'valid' },
@@ -445,7 +448,7 @@ const EMAILS: EmailCase[] = [
   },
   {
     id: 'E23b a Hunter pattern at a server that takes any address stays a pattern',
-    c: { name: 'Jo Park', url: 'https://beta.io/team' },
+    c: { name: 'Jo Park', org: 'Beta', url: 'https://beta.io/team' },
     mxOk: ['beta.io'],
     template: { 'beta.io': '{first}' },
     verify: { 'jo@beta.io': 'risky' },
@@ -454,7 +457,7 @@ const EMAILS: EmailCase[] = [
   },
   {
     id: 'E23c a Hunter pattern the verifier rejects is dropped',
-    c: { name: 'Jo Park', url: 'https://beta.io/team' },
+    c: { name: 'Jo Park', org: 'Beta', url: 'https://beta.io/team' },
     mxOk: ['beta.io'],
     template: { 'beta.io': '{first}' },
     verify: { 'jo@beta.io': 'invalid' },
@@ -489,7 +492,7 @@ const EMAILS: EmailCase[] = [
   },
   {
     id: 'E28 a university is never sent a blind address, even with a verifier',
-    c: { name: 'Lu Wang', url: 'https://eecs.berkeley.edu/faculty/lu' },
+    c: { name: 'Lu Wang', org: 'UC Berkeley', url: 'https://eecs.berkeley.edu/faculty/lu' },
     mxOk: ['berkeley.edu'],
     template: { 'berkeley.edu': '{first}.{last}' },
     verify: { 'lu.wang@berkeley.edu': 'valid' },
@@ -497,7 +500,7 @@ const EMAILS: EmailCase[] = [
   },
   {
     id: 'E29 no mail server: no verification spent',
-    c: { name: 'Al Kim', url: 'https://nomail.io/about' },
+    c: { name: 'Al Kim', org: 'Nomail', url: 'https://nomail.io/about' },
     template: { 'nomail.io': '{first}.{last}' },
     verify: { 'al.kim@nomail.io': 'valid' },
     asked: [],

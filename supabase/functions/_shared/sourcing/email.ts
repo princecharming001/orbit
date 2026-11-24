@@ -12,9 +12,11 @@
  * three of three right where first.last got none), and never for a university. Mail servers are checked over
  * DNS-over-HTTPS (an MX record) before a credit is spent; nothing here sends anything.
  */
+// a relative path: the browser's tests also compile this file, outside the server's @orbit/core mapping
+import { isPersonalEmailDomain } from '../../../../packages/core/src/entity/resolve.ts';
 import { norm, normOrg } from '../research/guards';
 import type { Candidate } from './search';
-import { orgsOf, siteDomain, workDomain } from './warmth';
+import { isSchoolOrg, orgsOf, siteDomain, workDomain } from './warmth';
 
 export type EmailConfidence = 'verified' | 'page' | 'pattern' | 'guess';
 
@@ -24,13 +26,21 @@ export interface LookedUp {
   source: 'linkedin' | 'enrow' | 'icypeas' | 'hunter' | 'apollo';
   status: 'verified' | 'guess';
 }
-export type EmailLookup = (c: Candidate) => Promise<LookedUp | undefined>;
+/**
+ * What a lookup could not do, written by the lookup onto the object the caller hands in. `unchecked`: a source could
+ * not be asked or did not answer (a timeout, a daily cap, no credits left, a switch turned off), so finding nothing
+ * is not the same as the person having no address.
+ */
+export interface LookupNote {
+  unchecked?: boolean;
+}
+export type EmailLookup = (c: Candidate, note?: LookupNote) => Promise<LookedUp | undefined>;
 /** verified lookups in one run at most (each may spend a credit); the best-fitting candidates get them */
 export const MAX_LOOKUPS = 5;
 /** Whether an address is deliverable, from a verifier (lookup.ts); undefined when it could not say. */
 export type Verify = (email: string) => Promise<'valid' | 'invalid' | 'risky' | undefined>;
 /** The address pattern a company uses, as Hunter writes it ("{first}", "{f}{last}"); undefined when unknown. */
-export type DomainTemplate = (domain: string) => Promise<string | undefined>;
+export type DomainTemplate = (domain: string, note?: LookupNote) => Promise<string | undefined>;
 
 /** An address from a Hunter pattern and a name; undefined when the pattern has a part Orbit cannot fill. */
 export function fromTemplate(template: string, f: string, l: string): string | undefined {
@@ -92,10 +102,64 @@ export interface KnownAddress {
 }
 
 /** A shared inbox, not a person: founders@, info@, housing@ teach nothing about how people's addresses are made. */
-const ROLE_LOCAL =
+export const ROLE_LOCAL =
   /^(info|hello|hi|team|founders?|support|admin|contact|office|admissions|housing|careers|jobs|hr|sales|press|media|noreply|no-reply|help|events|marketing|billing|accounts?|ops|legal|security|partners?|investors?|community|reshall|mailroom)\b/;
 const ROLE_NAME =
   /\b(team|founders|office|services|housing|support|admissions|corps|mailroom|invitational|department|committee|club|association|council|center|centre|newsletter|notifications?)\b/i;
+
+/**
+ * A shared inbox (info@, hello@, support@): never taken as one person's address, whoever offers it (a finder, a
+ * LinkedIn profile, a page). A message to it reaches whoever reads the inbox, not the person.
+ */
+export function isRoleAddress(email: string | null | undefined): boolean {
+  const local = email?.trim().toLowerCase().split('@')[0];
+  return !!local && ROLE_LOCAL.test(local);
+}
+
+/**
+ * How an address on a person was found, when it counts as evidence of how a company writes addresses: one from the
+ * student's own mail or contacts (no confidence kept), a verified one, or one written on a page. An address Orbit
+ * built from a pattern or guessed is not evidence: counting it would let a wrong guess confirm itself.
+ */
+export function isEvidence(confidence: string | null | undefined): boolean {
+  return !confidence || confidence === 'verified' || confidence === 'page';
+}
+
+/** A domain whose first label is the organisation's name, or sits inside it ("stripe.com" for "Stripe, Inc."). */
+export function domainNamesOrg(domain: string | undefined, org: string | undefined): boolean {
+  const label = domain?.toLowerCase().split('.')[0] ?? '';
+  const k = normOrg(org).replace(/[^a-z0-9]/g, '');
+  return label.length >= 3 && k.length >= 3 && (k.includes(label) || label.includes(k));
+}
+
+/**
+ * Whether the domain of a contact's address can stand for their organisation. Not a free mailbox, not a university's
+ * for someone at a company (a student intern keeps their .edu address), and either named for the organisation, the
+ * one the company facts give, or used by two or more of the student's contacts there. One contact's personal domain
+ * says nothing about where their colleagues get mail.
+ */
+export function isCompanyDomain(
+  domain: string,
+  org: string | undefined,
+  o: { count: number; facts?: ReadonlySet<string> },
+): boolean {
+  if (isPersonalEmailDomain(domain)) return false;
+  if (o.facts?.has(domain)) return true;
+  if (domainNamesOrg(domain, org)) return true;
+  if (isUniversity(domain) && !isSchoolOrg(org)) return false;
+  return o.count >= 2;
+}
+
+/**
+ * The domain of the page a candidate was found on, when the page is their organisation's own site: its address
+ * names the organisation. A news article, a directory or a product page about them is someone else's site, and an
+ * address built there would be a stranger's (first.last@techcrunch.com for a founder TechCrunch wrote about).
+ */
+export function ownSiteDomain(c: Candidate): string | undefined {
+  const page = siteDomain(c.url);
+  const orgs = [...(c.org ? [c.org] : []), ...orgsOf(c)];
+  return page && orgs.some((o) => domainNamesOrg(page, o)) ? page : undefined;
+}
 
 export interface DomainPattern {
   pattern: string;
@@ -179,7 +243,10 @@ export function orgDomainsOf(c: Candidate, orgDomains: Map<string, string>): str
   return out;
 }
 
-/** The company domains to try for a candidate: their own address, their org's domains, then their page. */
+/**
+ * The company domains to try for a candidate: their own address, their org's domains, then their page when it is
+ * their organisation's own site.
+ */
 export function domainsOf(c: Candidate, orgDomains: Map<string, string>): string[] {
   const out: string[] = [];
   const add = (d: string | undefined) => {
@@ -187,7 +254,7 @@ export function domainsOf(c: Candidate, orgDomains: Map<string, string>): string
   };
   add(workDomain(c.email));
   for (const d of orgDomainsOf(c, orgDomains)) add(d);
-  add(siteDomain(c.url));
+  add(ownSiteDomain(c));
   return out;
 }
 
@@ -213,6 +280,12 @@ export async function fillEmails(
     maxVerifies?: number;
   },
 ): Promise<void> {
+  // a shared inbox a page or a provider gave for a person is not theirs: they go on as someone with no address
+  for (const c of cands)
+    if (c.entity === 'person' && c.email && isRoleAddress(c.email)) {
+      c.email = undefined;
+      c.emailConfidence = undefined;
+    }
   // 1. looked-up addresses first, for the best-fitting people who have none (the list arrives best fit first)
   if (opts.lookup) {
     const want = cands
@@ -226,10 +299,13 @@ export async function fillEmails(
       c.emailConfidence = g.status === 'verified' ? 'verified' : 'guess';
     });
   }
-  // 2. the rest from the patterns the found addresses teach (a verified one teaches its domain too)
+  // 2. the rest from the patterns the found addresses teach (a verified one teaches its domain too; a guess or an
+  //    address built from a pattern teaches nothing, or one wrong guess would become the pattern for the next person)
   const known = [
     ...opts.known,
-    ...cands.filter((c) => c.email).map((c) => ({ name: c.name, email: c.email! })),
+    ...cands
+      .filter((c) => c.email && isEvidence(c.emailConfidence))
+      .map((c) => ({ name: c.name, email: c.email! })),
   ];
   const patterns = new Map<string, DomainPattern | undefined>();
   const patternAt = (d: string) => {

@@ -16,6 +16,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../db/schema';
+import { addressNote } from '../engine/addressNote';
 import { defaultFollowUp, followUpFor, saveFollowUp } from '../engine/afterAccept';
 import { regenerateDraft } from '../engine/brief';
 import { researchOpeners } from '../engine/deepResearch';
@@ -350,6 +351,8 @@ export function DraftEditor({
   const max = MAX_WORDS[draft.kind];
   const edited = body.trim() !== draft.bodyDraft.trim();
   const isLinkedIn = draft.channel === 'linkedin';
+  // an address Orbit built or guessed for them: said beside it, quietly, before anything is sent
+  const toNote = isLinkedIn ? undefined : addressNote(person ?? undefined, draft.toEmail);
   const connectionNote = isConnectionNote(draft, person ?? undefined, chats ?? []);
   const needs = (draft.needsInput ?? []).filter((n): n is PromptNeed => n !== 'post' && n !== 'resume');
   // the line Orbit can stand behind (from their LinkedIn headline, else their company), already in the box
@@ -864,6 +867,11 @@ export function DraftEditor({
                   <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={22} />
                 )}
                 <span className="truncate">{draft.toEmail ?? person?.primaryEmail ?? first}</span>
+                {toNote && (
+                  <span className="shrink-0 text-[12px] text-ink-3" data-testid="draft-to-note">
+                    {toNote}
+                  </span>
+                )}
               </span>
             </div>
             {!envelope.threaded && (
@@ -1108,6 +1116,11 @@ export function DraftEditor({
                 ? `${person?.displayName ?? first} on LinkedIn`
                 : (draft.toEmail ?? person?.primaryEmail ?? first)}
             </span>
+            {!isLinkedIn && toNote && (
+              <span className="shrink-0 text-[12px] text-ink-3" data-testid="draft-to-note">
+                {toNote}
+              </span>
+            )}
             {user && <HistoryPeek userId={user.id} personId={draft.personId} firstName={first} />}
           </div>
         )}

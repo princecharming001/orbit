@@ -293,23 +293,34 @@ export type Reservation =
 
 /**
  * Check, then write the expected spend before the call, so a second call checked a moment later already counts it.
+ * The check and the row are one step: both run in a transaction that holds a lock for this student (and one for the
+ * provider, when a cap of it is shared by everyone), so of two lookups started together the second reads the first's
+ * row before it is let through, and they cannot pass a cap together. The locks go when the transaction ends.
  * The caller settles the row with what the call really cost (0 units for a miss, which then shows as an attempt).
  */
 export async function reserveUsage(db: Db, entry: UsageEntry, now = new Date()): Promise<Reservation> {
-  if (entry.userId) {
-    const v = await checkBudget(
-      db,
-      entry.userId,
-      { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
-      now,
-    );
-    if (!v.ok) return { ok: false, verdict: v };
-  }
-  const id = await recordUsage(db, entry);
+  const userId = entry.userId;
+  const held = await db.begin(async (tx): Promise<{ id?: string } | Exclude<BudgetVerdict, { ok: true }>> => {
+    if (userId) {
+      // always the student's lock first, then the provider's: one order, so two reservations never wait on each other
+      await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.reserve:user:${userId}`}, 0))`;
+      if (CAPS.some((c) => c.provider === entry.provider && c.scope === 'global'))
+        await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.reserve:provider:${entry.provider}`}, 0))`;
+      const v = await checkBudget(
+        tx,
+        userId,
+        { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
+        now,
+      );
+      if (!v.ok) return v;
+    }
+    return { id: await recordUsage(tx, entry) };
+  });
+  if ('ok' in held) return { ok: false, verdict: held };
   return {
     ok: true,
     async settle(actual) {
-      if (id) await settleUsage(db, id, actual);
+      if (held.id) await settleUsage(db, held.id, actual);
     },
   };
 }

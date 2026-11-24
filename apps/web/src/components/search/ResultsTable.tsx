@@ -209,12 +209,16 @@ export function ResultsTable({
                         title={
                           r.emailStatus === 'not found'
                             ? 'No email found yet. Click to look again'
-                            : 'Find their email'
+                            : r.emailStatus === 'could not check'
+                              ? 'Could not check just now. Click to try again'
+                              : 'Find their email'
                         }
                         aria-label={
                           r.emailStatus === 'not found'
                             ? `No email found for ${r.name} yet. Look again`
-                            : `Find the email of ${r.name}`
+                            : r.emailStatus === 'could not check'
+                              ? `Could not check for the email of ${r.name} just now. Try again`
+                              : `Find the email of ${r.name}`
                         }
                         data-testid={r.emailStatus === 'not found' ? 'find-email-none' : 'find-email-lookup'}
                       >

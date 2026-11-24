@@ -61,7 +61,7 @@ import { attachedAccount } from '../social/lookup.ts';
 import { sendXMessage, X_SEND_REASONS } from '../social/x/send.ts';
 import { sourceIsOn } from '../sources/states.ts';
 import { draftNote } from '../sources/switch.ts';
-import { checkBuiltAddress } from '../sourcing/ondemand.ts';
+import { checkBuiltAddress, keepRealEmail } from '../sourcing/ondemand.ts';
 import { recordDraftEdit, voiceGate } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { draftFiles } from './files.ts';
@@ -330,17 +330,20 @@ export async function keepWrittenDraft(
   if (typeof body !== 'string' || !body.trim() || body.length > 20_000)
     throw new HttpError(400, 'bad_request', 'body must be the message, at most 20,000 characters');
   // someone merged into another person since is that person now
-  const [p] = await db.sql<{ id: string; primary_email: string | null }>`
-    select coalesce(merged_into, id) as id,
-           (select primary_email from orbit.people q where q.id = coalesce(p.merged_into, p.id)) as primary_email
-      from orbit.people p
-     where id = ${w.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  const [p] = await db.sql<{ id: string; primary_email: string | null; email_confidence: string | null }>`
+    select q.id, q.primary_email, q.email_confidence
+      from orbit.people p join orbit.people q on q.id = coalesce(p.merged_into, p.id)
+     where p.id = ${w.personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
   if (!p) throw new HttpError(404, 'person_not_found', 'Orbit does not have this person on your account yet');
   let subject: string | null = null;
   if (email) {
     const to = w.to?.trim().toLowerCase();
     const theirs = p.primary_email?.trim().toLowerCase();
-    if (to && theirs && to !== theirs)
+    // an address Orbit built, guessed or found invalid is not one to hold the student to: the one they wrote to
+    // takes its place, and is theirs from now on
+    const replaceable = !!to && !!theirs && to !== theirs && BUILT_OR_BAD.has(p.email_confidence ?? '');
+    if (replaceable) await keepRealEmail(db, userId, p.id, w.to!);
+    else if (to && theirs && to !== theirs)
       throw new HttpError(
         409,
         'recipient_differs',
@@ -413,10 +416,14 @@ export async function discardDraft(db: Db, userId: string, draftId: unknown): Pr
   return toServerDraft(row ?? (await draftById(db, d.id))!);
 }
 
+/** How an address was found when it is Orbit's own work or known to be wrong, never the student's or the person's. */
+const BUILT_OR_BAD = new Set(['pattern', 'guess', 'invalid']);
+
 // ---- send ------------------------------------------------------------------------------------------------------
 
 export type SendResult =
-  | { status: 'sent'; providerMessageId: string }
+  /** `addressUnconfirmed`: it went to an address Orbit built or guessed that no verifier could confirm */
+  | { status: 'sent'; providerMessageId: string; addressUnconfirmed?: true }
   | { status: 'cancelled'; reason: string }
   | { status: 'held'; reason: string }
   | { status: 'failed'; error: string }
@@ -692,6 +699,7 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
 
   // 5. send
   let out: SendOutcome & { chatId?: string };
+  let guessedAddress = false;
   if (d.channel === 'gmail') {
     if (!person.primary_email) {
       await settle('failed', { error: 'no_email' });
@@ -710,6 +718,8 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'email_invalid' });
       return { status: 'held', reason: 'email_invalid' };
     }
+    // still a guess (a server that takes any address, or nothing to check it with): it goes, and the result says so
+    guessedAddress = address === 'unconfirmed';
     const copy = unconfirmed
       ? await gmailSentCopy(s, userId, {
           to: person.primary_email,
@@ -872,7 +882,11 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
              answered_at = coalesce(answered_at, ${now}::timestamptz)
        where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
-  return { status: 'sent', providerMessageId: out.providerMessageId };
+  return {
+    status: 'sent',
+    providerMessageId: out.providerMessageId,
+    ...(guessedAddress ? { addressUnconfirmed: true as const } : {}),
+  };
 }
 
 /** The chat after a send: last outbound, first outreach, bump count, and outreach_sent for a first message. */

@@ -9,18 +9,25 @@ import {
 import type { UnipileResearch } from '../../../../../supabase/functions/_shared/providers/unipileResearch';
 import { memorySharedCache } from '../../../../../supabase/functions/_shared/research/web';
 import {
+  domainsOf,
   fillEmails,
   fromTemplate,
+  isCompanyDomain,
+  isRoleAddress,
+  type LookupNote,
   MAX_LOOKUPS,
   MAX_VERIFIES,
+  ownSiteDomain,
   withDeadline,
 } from '../../../../../supabase/functions/_shared/sourcing/email';
 import {
   domainTemplate,
   emailLookup,
   emailVerifier,
+  linkedInEmail,
 } from '../../../../../supabase/functions/_shared/sourcing/lookup';
 import type { Candidate } from '../../../../../supabase/functions/_shared/sourcing/search';
+import { linksFor, mailtoFit } from '../../../../../supabase/functions/_shared/sourcing/web';
 import { memoryBudget } from './fakes';
 
 const cand = (c: Partial<Candidate>): Candidate => ({
@@ -528,7 +535,9 @@ describe('the verifier: 4 cases', () => {
 
   it('V4 the finder caps verifications per run, best fit first', async () => {
     const asked: string[] = [];
-    const cs = ['Al One', 'Bo Two', 'Cy Three'].map((name) => cand({ name, url: 'https://beta.io/team' }));
+    const cs = ['Al One', 'Bo Two', 'Cy Three'].map((name) =>
+      cand({ name, org: 'Beta', url: 'https://beta.io/team' }),
+    );
     await fillEmails(cs, {
       known: [],
       orgDomains: new Map(),
@@ -682,5 +691,224 @@ describe('plan 34 A4: Hunter spends less and shows every call', () => {
     const v = emailVerifier({ userId: 'u', hunter: h.hunter, budget, cache: memorySharedCache() })!;
     expect(await v('a@x.com')).toBe('valid');
     expect(events).toEqual(['reserve verify 0.5', 'settle verify 0.5']);
+  });
+});
+
+describe('the email finding audit of 2026-11-24', () => {
+  const found = (email: string): Found => ({
+    email,
+    score: 95,
+    verification: { status: 'valid' },
+    sources: [],
+  });
+
+  it('3 a news page about someone is not their company: no address is built at techcrunch.com', async () => {
+    const inNews = cand({ name: 'Ana Ruiz', org: 'Acme', url: 'https://techcrunch.com/2026/11/acme-raises' });
+    expect(ownSiteDomain(inNews)).toBeUndefined();
+    expect(domainsOf(inNews, new Map())).toEqual([]);
+    const asked: string[] = [];
+    await fillEmails([inNews], {
+      known: [],
+      orgDomains: new Map(),
+      mx: async () => true,
+      template: async (d) => {
+        asked.push(d);
+        return '{first}.{last}';
+      },
+    });
+    expect(inNews.email).toBeUndefined();
+    expect(asked).toEqual([]);
+    // their company's own team page still is
+    const onOwnSite = cand({ name: 'Ana Ruiz', org: 'Acme', url: 'https://team.acme.ai/ana' });
+    expect(domainsOf(onOwnSite, new Map())).toEqual(['acme.ai']);
+    // and the domain the student's contacts teach comes first, whatever the page
+    expect(domainsOf(inNews, new Map([['acme', 'acme.ai']]))).toEqual(['acme.ai']);
+  });
+
+  it('4 a contact’s free-mail, university or personal domain is not the company’s', () => {
+    expect(isCompanyDomain('gmail.com', 'Stripe', { count: 5 })).toBe(false);
+    expect(isCompanyDomain('berkeley.edu', 'Stripe', { count: 3 })).toBe(false);
+    expect(isCompanyDomain('boliu.dev', 'Stripe', { count: 1 })).toBe(false);
+    expect(isCompanyDomain('stripe.com', 'Stripe, Inc.', { count: 1 })).toBe(true);
+    expect(isCompanyDomain('berkeley.edu', 'UC Berkeley', { count: 1 })).toBe(true);
+    // a domain that does not name the company: only on the company facts, or when several contacts there use it
+    expect(isCompanyDomain('squareup.com', 'Block', { count: 1 })).toBe(false);
+    expect(isCompanyDomain('squareup.com', 'Block', { count: 1, facts: new Set(['squareup.com']) })).toBe(
+      true,
+    );
+    expect(isCompanyDomain('squareup.com', 'Block', { count: 2 })).toBe(true);
+  });
+
+  it('5 a finder that did not answer is not a miss: nothing cached, the caller told, the next ask finds it', async () => {
+    let up = false;
+    const finds: Record<string, string>[] = [];
+    const hunter = {
+      configured: true,
+      findEmail: async (p: Record<string, string>) => {
+        finds.push(p);
+        return up
+          ? { ok: true, value: { data: found('maya@stripe.com') } }
+          : { ok: false, kind: 'timeout', provider: 'hunter', message: 'hunter: timed out' };
+      },
+    } as unknown as Hunter;
+    const cache = memorySharedCache();
+    const look = emailLookup({ userId: 'u', hunter, cache });
+    const note: LookupNote = {};
+    expect(await look(maya, note)).toBeUndefined();
+    expect(note.unchecked).toBe(true);
+    up = true;
+    expect(await look(maya)).toMatchObject({ email: 'maya@stripe.com' });
+    expect(finds).toHaveLength(2);
+  });
+
+  it('5 over a cap is not a miss either; a real miss is, and is cached', async () => {
+    const h = fakeHunter(() => found('maya@stripe.com'));
+    const cache = memorySharedCache();
+    const capped: LookupNote = {};
+    const over = emailLookup({
+      userId: 'u',
+      hunter: h.hunter,
+      budget: memoryBudget({ hunter: true }).budget,
+      cache,
+    });
+    expect(await over(maya, capped)).toBeUndefined();
+    expect(capped.unchecked).toBe(true);
+    // the next student, under the cap, is not told "not found" from the cache
+    expect(await emailLookup({ userId: 'u2', hunter: h.hunter, cache })(maya)).toMatchObject({
+      email: 'maya@stripe.com',
+    });
+
+    const none = fakeHunter(() => null);
+    const missed: LookupNote = {};
+    const cache2 = memorySharedCache();
+    const look = emailLookup({ userId: 'u', hunter: none.hunter, cache: cache2 });
+    expect(await look(maya, missed)).toBeUndefined();
+    expect(missed.unchecked).toBeUndefined();
+    const asks = none.finds.length;
+    await look(maya);
+    expect(none.finds).toHaveLength(asks);
+  });
+
+  it('5 a company pattern Hunter could not be asked for says so', async () => {
+    const hunter = {
+      configured: true,
+      domainPattern: async () => ({ ok: false, kind: 'timeout', provider: 'hunter', message: 'timed out' }),
+    } as unknown as Hunter;
+    const t = domainTemplate({ userId: 'u', hunter, cache: memorySharedCache() })!;
+    const note: LookupNote = {};
+    expect(await t('beta.io', note)).toBeUndefined();
+    expect(note.unchecked).toBe(true);
+  });
+
+  it('6 a guessed address does not teach its pattern to the next person at the company', async () => {
+    const acme = new Map([['acme', 'acme.ai']]);
+    const a = cand({ name: 'Ana Ruiz', org: 'Acme', email: 'aruiz@acme.ai', emailConfidence: 'guess' });
+    const b = cand({ name: 'Bo Liu', org: 'Acme' });
+    await fillEmails([a, b], { known: [], orgDomains: acme });
+    expect(b.email).toBeUndefined();
+    // a finder's own guess for the first person teaches nothing either
+    const c = cand({ name: 'Cy Park', org: 'Acme', linkedinUrl: 'https://www.linkedin.com/in/cy-park' });
+    const d = cand({ name: 'Di Wu', org: 'Acme' });
+    await fillEmails([c, d], {
+      known: [],
+      orgDomains: acme,
+      lookup: async (x) =>
+        x.name === 'Cy Park' ? { email: 'cpark@acme.ai', source: 'apollo', status: 'guess' } : undefined,
+    });
+    expect(c.emailConfidence).toBe('guess');
+    expect(d.email).toBeUndefined();
+  });
+
+  it('7 Apollo is verified only on "verified" at the person’s company; its locked placeholder is nothing', async () => {
+    const ask = async (answer: { email?: string; email_status?: string }, c = maya) => {
+      const ap = fakeApollo(() => answer);
+      return emailLookup({ userId: 'u', apollo: ap.apollo, cache: memorySharedCache() })(c);
+    };
+    expect(await ask({ email: 'maya.chen@stripe.com', email_status: 'verified' })).toMatchObject({
+      status: 'verified',
+    });
+    // no status at all used to read as verified
+    expect(await ask({ email: 'maya.chen@stripe.com' })).toMatchObject({ status: 'guess' });
+    expect(await ask({ email: 'maya.chen@stripe.com', email_status: 'likely to engage' })).toMatchObject({
+      status: 'guess',
+    });
+    // "verified" at an old employer's domain is not her address at Stripe
+    expect(await ask({ email: 'maya@oldjob.io', email_status: 'verified' })).toMatchObject({
+      email: 'maya@oldjob.io',
+      status: 'guess',
+    });
+    expect(await ask({ email: 'email_not_unlocked@domain.com', email_status: 'verified' })).toBeUndefined();
+  });
+
+  it('9 a connection’s contact email can be asked for on its own, before anything is built', async () => {
+    const li = fakeUnipile(['Maya.Chen@stripe.com']);
+    const deps = { userId: 'u', unipile: li.unipile, unipileAccountId: 'acc', cache: memorySharedCache() };
+    expect(await linkedInEmail(deps)(cand({ ...maya, networkDistance: 1 }))).toEqual({
+      email: 'maya.chen@stripe.com',
+      source: 'linkedin',
+      status: 'verified',
+    });
+    // not a connection: the profile is not viewed
+    expect(await linkedInEmail(deps)(cand({ ...maya, networkDistance: 2 }))).toBeUndefined();
+    expect(li.calls).toHaveLength(1);
+  });
+
+  it('10 two people who share a last name: a mailto goes to the one whose first name or initial it carries', () => {
+    const people = [{ name: 'Wei Zhang' }, { name: 'Li Zhang' }, { name: 'Raj Patel' }];
+    const anchors = [
+      { href: 'mailto:lzhang@lab.example.edu', text: 'Email' },
+      { href: 'mailto:zhang-lab@lab.example.edu', text: 'Lab' },
+      { href: 'mailto:rpatel@lab.example.edu', text: 'Email' },
+    ];
+    const links = linksFor(anchors, people, 'https://lab.example.edu/people');
+    expect(links.get('Li Zhang')?.email).toBe('lzhang@lab.example.edu');
+    expect(links.get('Wei Zhang')?.email).toBeUndefined();
+    expect(links.get('Raj Patel')?.email).toBe('rpatel@lab.example.edu');
+    // a bare last name fits both Zhangs equally: nobody gets it; a single Zhang would
+    const bare = [{ href: 'mailto:zhang@lab.example.edu', text: 'Email' }];
+    expect(linksFor(bare, people, 'https://lab.example.edu/people').get('Wei Zhang')?.email).toBeUndefined();
+    expect(
+      linksFor(bare, [{ name: 'Wei Zhang' }], 'https://lab.example.edu/people').get('Wei Zhang')?.email,
+    ).toBe('zhang@lab.example.edu');
+    expect(mailtoFit('weizhang', 'wei', 'zhang')).toBeGreaterThan(mailtoFit('wzhang', 'wei', 'zhang'));
+    expect(mailtoFit('lzhang', 'wei', 'zhang')).toBe(0);
+  });
+
+  it('12 a shared inbox is never a person’s address, from a finder, LinkedIn or a page', async () => {
+    for (const e of ['info@acme.ai', 'Hello@acme.ai', 'support@acme.ai', 'founders@acme.ai'])
+      expect(isRoleAddress(e)).toBe(true);
+    expect(isRoleAddress('maya.chen@acme.ai')).toBe(false);
+    expect(isRoleAddress('infante@acme.ai')).toBe(false);
+
+    // LinkedIn: her own address is taken, the company inbox beside it is not
+    const both = fakeUnipile(['info@stripe.com', 'maya@stripe.com']);
+    const li = (u: typeof both) =>
+      emailLookup({ userId: 'u', unipile: u.unipile, unipileAccountId: 'acc', cache: memorySharedCache() });
+    expect(await li(both)(cand({ ...maya, networkDistance: 1 }))).toMatchObject({ email: 'maya@stripe.com' });
+    expect(
+      await li(fakeUnipile(['hello@stripe.com']))(cand({ ...maya, networkDistance: 1 })),
+    ).toBeUndefined();
+
+    // finders
+    const h = fakeHunter(() => found('info@stripe.com'));
+    expect(
+      await emailLookup({ userId: 'u', hunter: h.hunter, cache: memorySharedCache() })(maya),
+    ).toBeUndefined();
+    const ap = fakeApollo(() => ({ email: 'support@stripe.com', email_status: 'verified' }));
+    expect(
+      await emailLookup({ userId: 'u', apollo: ap.apollo, cache: memorySharedCache() })(maya),
+    ).toBeUndefined();
+
+    // a page: the office inbox printed beside a professor, and a mailto to it
+    const prof = cand({ name: 'Sam Office', org: 'Acme', email: 'office@acme.ai' });
+    await fillEmails([prof], { known: [], orgDomains: new Map() });
+    expect(prof.email).toBeUndefined();
+    expect(prof.emailConfidence).toBeUndefined();
+    const links = linksFor(
+      [{ href: 'mailto:office@acme.ai', text: 'Email' }],
+      [{ name: 'Sam Office' }],
+      'https://acme.ai/team',
+    );
+    expect(links.get('Sam Office')?.email).toBeUndefined();
   });
 });

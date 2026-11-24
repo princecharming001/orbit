@@ -15,6 +15,7 @@ import { CompanyLogo } from '../components/CompanyLogo';
 import { SchedulingLinkField } from '../components/SchedulingLinkField';
 import { ChoiceTiles } from '../components/settings/kit';
 import { type BatchRow, db } from '../db/schema';
+import { addressUnconfirmed } from '../engine/addressNote';
 import {
   applyTemplate,
   type BatchOutcome,
@@ -146,7 +147,10 @@ export function SendManyPage() {
         const d = drafts.find((x) => x.personId === p.id && x.status === 'draft');
         out.push({
           person: p,
-          state: d ? { state: 'ready' } : await recipientState(user, p),
+          // a draft to an address Orbit built is still to an unconfirmed address, and the row says so
+          state: d
+            ? { state: 'ready', ...(addressUnconfirmed(p) ? { unconfirmed: true } : {}) }
+            : await recipientState(user, p),
           draftId: d?.id,
         });
       }

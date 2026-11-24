@@ -14,7 +14,9 @@
  * (1 credit per domain, cached) is used then too, and a search itself reads only the cached patterns (free).
  * The verifier (Reoon with REOON_API_KEY, else Hunter's) checks a built or guessed address before a send, never before.
  * Each paid answer, found or not, is kept 30 days in the shared research cache so a person is looked up once for
- * everyone (a LinkedIn contact email never is: only the student's connections may see it);
+ * everyone (a LinkedIn contact email never is: only the student's connections may see it). Only an answer is kept:
+ * a source that timed out, was over a cap, had no credits left or was switched off has not said "no address", so
+ * nothing is cached and the caller is told the person could not be checked (`LookupNote.unchecked`);
  * every call goes through the per-user daily caps (budget.ts: 10 Hunter, Enrow or Icypeas credits, 10 Apollo matches,
  * 25 Reoon checks, 40 profile views) and Hunter's 40 credits a month for everyone. A credit call reserves its credit
  * before it goes out and settles after, so lookups running in parallel cannot pass a cap together; a miss is kept at
@@ -31,14 +33,16 @@ import type { BudgetDep, BudgetProvider } from '../research/deps';
 import type { SharedCache } from '../research/web';
 import {
   type DomainTemplate,
+  domainNamesOrg,
   type EmailLookup,
+  isRoleAddress,
   isUniversity,
   type LookedUp,
   nameParts,
   type Verify,
 } from './email';
 import type { Candidate } from './search';
-import { orgsOf } from './warmth';
+import { orgsOf, siteDomain } from './warmth';
 
 export const LOOKUP_TTL_MS = 30 * 24 * 3600 * 1000;
 
@@ -66,6 +70,11 @@ export interface LookupDeps {
 }
 
 type Cached = LookedUp | { none: true };
+
+/** What the sources of one lookup ran into: `failed` when one could not be asked or did not answer. */
+interface Trace {
+  failed: boolean;
+}
 
 /** A credit reserved for one call; `settle` writes what it cost (0 for a miss, kept as an attempt). */
 interface Slot {
@@ -101,18 +110,23 @@ async function take(
 
 /** The lookup, one candidate at a time; undefined when nothing verified could be found or nothing identifies them. */
 export function emailLookup(d: LookupDeps): EmailLookup {
-  return async (c) => {
+  return async (c, note) => {
     const slug = linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl));
     const n = c.lastNameObfuscated ? undefined : nameParts(c.name, c.firstName, c.lastName);
     const domain = d.domainOf?.(c);
     // a 1st-degree connection's own contact email is shown to their connections only: never cached for anyone else
-    const mine = await fromLinkedIn(d, c, slug);
+    const li: Trace = { failed: false };
+    const mine = await fromLinkedIn(d, c, slug, li);
     if (mine) return mine;
+    const miss = (failed: boolean) => {
+      if (note && (failed || li.failed)) note.unchecked = true;
+      return undefined;
+    };
     // the paid sources' answers are the same for everyone; the key names which were asked, so a key added later
     // asks again instead of reading an old miss
     const finder = d.enrow?.configured ? 'e' : d.icypeas?.configured ? 'i' : '';
     const asked = `${finder}${d.hunter?.configured ? 'h' : ''}${d.apollo?.configured ? 'a' : ''}`;
-    if (!asked) return undefined;
+    if (!asked) return miss(false);
     const who = slug
       ? `li:${slug}`
       : c.memberId
@@ -122,16 +136,34 @@ export function emailLookup(d: LookupDeps): EmailLookup {
           : n && orgsOf(c)[0]
             ? `nc:${n.f}.${n.l}@${orgsOf(c)[0]!.toLowerCase()}`
             : undefined;
-    if (!who) return undefined;
+    if (!who) return miss(false);
     const key = `email:${asked}:${who}`;
     const hit = (await d.cache.get(key).catch(() => undefined)) as Cached | undefined;
-    if (hit) return 'none' in hit ? undefined : hit;
+    // an answer kept before shared inboxes were refused is a miss too
+    if (hit) return 'none' in hit || isRoleAddress(hit.email) ? miss(false) : hit;
+    const paid: Trace = { failed: false };
     const found =
-      (await fromFinder(d, c, n, domain)) ??
-      (await fromHunter(d, c, slug, n, domain)) ??
-      (await fromApollo(d, c, domain));
-    await d.cache.put(key, 'email_lookup', found ?? { none: true }, LOOKUP_TTL_MS).catch(() => undefined);
-    return found;
+      (await fromFinder(d, c, n, domain, paid)) ??
+      (await fromHunter(d, c, slug, n, domain, paid)) ??
+      (await fromApollo(d, c, domain, paid));
+    // "nobody found" is kept only when every source asked really answered: a miss cached after a timeout or a cap
+    // would hide the person's address from everyone for 30 days
+    if (found || !paid.failed)
+      await d.cache.put(key, 'email_lookup', found ?? { none: true }, LOOKUP_TTL_MS).catch(() => undefined);
+    return found ?? miss(paid.failed);
+  };
+}
+
+/**
+ * A 1st-degree connection's contact email on its own, for a caller that wants it before anything it would build
+ * (ondemand.ts): the address the person chose to show beats a pattern or a guess.
+ */
+export function linkedInEmail(d: LookupDeps): EmailLookup {
+  return async (c, note) => {
+    const t: Trace = { failed: false };
+    const mine = await fromLinkedIn(d, c, linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl)), t);
+    if (!mine && t.failed && note) note.unchecked = true;
+    return mine;
   };
 }
 
@@ -140,20 +172,28 @@ async function fromLinkedIn(
   d: LookupDeps,
   c: Candidate,
   slug: string | undefined,
+  t: Trace,
 ): Promise<LookedUp | undefined> {
   if (c.networkDistance !== 1 || !d.unipile?.configured || !d.unipileAccountId) return undefined;
   const id = c.memberId ?? slug;
   if (!id) return undefined;
-  if (d.budget && !(await d.budget.check(d.userId, 'unipile_profile', 1)).ok) return undefined;
+  const fail = () => {
+    t.failed = true;
+    return undefined;
+  };
+  if (d.budget && !(await d.budget.check(d.userId, 'unipile_profile', 1)).ok) return fail();
   const r = await d.unipile.profile(d.unipileAccountId, id, { sections: [] });
-  if (!r.ok) return undefined;
+  if (!r.ok) return fail();
   await d.budget?.record(d.userId, {
     provider: 'unipile_profile',
     operation: 'profile_view',
     units: 1,
     costUsd: 0,
   });
-  const email = r.value.contact_info?.emails?.find((e) => typeof e === 'string' && e.includes('@'));
+  // their own address, not a shared inbox a founder lists beside it
+  const email = r.value.contact_info?.emails?.find(
+    (e) => typeof e === 'string' && e.includes('@') && !isRoleAddress(e),
+  );
   return email ? { email: email.trim().toLowerCase(), source: 'linkedin', status: 'verified' } : undefined;
 }
 
@@ -167,11 +207,16 @@ async function fromFinder(
   c: Candidate,
   n: { f: string; l: string } | undefined,
   domain: string | undefined,
+  t: Trace,
 ): Promise<LookedUp | undefined> {
   if (!n || !domain) return undefined;
+  const fail = () => {
+    t.failed = true;
+    return undefined;
+  };
   if (d.enrow?.configured) {
     const slot = await take(d, 'enrow', 'find', 1, CREDIT_USD.enrow);
-    if (!slot) return undefined;
+    if (!slot) return fail();
     const r = await d.enrow.findEmail({
       fullname: `${n.f} ${n.l}`,
       domain,
@@ -181,16 +226,18 @@ async function fromFinder(
     const valid = r.ok && (r.value.qualification ?? '').toLowerCase() === 'valid';
     // one credit per address found; none for a miss
     await slot.settle(email?.includes('@') ? Math.max(1, r.ok ? (r.value.credits_used ?? 1) : 1) : 0);
-    if (email?.includes('@') && valid && email.endsWith(`@${domain}`))
+    if (!r.ok) return fail();
+    if (email?.includes('@') && valid && email.endsWith(`@${domain}`) && !isRoleAddress(email))
       return { email, source: 'enrow', status: 'verified' };
     return undefined;
   }
   if (d.icypeas?.configured) {
     const slot = await take(d, 'icypeas', 'find', 1, CREDIT_USD.icypeas);
-    if (!slot) return undefined;
+    if (!slot) return fail();
     const r = await d.icypeas.findEmail({ firstname: n.f, lastname: n.l, domainOrCompany: domain });
     await slot.settle(r.ok && r.value.debited ? 1 : 0);
-    if (!r.ok || !r.value.email?.includes('@')) return undefined;
+    if (!r.ok) return fail();
+    if (!r.value.email?.includes('@') || isRoleAddress(r.value.email)) return undefined;
     const sure = /^(ultra_sure|very_sure)$/i.test(r.value.certainty ?? '');
     return { email: r.value.email, source: 'icypeas', status: sure ? 'verified' : 'guess' };
   }
@@ -204,8 +251,13 @@ async function fromHunter(
   slug: string | undefined,
   n: { f: string; l: string } | undefined,
   domain: string | undefined,
+  t: Trace,
 ): Promise<LookedUp | undefined> {
   if (!d.hunter?.configured) return undefined;
+  const fail = () => {
+    t.failed = true;
+    return undefined;
+  };
   const asks: { by: 'handle' | 'name'; params: Parameters<Hunter['findEmail']>[0] }[] = [];
   if (slug) asks.push({ by: 'handle', params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: 'name', params: { first_name: n.f, last_name: n.l, domain } });
@@ -214,17 +266,17 @@ async function fromHunter(
   if (n && company) asks.push({ by: 'name', params: { first_name: n.f, last_name: n.l, company } });
   for (const ask of asks) {
     const slot = await take(d, 'hunter', 'find', 1);
-    if (!slot) return undefined;
+    if (!slot) return fail();
     const r = await d.hunter.findEmail(ask.params);
     if (!r.ok) {
       await slot.settle(0);
-      return undefined;
+      return fail();
     }
     const h = r.value.data;
     const email = h?.email?.trim().toLowerCase();
     // charged only when it finds one
     await slot.settle(h && email?.includes('@') ? 1 : 0);
-    if (!h || !email?.includes('@')) continue;
+    if (!h || !email?.includes('@') || isRoleAddress(email)) continue;
     // their LinkedIn profile is someone else's: a namesake
     const theirs = linkedInSlugOf(cleanLinkedInUrl(h.linkedin_url));
     if (slug && theirs && theirs !== slug) continue;
@@ -266,15 +318,21 @@ export function domainTemplate(
   const hunter = d.hunter;
   if (!hunter?.configured) return undefined;
   const asked = new Map<string, Promise<string | undefined>>();
+  // the domains Hunter could not be asked about in this run (a cap, a timeout): not the same as having no pattern
+  const failed = new Set<string>();
   const ask = async (domain: string): Promise<string | undefined> => {
     const key = `pattern:${domain}`;
     const hit = (await d.cache.get(key).catch(() => undefined)) as { t?: string; none?: true } | undefined;
     if (hit) return hit.t;
     const slot = await take(d, 'hunter', 'domain', 1);
-    if (!slot) return undefined;
+    if (!slot) {
+      failed.add(domain);
+      return undefined;
+    }
     const r = await hunter.domainPattern(domain);
     if (!r.ok) {
       await slot.settle(0);
+      failed.add(domain);
       return undefined;
     }
     const t = r.value.data?.pattern ?? undefined;
@@ -282,14 +340,16 @@ export function domainTemplate(
     await d.cache.put(key, 'email_pattern', t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => undefined);
     return t;
   };
-  return (domain) => {
+  return async (domain, note) => {
     const k = domain.toLowerCase();
     let p = asked.get(k);
     if (!p) {
       p = ask(k);
       asked.set(k, p);
     }
-    return p;
+    const t = await p;
+    if (!t && note && failed.has(k)) note.unchecked = true;
+    return t;
   };
 }
 
@@ -344,11 +404,20 @@ export function cachedTemplate(cache: SharedCache): DomainTemplate {
   };
 }
 
-/** Apollo People Match: by LinkedIn URL, else by name and company domain. */
+/** Apollo shows this in place of an address its plan has not unlocked: "email_not_unlocked@domain.com". */
+const APOLLO_LOCKED = /not_unlocked|^email_not|@domain\.com$/;
+
+/**
+ * Apollo People Match: by LinkedIn URL, else by name and company domain. Verified only when Apollo says exactly
+ * "verified" and the address is at the person's company (the domain Orbit knows for it, one named for it, or, when
+ * Orbit knows no company for them, the one Apollo gives for their current job). Anything else it returns is a guess:
+ * an old employer's address, or a status Apollo did not check.
+ */
 async function fromApollo(
   d: LookupDeps,
   c: Candidate,
   domain: string | undefined,
+  t: Trace,
 ): Promise<LookedUp | undefined> {
   if (!d.apollo?.configured) return undefined;
   const url = cleanLinkedInUrl(c.linkedinUrl);
@@ -362,14 +431,29 @@ async function fromApollo(
       : undefined;
   if (!params) return undefined;
   const slot = await take(d, 'apollo_match', 'match', 1);
-  if (!slot) return undefined;
+  if (!slot) {
+    t.failed = true;
+    return undefined;
+  }
   const r = await d.apollo.matchPerson({ ...params, reveal_personal_emails: false });
   await slot.settle(r.ok ? 1 : 0);
-  if (!r.ok) return undefined;
+  if (!r.ok) {
+    t.failed = true;
+    return undefined;
+  }
   const p = r.value.person;
   const email = p?.email?.trim().toLowerCase();
-  if (!email?.includes('@')) return undefined;
-  const status = (p?.email_status ?? '').toLowerCase();
+  if (!email?.includes('@') || APOLLO_LOCKED.test(email) || isRoleAddress(email)) return undefined;
+  const status = (p?.email_status ?? '').trim().toLowerCase();
   if (/unavailable|bounced|invalid/.test(status)) return undefined;
-  return { email, source: 'apollo', status: /guess|extrapolat/.test(status) ? 'guess' : 'verified' };
+  const at = email.split('@')[1] ?? '';
+  const orgs = [...(c.org ? [c.org] : []), ...orgsOf(c)];
+  const apolloDomain = (
+    p?.organization?.primary_domain ?? siteDomain(p?.organization?.website_url ?? undefined)
+  )?.toLowerCase();
+  const theirCompany =
+    at === domain?.toLowerCase() ||
+    orgs.some((o) => domainNamesOrg(at, o)) ||
+    (!orgs.length && !domain && !!url && at === apolloDomain);
+  return { email, source: 'apollo', status: status === 'verified' && theirCompany ? 'verified' : 'guess' };
 }

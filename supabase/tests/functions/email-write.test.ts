@@ -182,6 +182,45 @@ describe('an email the student wrote is sent from Orbit', () => {
     expect(same.status).toBe(200);
   });
 
+  it('an address Orbit only guessed gives way to the one the student writes to, which is then theirs', async () => {
+    const s = await setup({ email: 'ivy.chen@example.com' });
+    await t.db.sql`
+      update orbit.people set email_confidence = 'guess', email_checked_at = now() where id = ${s.personId}::uuid`;
+    const r = await s.approve(
+      { draftId: crypto.randomUUID(), undoSec: undefined },
+      { to: 'Ivy@Example.org' },
+    );
+    expect(r.status).toBe(200);
+    expect(r.body.draft.status).toBe('sent');
+    const [p] = await t.db.sql<Record<string, unknown>>`
+      select primary_email, email_confidence, email_checked_at from orbit.people where id = ${s.personId}::uuid`;
+    expect(p).toEqual({ primary_email: 'ivy@example.org', email_confidence: null, email_checked_at: null });
+    const raw = Buffer.from(String((s.sends()[0]!.body as { raw: string }).raw), 'base64url').toString(
+      'utf8',
+    );
+    expect(raw).toMatch(/^To: .*ivy@example\.org/m);
+  });
+
+  it('a message to a guessed address nothing could confirm still goes, and the result says so', async () => {
+    const s = await setup({ email: 'ivy.chen@example.com' });
+    await t.db.sql`update orbit.people set email_confidence = 'guess' where id = ${s.personId}::uuid`;
+    const id = crypto.randomUUID();
+    await s.approve({ draftId: id });
+    await t.db.sql`update orbit.drafts set send_at = now() - interval '1 second' where id = ${id}::uuid`;
+    // no verifier key is set: the address cannot be checked
+    const out = await sendDraft(makeServices(agentConfig(s.net, {}), { db: t.db }), id);
+    expect(out).toMatchObject({ status: 'sent', addressUnconfirmed: true });
+    expect(s.sends()).toHaveLength(1);
+    // an address from the student's own mail says nothing of the kind
+    const own = await setup();
+    const id2 = crypto.randomUUID();
+    await own.approve({ draftId: id2 });
+    await t.db.sql`update orbit.drafts set send_at = now() - interval '1 second' where id = ${id2}::uuid`;
+    const sent = await sendDraft(makeServices(agentConfig(own.net, {}), { db: t.db }), id2);
+    expect(sent.status).toBe('sent');
+    expect('addressUnconfirmed' in sent).toBe(false);
+  });
+
   it('no address anywhere, or no subject on a new email: refused with the reason, nothing kept', async () => {
     const none = await setup({});
     const a = await none.approve<Refused>();
