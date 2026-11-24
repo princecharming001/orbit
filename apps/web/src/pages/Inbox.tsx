@@ -1,5 +1,5 @@
 import type { CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion } from '@orbit/core';
-import { CHANNEL_LABELS, draftKindLabel, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
+import { draftKindLabel, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -539,7 +539,6 @@ export function InboxPage() {
                             {p?.displayName ?? 'Unknown'}
                           </Link>
                           <Chip>{MESSAGE_KIND_LABELS[o.kind]}</Chip>
-                          <Chip>{CHANNEL_LABELS[o.channel]}</Chip>
                           <span className="text-ink-3 ml-auto text-[12px]">{relDate(o.sentAt)}</span>
                         </div>
                         <p className="text-[13px] text-ink-2 mt-1 line-clamp-2 whitespace-pre-line">
@@ -746,7 +745,6 @@ function OutboxItem({ o, person }: { o: OutboundMessage; person?: Person }) {
           {person?.displayName ?? 'Unknown'}
         </Link>
         <Chip>{draftKindLabel(o.kind, person && lastTouch(person))}</Chip>
-        <Chip>{CHANNEL_LABELS[o.channel]}</Chip>
         {o.status === 'failed' && <Chip tone="bad">Not sent</Chip>}
       </div>
       {o.status === 'failed' ? (

@@ -162,7 +162,8 @@ describe('MessageRow', () => {
   it('keeps one draft open at a time, and a message waiting for I sent it starts open', () => {
     const waiting = host.querySelector<HTMLElement>('[data-testid="outbox-item"]')!;
     expect(waiting.querySelector('[data-testid="outbox-item-body"]')?.textContent).toMatch(/I sent it/);
-    expect(waiting.textContent).toMatch(/LinkedIn/);
+    // no tag for where it goes: a subject line says email
+    expect(waiting.textContent).not.toMatch(/LinkedIn/);
     const [first, second] = rows();
     click(toggle(first!));
     click(toggle(second!));

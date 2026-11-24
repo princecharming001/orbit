@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCurrentUserId } from '../db/repo';
 import { db, wipeDatabase } from '../db/schema';
 import { draftTypedMessage } from '../engine/brief';
@@ -102,7 +102,17 @@ afterEach(async () => {
 describe('the To line of an email to a sourced person', () => {
   it('a guessed address is shown with a quiet note that it is not confirmed', async () => {
     const ui = await mount();
-    expect(ui.q('draft-to')?.textContent).toBe('jo.park@beta.io');
+    // the name in full on the To line; a click shows the address, with a way to copy it
+    expect(ui.q('draft-to')?.textContent).toBe('Jo Park');
+    expect(ui.q('recipient-card')).toBeNull();
+    await act(async () => ui.q('recipient-chip')!.click());
+    expect(ui.q('recipient-name')?.textContent).toBe('Jo Park');
+    expect(ui.q('recipient-email')?.textContent).toBe('jo.park@beta.io');
+    const writeText = vi.fn(async () => {});
+    Object.assign(navigator, { clipboard: { writeText } });
+    await act(async () => ui.q('recipient-copy')!.click());
+    expect(writeText).toHaveBeenCalledWith('jo.park@beta.io');
+    expect(ui.q('recipient-copy')?.textContent).toBe('Copied');
     const note = ui.q('draft-to-note');
     expect(note?.textContent).toBe('Guessed address, not confirmed');
     expect(note?.className).toMatch(/text-ink-3/);
@@ -116,7 +126,7 @@ describe('the To line of an email to a sourced person', () => {
     built.unmount();
     await db.people.update(PERSON_ID, { emailConfidence: 'verified' });
     const sure = await mount();
-    expect(sure.q('draft-to')?.textContent).toBe('jo.park@beta.io');
+    expect(sure.q('draft-to')?.textContent).toBe('Jo Park');
     expect(sure.q('draft-to-note')).toBeNull();
     sure.unmount();
   });

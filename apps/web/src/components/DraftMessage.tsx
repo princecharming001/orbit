@@ -1,5 +1,5 @@
 import type { OutboundMessage, Person } from '@orbit/core';
-import { CHANNEL_LABELS, draftKindLabel } from '@orbit/core';
+import { draftKindLabel } from '@orbit/core';
 import { ChevronDown } from 'lucide-react';
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -55,9 +55,6 @@ function Chips({ o, person }: { o: OutboundMessage; person?: Person }) {
       <Chip className="h-[18px] text-[10.5px] px-1.5 shrink-0">
         {draftKindLabel(o.kind, person && lastTouch(person))}
       </Chip>
-      {o.channel !== 'gmail' && (
-        <Chip className="h-[18px] text-[10.5px] px-1.5 shrink-0">{CHANNEL_LABELS[o.channel]}</Chip>
-      )}
     </>
   );
 }

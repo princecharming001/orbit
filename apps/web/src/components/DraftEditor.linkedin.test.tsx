@@ -128,27 +128,14 @@ afterEach(async () => {
 });
 
 describe('a LinkedIn message written in Orbit, on an Orbit account', () => {
-  it('the box says where the message goes with a small sign: LinkedIn here, the Gmail logo on an email', async () => {
+  it('no sign for where it goes: an email has a subject line, a LinkedIn message does not', async () => {
     const ui = await mount();
-    // a card has no To line, so the sign stands by the buttons; it is named for a screen reader and on hover
-    const mark = ui.q('draft-channel');
-    expect(mark?.dataset.channel).toBe('linkedin');
-    expect(mark?.getAttribute('aria-label')).toBe('LinkedIn message');
-    expect(mark?.getAttribute('title')).toBe('LinkedIn message');
+    expect(ui.q('draft-channel')).toBeNull();
     ui.unmount();
-    // the same draft as an email shows the Gmail logo instead
     await db.outbound.update(draftId, { channel: 'gmail', subject: 'Hello' });
     const mail = await mount();
-    const sign = mail.q('draft-channel');
-    expect(sign?.dataset.channel).toBe('gmail');
-    expect(sign?.getAttribute('aria-label')).toBe('Email');
-    expect(sign?.querySelector('svg')).toBeTruthy();
+    expect(mail.q('draft-channel')).toBeNull();
     mail.unmount();
-    // a message with no inbox of its own (copied to the clipboard) shows no sign rather than a wrong one
-    await db.outbound.update(draftId, { channel: 'clipboard' });
-    const copy = await mount();
-    expect(copy.q('draft-channel')).toBeNull();
-    copy.unmount();
   });
 
   it('LinkedIn linked: Send sends it from Orbit on that one tap, and LinkedIn is never opened', async () => {
