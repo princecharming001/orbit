@@ -2,7 +2,7 @@ import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { type CSSProperties, useEffect, useRef } from 'react';
 import { db } from '../db/schema';
-import { Avatar, Chip, cx } from '../ui';
+import { Avatar, cx } from '../ui';
 import { PersonCompanyLogo } from './CompanyLogo';
 import { MessageOption, MessagePane } from './DraftMessage';
 import { ResizeHandle, useResizableWidth } from './ResizeHandle';
@@ -177,10 +177,11 @@ function DraftRow({
             {person && <PersonCompanyLogo person={person} size={14} />}
           </span>
           <span className="flex items-center gap-1.5 mt-0.5">
-            <Chip tone={meta.tone} className="h-[18px] text-[10.5px] px-1.5 shrink-0">
+            {/* what kind of card, as a quiet word before the reason */}
+            <span className="text-[12px] text-ink-2 shrink-0" data-testid="drafts-row-kind">
               {meta.label}
-            </Chip>
-            <span className="text-[12px] text-ink-3 truncate">{s.reasonText}</span>
+            </span>
+            <span className="text-[12px] text-ink-3 truncate">· {s.reasonText}</span>
           </span>
           {gap && (
             <span className="block text-[11.5px] text-warn mt-0.5 truncate" data-testid="drafts-row-gap">

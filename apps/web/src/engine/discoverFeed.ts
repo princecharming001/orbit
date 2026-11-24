@@ -530,7 +530,9 @@ export async function discoverView(
         distance: e.distance,
         mutualCount: e.mutualCount,
         schoolEvidence: e.schoolEvidence,
-        colleague: mate ? { firstName: mate.firstName, strength: mate.strength } : undefined,
+        colleague: mate
+          ? { firstName: mate.firstName, strength: mate.strength, name: mate.displayName || mate.firstName }
+          : undefined,
         why: e.why,
       },
       profile,
@@ -578,7 +580,13 @@ export async function discoverView(
   for (const { e, role, name, initial, mate, s } of candidates) {
     const why = whyFromReasons(
       s.reasons,
-      { title: role, company: e.company, headline: e.headline, mutualCount: e.mutualCount },
+      {
+        title: role,
+        company: e.company,
+        headline: e.headline,
+        mutualCount: e.mutualCount,
+        colleague: mate ? { id: mate.id, name: mate.displayName || mate.firstName } : undefined,
+      },
       { filler: false },
     );
     const metrics: CardMetrics = {

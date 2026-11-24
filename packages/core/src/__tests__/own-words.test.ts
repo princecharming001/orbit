@@ -126,7 +126,9 @@ describe('who the student wants to meet', () => {
     const a = scoreDiscoverCandidate(founder, plain);
     const b = scoreDiscoverCandidate(founder, want);
     expect(b.fit).toBeGreaterThan(a.fit);
-    expect(b.reasons.map((r) => r.text)).toContain('Founder at Acme, who you said you want to meet');
+    expect(b.reasons.map((r) => r.text)).toContain(
+      'Founder at Acme: the kind of person you said you want to meet.',
+    );
     expect(b.goalLink).toBe(true);
   });
 });

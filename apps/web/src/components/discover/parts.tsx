@@ -2,9 +2,10 @@
  * Pieces every Discover card shares: the "Why them" block, the Match, Reach and Reply odds meters, the "not a fit"
  * menu, the LinkedIn degree, and the skeleton shown while a page of people loads.
  */
-import type { WhyReason } from '@orbit/core';
+import { type WhyPerson, type WhyReason, whyCard } from '@orbit/core';
 import { ThumbsDown } from 'lucide-react';
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { PersonPoint } from '../../engine/personPoints';
 import { POINT_LABELS } from '../../engine/personPoints';
 import { RECOMMENDATION_DISMISS_REASONS, type RecommendationDismissReason } from '../../engine/recommend';
@@ -197,29 +198,76 @@ export function DismissMenu({
   );
 }
 
-/** How many reasons a card shows before More. */
-const WHY_SHOWN = 2;
+/** How many lines a card shows before Show more: the summary and three reasons. */
+const WHY_SHOWN = 4;
 
 /**
- * Why them: the reasons behind the pick, the most specific first, each from a signal in the account (core whyThem).
- * Two show; More opens the rest in place, with what else is worth knowing about them (the points). Discover shows
- * nobody without a specific reason, so no card fills the space with how little is known. The folded lines stay in
- * the page (hidden), so search and screen readers find them.
+ * A reason's text with the people it names linked to their pages. Each name is linked once, where it first appears.
+ */
+export function LinkedText({ text, people = [] }: { text: string; people?: WhyPerson[] }) {
+  const named = people.filter((p) => p.name && text.includes(p.name));
+  if (!named.length) return <>{text}</>;
+  const parts: ReactNode[] = [];
+  let rest = text;
+  let key = 0;
+  while (rest) {
+    // the name that comes first in what is left
+    let hit: { at: number; p: WhyPerson } | undefined;
+    for (const p of named) {
+      const at = rest.indexOf(p.name);
+      if (at >= 0 && (!hit || at < hit.at)) hit = { at, p };
+    }
+    if (!hit) {
+      parts.push(rest);
+      break;
+    }
+    if (hit.at) parts.push(rest.slice(0, hit.at));
+    parts.push(
+      <Link key={key++} to={`/people/${hit.p.id}`} className="text-ink underline-offset-2 hover:underline">
+        {hit.p.name}
+      </Link>,
+    );
+    rest = rest.slice(hit.at + hit.p.name.length);
+    named.splice(named.indexOf(hit.p), 1);
+    if (!named.length) {
+      if (rest) parts.push(rest);
+      break;
+    }
+  }
+  return <>{parts}</>;
+}
+
+/**
+ * Why them: one sentence on why this person is worth writing to (core whySummary), then the reasons behind it as full
+ * sentences with the specifics, each from a signal in the account (core whyThem). The summary and three reasons show;
+ * Show more opens the rest in place, with what else is worth knowing about them (the points). Discover shows nobody
+ * without a specific reason, so no card fills the space with how little is known. The folded lines stay in the page
+ * (hidden), so search and screen readers find them.
  */
 export function WhyThem({
   reasons,
   points = [],
+  firstName,
   testId,
 }: {
   reasons: WhyReason[];
   points?: PersonPoint[];
+  /** their first name, for the summary sentence */
+  firstName?: string;
   testId: string;
 }) {
   const [open, setOpen] = useState(false);
-  const lead = reasons.slice(0, WHY_SHOWN);
-  const rest = reasons.slice(WHY_SHOWN);
-  // a point that says what a reason already says is left out
-  const extra = points.filter((pt) => !reasons.some((r) => r.text.toLowerCase() === pt.text.toLowerCase()));
+  const { summary, bullets } = whyCard(reasons, firstName);
+  const room = WHY_SHOWN - (summary ? 1 : 0);
+  const lead = bullets.slice(0, room);
+  const rest = bullets.slice(room);
+  // a point that says what a reason already says is left out: the same words, or a new role the reasons name
+  const changed = reasons.some((r) => r.kind === 'role_change');
+  const extra = points.filter(
+    (pt) =>
+      !reasons.some((r) => r.text.replace(/\.$/, '').toLowerCase() === pt.text.toLowerCase()) &&
+      !(changed && pt.kind === 'timing'),
+  );
   const hidden = rest.length + extra.length;
   const line = (r: WhyReason, i: number, folded: boolean) => (
     <li
@@ -235,15 +283,22 @@ export function WhyThem({
       <span aria-hidden className="shrink-0 text-ink-3">
         {r.kind === 'thin' ? '–' : '•'}
       </span>
-      <span className="min-w-0">{r.text}</span>
+      <span className="min-w-0">
+        <LinkedText text={r.text} people={r.people} />
+      </span>
     </li>
   );
   return (
     <div data-testid={testId} className="min-w-0">
       <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-ink-3 mb-1">Why them</p>
-      <ul className="space-y-1 text-[13px]">
+      {summary && (
+        <p className="text-[13.5px] leading-snug text-ink mb-1.5" data-testid="why-summary">
+          {summary}
+        </p>
+      )}
+      <ul className="space-y-1 text-[13px] leading-snug">
         {lead.map((r, i) => line(r, i, false))}
-        {rest.map((r, i) => line(r, i + WHY_SHOWN, true))}
+        {rest.map((r, i) => line(r, i + room, true))}
       </ul>
       {extra.length > 0 && (
         <ul className={cx('mt-1.5 space-y-1.5 text-[13px]', !open && 'hidden')} data-testid="rec-points">
@@ -265,7 +320,7 @@ export function WhyThem({
           aria-expanded={open}
           data-testid="rec-points-more"
         >
-          {open ? 'Less' : `+${hidden} more`}
+          {open ? 'Show less' : 'Show more'}
         </button>
       )}
     </div>

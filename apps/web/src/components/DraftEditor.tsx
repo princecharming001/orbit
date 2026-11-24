@@ -154,7 +154,7 @@ export function DraftEditor({
    * (the most urgent; the rest one tap away). The pages keep the full editor.
    */
   compact?: boolean;
-  /** more buttons beside the approve button (the chat's approval card puts Cancel there) */
+  /** more buttons beside the approve button (the chat's approval card puts Cancel there), or beside Close in the full editor (a card's Dismiss) */
   extraActions?: ReactNode;
   /** resolves to an error to show inline when the message was not approved */
   onApprove: (body: string, subject?: string) => Promise<string | undefined>;
@@ -1236,8 +1236,10 @@ export function DraftEditor({
             Reset to suggested
           </button>
         )}
-        {(!thread || onCancel) && (
+        {(!thread || onCancel || extraActions) && (
           <span className="ml-auto flex items-center gap-2">
+            {/* the card's own quiet actions (Dismiss) sit beside Close, never on a row of their own */}
+            {extraActions}
             {onCancel && (
               <Button variant="ghost" size="sm" onClick={cancel} data-testid="draft-cancel">
                 Close

@@ -1495,8 +1495,10 @@ test.describe('Setup without Google', () => {
     await toast.getByRole('button', { name: /see who to meet/i }).click();
     await expect(page).toHaveURL(/\/discover$/);
     const priya = page.getByTestId('rec-card').filter({ hasText: 'Priya Raman' });
-    // the card says why: her role at a company on the target list, from her own headline
-    await expect(priya).toContainText('Investment Banking Analyst at Goldman Sachs, on your target list');
+    // the card says why in one sentence: her role at a company on the target list, from her own headline
+    await expect(priya.getByTestId('why-summary')).toContainText(
+      /^Worth writing to because Priya is an Investment Banking Analyst at Goldman Sachs, (one of your top target companies|a company on your target list)/,
+    );
     // a consultant is not called a banker
     await expect(page.getByTestId('rec-card').filter({ hasText: 'Marcus Webb' })).toHaveCount(0);
     // Start warm-up keeps the student on the list

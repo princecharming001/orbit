@@ -308,8 +308,12 @@ describe('the Discover feed of new people', () => {
     expect(intros.length).toBe(2);
     // the card leads with why to meet them (their role at a target company); Maya is the way in, named among the
     // reasons and on the button
-    expect(intros[0]!.why[0]!.text).toMatch(/at Stripe, on your target list$/);
-    expect(intros[0]!.why.map((w) => w.text)).toContain('Maya, whom you know, works at Stripe too');
+    expect(intros[0]!.why[0]!.text).toMatch(
+      /Stripe(,| is) (one of your top target companies|on your target list)\.$/,
+    );
+    const way = intros[0]!.why.find((w) => w.kind === 'colleague');
+    expect(way?.text).toBe('Maya Chen, whom you know well, also works at Stripe and could introduce you.');
+    expect(way?.people).toEqual([{ id: friend!.person.id, name: 'Maya Chen' }]);
     // the picks ask Maya once at most
     expect(v.suggestions.filter((c) => c.kind === 'found' && c.colleague).length).toBeLessThanOrEqual(1);
     // someone the student barely knows is never offered as the way in

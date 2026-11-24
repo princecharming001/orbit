@@ -89,16 +89,17 @@ const BANNED_TEXT = /\bundefined\b|\bNaN\b|\bnull\b|\[object|—/;
 /** Lines that are true of thousands of people, or say nothing about why to meet them: never a card's lead reason. */
 const GENERIC_LEAD = [
   /mutual connection/i,
-  /^Connected on LinkedIn/i,
+  /^Connected (with you )?on LinkedIn/i,
   /^Works in [a-z &]+ \(/i,
-  /a role you('| a)re targeting$/i,
-  /^Based in|where you want to work$/i,
+  // the role alone: "Works as a Software Engineer at Figma, the kind of role you are aiming for."
+  /^Works as an? .*(the kind of role|work) you are aiming for\.$/i,
+  /^Based in /i,
   /^Found by the search/i,
-  /^Second degree/i,
-  /^Went to .*, like you$/i,
-  /^Works in .*, an industry on your list$/i,
+  /second degree connection/i,
+  /^Went to [^,]*, like you\.$/i,
+  /^Works in /i,
   /^(In|Also in) /,
-  /^New in the role|^Moved to/,
+  /^Started |^Moved |^Was promoted /,
 ];
 const THIN = /That's all Orbit knows|Only their (LinkedIn headline|title and company)|Not much known/;
 const DESCRIPTIVE = /\b(experienced|versatile|passionate|results-driven|seasoned|dynamic|helping)\b/i;
@@ -166,11 +167,7 @@ function check(b: DiscoverBuilt, v: DiscoverView, problem: (what: string, detail
     if (s.role && DESCRIPTIVE.test(s.role)) problem('a headline shown as their role', s.role);
     if (s.role && s.why.filter((w) => w.text.includes(`${s.role} at`)).length > 1)
       problem('a card says the same role twice', label(s));
-    if (
-      s.why.filter((w) => w.kind === 'school').length > 0 &&
-      s.why.some((w) => / alum[, ]/.test(w.text)) &&
-      s.why.some((w) => /^Went to /.test(w.text))
-    )
+    if (s.why.filter((w) => /^(Also )?[Ww]ent to /.test(w.text)).length > 1)
       problem('a card says the same school twice', label(s));
     if (s.name.length > 3 && s.name === s.name.toUpperCase() && /[A-Z]{2}/.test(s.name))
       problem('a name in capitals', s.name);

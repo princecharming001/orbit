@@ -1184,7 +1184,7 @@ function BriefRow({ s, open, onToggle }: { s: Suggestion; open: boolean; onToggl
                 {person.displayName}
               </Link>
             )}
-            {meta && <Chip tone={meta.tone}>{meta.label}</Chip>}
+            {meta && <span className="shrink-0 text-[12px] text-ink-3">{meta.label}</span>}
           </div>
           <div className="text-[12.5px] text-ink-3 truncate mt-0.5" title={s.reasonText}>
             {s.reasonText}

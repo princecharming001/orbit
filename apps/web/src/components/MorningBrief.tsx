@@ -37,6 +37,7 @@ import {
   undoDecision,
 } from '../engine/morning';
 import { decideMerge } from '../engine/people';
+import { whyForRecommendation } from '../engine/personPoints';
 import { photoWanted } from '../engine/photoSignals';
 import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { snoozeSuggestion } from '../engine/send';
@@ -44,11 +45,12 @@ import { decideProposedStage } from '../engine/stages';
 import { opensWarmUpSheet } from '../engine/warmupAuto';
 import { useSession } from '../state/session';
 import { openWarmUpSheet } from '../state/warmUpSheet';
-import { Avatar, Button, Chip, cx, LinkedInMark, useToast } from '../ui';
+import { Avatar, Button, cx, LinkedInMark, useToast } from '../ui';
 import { DeckLayer, useDeckFocus, useDeckKeys, useDeckSwipe } from '../ui/Deck';
 import { runApproval } from './approve';
 import { PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor } from './DraftEditor';
+import { WhyThem } from './discover/parts';
 import { MergePair, PersonNameLink } from './MergePair';
 import { SocialAskCard } from './SocialPeople';
 import { gapLabel, KIND_LABEL } from './SuggestionCard';
@@ -642,7 +644,7 @@ function Decision({
   onLeave: (to?: string) => void;
 }) {
   const toast = useToast();
-  const { settings } = useSession();
+  const { settings, user: me } = useSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [composing, setComposing] = useState(false);
@@ -663,6 +665,12 @@ function Decision({
     otherId ? known[otherId] : undefined,
   );
   const other = otherRow ?? undefined;
+  // a first message: why this person, as their Discover card says it
+  const recId = s.kind === 'new_outreach' ? (s.payload.recommendationId as string | undefined) : undefined;
+  const why = useLiveQuery(
+    async () => (recId && person && me ? whyForRecommendation(me, person, recId) : undefined),
+    [recId, person?.id, me?.id],
+  );
   // plan 43 §3.4: the "same person" question a card asks
   const askId = s.kind === 'confirm_social_match' ? (s.payload.askId as string | undefined) : undefined;
   const socialAsk = useLiveQuery(async () => (askId ? db.socialAsks.get(askId) : undefined), [askId]);
@@ -854,9 +862,9 @@ function Decision({
         >
           Decision {index + 1} of {total}
         </span>
-        <Chip tone={meta.tone} className="h-5">
-          {meta.label}
-        </Chip>
+        <span className="text-[12px] text-ink-3" data-testid="morning-kind">
+          · {meta.label}
+        </span>
       </div>
       <div className="flex items-center gap-3 mt-3">
         {person && <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={44} />}
@@ -878,11 +886,18 @@ function Decision({
           {role && <div className="text-[12.5px] text-ink-3 truncate">{role}</div>}
         </div>
       </div>
-      <p className="text-[14.5px] text-ink mt-3 leading-snug">{s.reasonText}</p>
+      {why?.length ? (
+        // a first message: why this person, as their Discover card says it
+        <div className="mt-3">
+          <WhyThem reasons={why} firstName={person?.firstName} testId="morning-why" />
+        </div>
+      ) : (
+        <p className="text-[14.5px] text-ink mt-3 leading-snug">{s.reasonText}</p>
+      )}
 
       {evidence && (
         <blockquote
-          className="mt-3 rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2"
+          className="mt-3 border-l-2 border-line pl-3 text-[13px] text-ink-2"
           data-testid="morning-evidence"
         >
           <span className="text-ink-3">
@@ -916,7 +931,7 @@ function Decision({
         </div>
       )}
       {s.kind === 'warm_up_engage' && warmAction && (
-        <p className="mt-3 rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2">
+        <p className="mt-3 border-l-2 border-line pl-3 text-[13px] text-ink-2">
           Step {chat!.warmUp!.actions.indexOf(warmAction) + 1} of {chat!.warmUp!.actions.length}:{' '}
           {warmAction.label}.
         </p>
@@ -926,7 +941,7 @@ function Decision({
           type="button"
           onClick={() => run.review()}
           tabIndex={-1}
-          className="mt-3 block w-full text-left rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2 hover:bg-line-2"
+          className="mt-3 block w-full text-left border-l-2 border-line pl-3 text-[13px] leading-snug text-ink-2 hover:border-ink-3 hover:text-ink"
           data-testid="morning-draft-preview"
           aria-label={`Open the draft to ${first}`}
         >
@@ -1203,7 +1218,12 @@ function MoveRow({
               {role}
             </span>
           )}
-          {m.sub && <span className="block text-[12px] text-ink-3 truncate">{m.sub}</span>}
+          {m.sub && (
+            // a Discover pick's why is a sentence: two lines of it, the whole of it on hover
+            <span className="block text-[12px] leading-snug text-ink-3 line-clamp-2" title={m.sub}>
+              {m.sub}
+            </span>
+          )}
         </span>
         {phase === 'done' ? (
           <Check size={16} className="text-accent shrink-0" aria-label="Done" />
