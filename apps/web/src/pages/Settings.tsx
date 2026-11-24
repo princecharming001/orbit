@@ -197,7 +197,7 @@ const SECTION_ALIASES: Record<string, string> = {
 };
 
 /**
- * A link from the chat lands on one setting (`/settings/integrations#resume`): once that spot is on the page it is
+ * A link from the chat lands on one setting (`/settings/profile#resume`): once that spot is on the page it is
  * scrolled into the middle and lit for a moment, and a field takes the cursor, so the student never hunts for it.
  */
 function useSettingFocus(section: string) {
@@ -617,9 +617,27 @@ function Profile() {
             </div>
           </CardFields>
         </SettingsCard>
+        <ResumeSection user={user} />
         <IntroNoteSection />
       </SettingsStack>
     </>
+  );
+}
+
+/** The resume lives with the rest of who you are: drafts, intros and Roles all read it from here. */
+function ResumeSection({ user }: { user: User }) {
+  const resume = useLiveQuery(
+    async () =>
+      // "on file" once it is read too: the lines and the profile offer are written before parsedAt
+      (await db.resumes.where('userId').equals(user.id).toArray())
+        .filter((r) => r.isCurrent && r.parsedAt)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
+    [user.id],
+  );
+  return (
+    <SettingsCard title="Resume" id="resume">
+      <ResumeRow user={user} resume={resume} />
+    </SettingsCard>
   );
 }
 
@@ -1253,9 +1271,6 @@ function Integrations() {
         <CalendlyRow user={user} />
         <BookingLinkRow user={user} />
         <MeetingLinkRow user={user} />
-      </RowGroup>
-      <RowGroup title="About you">
-        <ResumeRow user={user} resume={resume} />
       </RowGroup>
       <RowGroup title="AI">
         <ClaudeCard />

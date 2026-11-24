@@ -41,7 +41,10 @@ describe("the student's own LinkedIn profile", () => {
       key: `self:linkedin:${user.id}`,
       value: {
         readAt: kept!.readAt,
-        profile: { ...kept!.profile, experience: kept!.profile.experience.map(({ description: _, ...x }) => x) },
+        profile: {
+          ...kept!.profile,
+          experience: kept!.profile.experience.map(({ description: _, ...x }) => x),
+        },
       },
     });
     const soon = new Date(Date.parse(kept!.readAt) + 60_000);

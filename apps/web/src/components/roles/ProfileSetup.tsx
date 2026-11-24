@@ -9,7 +9,7 @@ import type { JobLevel, ProfileLevel, RoleKind, RoleProfile, User } from '@orbit
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, FileText, Upload } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
-import { saveResume } from '../../engine/resume';
+import { Link } from 'react-router-dom';
 import {
   type KeptProfile,
   LEVEL_WORDS,
@@ -60,7 +60,6 @@ export function ProfileSetup({
   );
   const sources = useLiveQuery(() => profileSources(user.id), [user.id]);
   const [reading, setReading] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const d: Draft = draft ?? {
@@ -91,20 +90,6 @@ export function ProfileSetup({
         });
     } finally {
       setReading(false);
-    }
-  };
-
-  const upload = async (file: File) => {
-    setUploading(true);
-    setError(undefined);
-    try {
-      await saveResume(user, file);
-      set({ use: { ...d.use, resume: true, linkedin: useLinkedIn } });
-      toast.push({ text: 'Resume read. Tick what to read your profile from.', tone: 'good' });
-    } catch (e) {
-      setError(e instanceof Error && e.message ? e.message : 'That file could not be read.');
-    } finally {
-      setUploading(false);
     }
   };
 
@@ -160,16 +145,18 @@ export function ProfileSetup({
               line={`${sources.resume.filename}, ${sources.resume.lines} lines Orbit can read`}
               mark={<FileText size={20} className="text-ink-3" aria-hidden />}
               testId="profile-use-resume"
-              extra={<UploadButton busy={uploading} onFile={upload} label="Replace" />}
+              extra={<ProfileLink label="Change in Profile" />}
             />
           ) : (
             <div className="flex items-center gap-3 px-4 py-3.5">
               <Upload size={20} className="shrink-0 text-ink-3" aria-hidden />
               <div className="min-w-0 flex-1">
-                <p className="font-medium text-[14px]">Upload a resume</p>
-                <p className="text-[12.5px] text-ink-3">PDF, Word or text, up to 10 MB.</p>
+                <p className="font-medium text-[14px]">Add your resume</p>
+                <p className="text-[12.5px] text-ink-3">
+                  It lives in your profile, where drafts and intros read it too.
+                </p>
               </div>
-              <UploadButton busy={uploading} onFile={upload} label="Upload" primary={!sources?.linkedin} />
+              <ProfileLink label="Add in Profile" primary={!sources?.linkedin} />
             </div>
           )}
         </div>
@@ -486,45 +473,19 @@ function SourceRow({
   );
 }
 
-function UploadButton({
-  busy,
-  onFile,
-  label,
-  primary,
-}: {
-  busy: boolean;
-  onFile: (f: File) => void;
-  label: string;
-  primary?: boolean;
-}) {
+/** Where the resume is added or changed: the profile, the one place it lives. */
+function ProfileLink({ label, primary }: { label: string; primary?: boolean }) {
   return (
-    <label
+    <Link
+      to="/settings/profile#resume"
       className={cx(
-        'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-[6px] px-3 text-[13px] font-medium focus-within:ring-2 focus-within:ring-accent/40',
+        'inline-flex h-8 items-center rounded-[6px] px-3 text-[13px] font-medium',
         primary ? 'bg-ink text-white hover:bg-[#262626]' : 'border border-line bg-canvas hover:bg-canvas-2',
       )}
+      data-testid="profile-resume-link"
     >
-      <input
-        type="file"
-        accept=".pdf,.txt,.md,.docx"
-        className="sr-only"
-        disabled={busy}
-        data-testid="profile-upload"
-        aria-label="Resume file"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          e.target.value = '';
-          if (f) onFile(f);
-        }}
-      />
-      {busy ? (
-        <>
-          <Working /> Reading
-        </>
-      ) : (
-        label
-      )}
-    </label>
+      {label}
+    </Link>
   );
 }
 

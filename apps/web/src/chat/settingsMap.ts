@@ -48,7 +48,7 @@ export const SETTINGS: SettingSpot[] = [
   {
     id: 'resume',
     label: 'Resume',
-    section: 'integrations',
+    section: 'profile',
     target: row('resume'),
     what: 'Add or replace your resume. Orbit reads it to write about you accurately.',
     // no \b: it does not hold next to an accented letter
@@ -343,7 +343,7 @@ export function settingById(id: string | undefined): SettingSpot | undefined {
   return id ? SETTINGS.find((s) => s.id === id) : undefined;
 }
 
-/** "/settings/integrations#resume": the page, and the spot on it. */
+/** "/settings/profile#resume": the page, and the spot on it. */
 export function settingHref(s: SettingSpot): string {
   return `/settings/${s.section}#${s.id}`;
 }
