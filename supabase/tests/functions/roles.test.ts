@@ -666,6 +666,8 @@ describe('/roles/search and /roles/more', () => {
        where j.title = 'Software Engineer Intern'`;
     expect(austin!.caps.map((c) => c.kind)).toContain('place');
     expect(austin!.fit).toBeLessThanOrEqual(5);
+    const listed = await h.call<{ matches: RoleMatch[] }>('/roles/list', u.token, {});
+    expect(titles(listed.body.matches)).toEqual(['Platform Engineer Intern']);
   });
 
   it('three full searches a day, then the stored results with a note', async () => {

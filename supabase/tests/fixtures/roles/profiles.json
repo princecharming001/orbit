@@ -1,0 +1,125 @@
+{
+  "note": "Made-up students for the Roles bench (plan 44 §6.7). No real person.",
+  "profiles": [
+    {
+      "id": "data-junior",
+      "about": "Third-year, B.S. Statistics, a data internship, SQL and Python in work",
+      "lines": {
+        "resume": {
+          "experience": [
+            {
+              "title": "Data Analyst Intern",
+              "org": "Northwind Health",
+              "start": "2026-06",
+              "end": "2026-08",
+              "lines": [
+                "Built a churn dashboard in Tableau from SQL queries over 4M patient visits",
+                "Wrote Python scripts with pandas to clean claims data and cut a weekly report from 3 hours to 20 minutes",
+                "Presented findings on appointment no-shows to the operations team"
+              ]
+            },
+            {
+              "title": "Teaching Assistant, Intro to Statistics",
+              "org": "State University",
+              "start": "2025-09",
+              "end": "2026-05",
+              "lines": ["Led weekly sections for 30 students on regression and hypothesis testing"]
+            }
+          ],
+          "education": [
+            {
+              "school": "State University",
+              "degree": "B.S.",
+              "field": "Statistics",
+              "end": "May 2028",
+              "lines": []
+            }
+          ],
+          "projects": [
+            {
+              "title": "NBA shot model",
+              "lines": ["Logistic regression in R predicting shot success from tracking data"]
+            }
+          ],
+          "skills": ["Languages: Python, SQL, R", "Tools: Tableau, Excel, Git"],
+          "courses": ["Linear Models", "Databases", "Probability"]
+        }
+      }
+    },
+    {
+      "id": "design-student",
+      "about": "Senior in HCI, two design internships, Figma, user research",
+      "lines": {
+        "resume": {
+          "experience": [
+            {
+              "title": "Product Design Intern",
+              "org": "Brightpath",
+              "start": "2026-06",
+              "end": "2026-08",
+              "lines": [
+                "Designed the onboarding flow in Figma for a budgeting app used by 200k people",
+                "Ran 12 user interviews and two usability tests, and turned the findings into three shipped changes"
+              ]
+            },
+            {
+              "title": "UX Research Assistant",
+              "org": "University HCI Lab",
+              "start": "2025-01",
+              "end": "2026-05",
+              "lines": [
+                "Coded diary-study data and wrote up findings for a paper on accessibility in banking apps"
+              ]
+            }
+          ],
+          "education": [
+            {
+              "school": "Tech Institute",
+              "degree": "B.S.",
+              "field": "Human-Computer Interaction",
+              "end": "May 2027",
+              "lines": []
+            }
+          ],
+          "projects": [
+            {
+              "title": "Transit app redesign",
+              "lines": ["Prototyped a trip planner in Figma and tested it with 8 riders"]
+            }
+          ],
+          "skills": ["Figma, prototyping, user research, HTML, CSS"],
+          "courses": ["Interaction Design", "Visual Communication"]
+        }
+      }
+    },
+    {
+      "id": "swe-five-years",
+      "about": "Five years as a backend engineer, Go and Kubernetes, LinkedIn only",
+      "lines": {
+        "linkedin": {
+          "headline": "Backend engineer",
+          "positions": [
+            {
+              "title": "Senior Software Engineer",
+              "org": "Cartwheel",
+              "start": "2023-03",
+              "description": "Lead the build and deploy platform. Moved 300 services to Kubernetes and cut build times in half with a Go build cache. On call for CI reliability."
+            },
+            {
+              "title": "Software Engineer",
+              "org": "Ledgerly",
+              "start": "2021-06",
+              "end": "2023-02",
+              "description": "Built payment reconciliation services in Go and PostgreSQL."
+            }
+          ],
+          "schools": [
+            { "school": "State University", "degree": "BS", "field": "Computer Science", "end": "2021" }
+          ],
+          "skills": ["Go", "Kubernetes", "PostgreSQL", "Bazel"],
+          "projects": []
+        }
+      }
+    }
+  ]
+}

@@ -108,6 +108,8 @@ async function matchesWhere(
   userId: string,
   where: {
     searchId?: string;
+    /** with searchId: also the rows of no search (a posting scored on its own) */
+    loose?: boolean;
     read?: boolean;
     statuses?: MatchStatus[];
     evidenceHash?: string;
@@ -118,7 +120,7 @@ async function matchesWhere(
     `select ${MATCH_COLUMNS}, j.closed_at is not null as closed
        from orbit.role_matches m join orbit_private.jobs j on j.id = m.job_id
       where m.user_id = $1::uuid
-        and ($2::uuid is null or m.search_id = $2::uuid)
+        and ($2::uuid is null or m.search_id = $2::uuid or ($7::boolean and m.search_id is null))
         and (not $3::boolean or (m.state = 'read' and m.evidence_hash = $4))
         and (cardinality($5::text[]) = 0 or m.status = any($5::text[]))
         and (cardinality($5::text[]) > 0 or m.status <> 'dismissed')
@@ -132,6 +134,7 @@ async function matchesWhere(
       where.evidenceHash ?? '',
       where.statuses ?? [],
       where.open ?? false,
+      where.loose ?? false,
     ],
   );
   return rows.map((row) => ({ row, closed: row.closed }));
@@ -333,7 +336,13 @@ export async function list(
   const rows =
     view === 'saved'
       ? await matchesWhere(s.db, userId, { statuses: ['saved', 'applied', 'interviewing'] })
-      : await matchesWhere(s.db, userId, { read: true, evidenceHash: stored.evidenceHash, open: true });
+      : // the latest search's rows (what it no longer lists stays out), and postings scored on their own
+        await matchesWhere(s.db, userId, {
+          ...(latest ? { searchId: latest.id, loose: true } : {}),
+          read: true,
+          evidenceHash: stored.evidenceHash,
+          open: true,
+        });
   return {
     matches: await withJobs(s.db, rows, { evidenceHash: stored.evidenceHash, profile: stored.profile }),
     ...(latest ? { searchId: latest.id } : {}),

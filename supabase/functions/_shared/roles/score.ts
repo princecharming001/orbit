@@ -50,7 +50,7 @@ export const REQUIREMENTS_PER_DAY = 2000;
 /** Roles read closely a day per student: three searches of 60 and a night's 20. */
 export const READS_PER_DAY = 200;
 export const MAX_REQUIREMENTS = 12;
-export const POSTING_CHARS = 6000;
+export const POSTING_CHARS = 8000;
 export const NOT_READ_NOTE = 'Not read closely yet';
 export const LIMIT_NOTE =
   "Not read closely yet. Today's limit is reached, so these are ranked by what Orbit can read without the model.";
