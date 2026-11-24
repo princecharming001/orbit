@@ -797,6 +797,8 @@ export interface FriendInvite {
   linkedinUrl?: string;
   status: 'pending' | 'accepted' | 'declined' | 'expired' | 'revoked';
   createdAt: string;
+  /** an invite to an address: whether the email went out (false: the student still has to pass the link on) */
+  emailed?: boolean;
 }
 
 /** POST /friends/invite { email? }: an email invite, or a link to copy when no email is given */
@@ -813,6 +815,12 @@ export interface FriendsInviteResponse {
    * 'linkedin' when it went as a LinkedIn message from the student's own account
    */
   status: 'sent' | 'requested' | 'link' | 'linkedin';
+  /** this address had an invite waiting already: it is that one, and nothing was sent a second time */
+  already?: boolean;
+  /** how the email went out: from the student's own Gmail, or from Orbit's address */
+  via?: 'gmail' | 'orbit';
+  /** an address was given and no email went: nothing here can send one (`none`), or the send failed (`failed`) */
+  notSent?: 'none' | 'failed';
   invite: FriendInvite;
 }
 /** Someone on Orbit the student may know (plan 37 follow-up): a card on Friends with Add. Never their address. */

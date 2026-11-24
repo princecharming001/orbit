@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { refreshFriendShares } from '../../functions/_shared/friends/shares.ts';
 import { sqlQueue } from '../../functions/_shared/queue.ts';
 import { defaultHandlers } from '../../functions/orbit-worker/worker.ts';
-import { addPerson, addTie, api, fakeNet, signedInUser } from '../helpers/agents.ts';
+import { addPerson, addTie, api, fakeNet, jsonRes, signedInUser } from '../helpers/agents.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
 
 /**
@@ -626,5 +626,158 @@ describe('friends over orbit-api', () => {
         ctx,
       );
     expect((await queued()).map((k) => k.split(':')[3])).toEqual(['score']);
+  });
+});
+
+describe('one invite an address, and the email really goes (or the student is told it did not)', () => {
+  const GMAIL_SEND = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
+  const RESEND = 'https://api.resend.com/emails';
+  type Invite = {
+    code: string;
+    link: string;
+    status: string;
+    already?: boolean;
+    via?: string;
+    notSent?: string;
+    invite: { id: string; emailed?: boolean };
+  };
+  type Pending = { pending: { id: string; email: string | null; emailed?: boolean }[] };
+  const gmailOk = (c: { url: string }) =>
+    c.url === GMAIL_SEND ? jsonRes(200, { id: 'gm-1', threadId: 'gt-1' }) : undefined;
+  const sends = (net: ReturnType<typeof fakeNet>, url: string) => net.calls.filter((c) => c.url === url);
+
+  it('goes from the student’s own Gmail, with the link in it, and shows as emailed', async () => {
+    const net = fakeNet(gmailOk);
+    const call = api(t, net, { env: {} });
+    const me = await signedInUser(t, { firstName: 'Gia' });
+    const r = await call<Invite>('/friends/invite', me.token, { email: 'New.Friend@Example.org' });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ status: 'sent', via: 'gmail', invite: { emailed: true } });
+    expect(r.body.already).toBeUndefined();
+    const [sent] = sends(net, GMAIL_SEND);
+    const raw = (sent!.body as { raw: string }).raw;
+    const text = Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    expect(text).toMatch(/^To: new\.friend@example\.org$/m);
+    expect(text).toMatch(new RegExp(`^From: .*<${me.email.replace(/[.+]/g, '\\$&')}>$`, 'm'));
+    expect(text).toMatch(/^Subject: Gia wants to pool networks with you on Orbit$/m);
+    // the body is base64 inside the message: the link is in it
+    const body = Buffer.from(
+      text
+        .split(/\r?\n\r?\n/)
+        .slice(1)
+        .join('')
+        .replace(/\s+/g, ''),
+      'base64',
+    ).toString('utf8');
+    expect(body).toContain(r.body.link);
+    const [row] = await t.db.sql<{ emailed_via: string | null; emailed_at: Date | null }>`
+      select emailed_via, emailed_at from orbit.friend_invites where id = ${r.body.invite.id}::uuid`;
+    expect(row).toMatchObject({ emailed_via: 'gmail' });
+    expect(row!.emailed_at).not.toBeNull();
+    const list = await call<Pending>('/friends', me.token, {});
+    expect(list.body.pending).toEqual([
+      expect.objectContaining({ id: r.body.invite.id, email: 'new.friend@example.org', emailed: true }),
+    ]);
+  });
+
+  it('a second tap, or the same address again later, is the same invite: one line, one email, the same link', async () => {
+    const net = fakeNet(gmailOk);
+    const call = api(t, net, { env: {} });
+    const me = await signedInUser(t, { firstName: 'Hal' });
+    const first = await call<Invite>('/friends/invite', me.token, { email: 'twice@example.org' });
+    const again = await call<Invite>('/friends/invite', me.token, { email: ' Twice@Example.org ' });
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({
+      status: 'sent',
+      already: true,
+      code: first.body.code,
+      link: first.body.link,
+    });
+    expect(again.body.invite.id).toBe(first.body.invite.id);
+    expect(sends(net, GMAIL_SEND)).toHaveLength(1);
+    const [n] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.friend_invites where from_user_id = ${me.userId}::uuid`;
+    expect(n!.n).toBe(1);
+    expect((await call<Pending>('/friends', me.token, {})).body.pending).toHaveLength(1);
+  });
+
+  it('two requests at the same moment make one invite and send one email', async () => {
+    const net = fakeNet(gmailOk);
+    const call = api(t, net, { env: {} });
+    const me = await signedInUser(t, { firstName: 'Ida' });
+    const [a, b] = await Promise.all([
+      call<Invite>('/friends/invite', me.token, { email: 'race@example.org' }),
+      call<Invite>('/friends/invite', me.token, { email: 'race@example.org' }),
+    ]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(a.body.code).toBe(b.body.code);
+    expect(sends(net, GMAIL_SEND)).toHaveLength(1);
+    const [n] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.friend_invites where from_user_id = ${me.userId}::uuid`;
+    expect(n!.n).toBe(1);
+  });
+
+  it('the database refuses a second waiting invite to an address, whatever the code above it does', async () => {
+    const me = await signedInUser(t, { firstName: 'Jo' });
+    const put = (code: string) => t.db.sql`
+      insert into orbit.friend_invites (from_user_id, to_email, code, status, expires_at)
+      values (${me.userId}::uuid, 'only.once@example.org', ${code}, 'pending', now() + interval '14 days')`;
+    await put('code-one-000000000000a');
+    await expect(put('code-two-000000000000b')).rejects.toThrow();
+  });
+
+  it('Gmail cannot send it: Orbit’s own address does, and says so', async () => {
+    const net = fakeNet(
+      (c) => (c.url === GMAIL_SEND ? jsonRes(403, { error: { message: 'insufficient scope' } }) : undefined),
+      (c) => (c.url === RESEND ? jsonRes(200, { id: 're_1' }) : undefined),
+    );
+    const call = api(t, net, { env: { resendKey: 'test-key-placeholder' } });
+    const me = await signedInUser(t, { firstName: 'Kit' });
+    const r = await call<Invite>('/friends/invite', me.token, { email: 'fallback@example.org' });
+    expect(r.body).toMatchObject({ status: 'sent', via: 'orbit', invite: { emailed: true } });
+    expect(sends(net, RESEND)).toHaveLength(1);
+    expect((sends(net, RESEND)[0]!.body as { to: string[] }).to).toEqual(['fallback@example.org']);
+  });
+
+  it('nothing could send it: the invite is a link to pass on, says why, and the next tap tries the email again', async () => {
+    const net = fakeNet((c) => (c.url === GMAIL_SEND ? jsonRes(500, {}) : undefined));
+    const call = api(t, net, { env: {} });
+    const me = await signedInUser(t, { firstName: 'Lou' });
+    const r = await call<Invite>('/friends/invite', me.token, { email: 'unsent@example.org' });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ status: 'link', notSent: 'failed', invite: { emailed: false } });
+    expect(r.body.via).toBeUndefined();
+    const list = await call<Pending>('/friends', me.token, {});
+    expect(list.body.pending).toEqual([
+      expect.objectContaining({ email: 'unsent@example.org', emailed: false }),
+    ]);
+    const [why] = await t.db.sql<{ details: { why: string } }>`
+      select details from orbit.audit_log where action = 'friends.invite_not_sent' and target_id = ${r.body.invite.id}`;
+    expect(why!.details.why).toBe('failed');
+    // Gmail is back: the same invite, emailed this time, once
+    const ok = fakeNet(gmailOk);
+    const call2 = api(t, ok, { env: {} });
+    const r2 = await call2<Invite>('/friends/invite', me.token, { email: 'unsent@example.org' });
+    expect(r2.body).toMatchObject({ status: 'sent', via: 'gmail', already: true, code: r.body.code });
+    const r3 = await call2<Invite>('/friends/invite', me.token, { email: 'unsent@example.org' });
+    expect(r3.body).toMatchObject({ status: 'sent', already: true });
+    expect(sends(ok, GMAIL_SEND)).toHaveLength(1);
+  });
+
+  it('an invite that ran out makes way for a new one to the same address', async () => {
+    const net = fakeNet(gmailOk);
+    const call = api(t, net, { env: {} });
+    const me = await signedInUser(t, { firstName: 'Mo' });
+    const first = await call<Invite>('/friends/invite', me.token, { email: 'later@example.org' });
+    await t.db
+      .sql`update orbit.friend_invites set expires_at = now() - interval '1 day' where id = ${first.body.invite.id}::uuid`;
+    const second = await call<Invite>('/friends/invite', me.token, { email: 'later@example.org' });
+    expect(second.status).toBe(200);
+    expect(second.body.code).not.toBe(first.body.code);
+    expect(second.body.already).toBeUndefined();
+    expect(sends(net, GMAIL_SEND)).toHaveLength(2);
+    const rows = await t.db.sql<{ status: string }>`
+      select status from orbit.friend_invites where from_user_id = ${me.userId}::uuid order by created_at`;
+    expect(rows.map((x) => x.status)).toEqual(['expired', 'pending']);
   });
 });

@@ -231,7 +231,8 @@ export function FriendsPage() {
       return undefined;
     }
     await refresh();
-    return { link: r.value.link, status: r.value.status };
+    const { link, status, already, via, notSent } = r.value;
+    return { link, status, already, via, notSent };
   };
   const search = async (q: string) => {
     setQuery(q);

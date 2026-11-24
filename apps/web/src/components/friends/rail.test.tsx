@@ -278,6 +278,13 @@ describe('Requested', () => {
   it('says only what is known of each one', () => {
     expect(requestedLine(invite('a', { name: 'Jordan Ellis' }))).toBe('Request sent');
     expect(requestedLine(invite('b', { email: 'noah@example.org' }))).toBe('Invited, not on Orbit yet');
+    // whether the email went out is said when it is known: an invite nobody was emailed is not "invited" yet
+    expect(requestedLine(invite('c', { email: 'noah@example.org', emailed: true }))).toBe(
+      'Invite emailed, not on Orbit yet',
+    );
+    expect(requestedLine(invite('d', { email: 'noah@example.org', emailed: false }))).toBe(
+      'Not emailed yet: send them your invite link',
+    );
   });
 });
 

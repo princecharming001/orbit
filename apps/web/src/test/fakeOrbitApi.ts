@@ -1000,6 +1000,20 @@ export function createFakeOrbitApi(
             : null;
         if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
           return error(400, 'bad_request', 'that is not an email address');
+        // one invite an address, like the server: a second ask is the one already waiting
+        const waitingOne = email
+          ? state.friendInvites.find(
+              (i) => i.direction === 'out' && i.status === 'pending' && i.email === email,
+            )
+          : undefined;
+        if (waitingOne)
+          return json(200, {
+            code: 'code-already-waiting',
+            link: 'https://tryorbit.today/friends/join/code-already-waiting',
+            status: waitingOne.emailed === false ? 'link' : 'sent',
+            already: true,
+            invite: waitingOne,
+          });
         const inviteCode = uuid().replace(/-/g, '').slice(0, 22);
         const invite: FriendInvite = {
           id: uuid(),
@@ -1008,12 +1022,14 @@ export function createFakeOrbitApi(
           name: null,
           status: 'pending',
           createdAt: iso(clock),
+          ...(email ? { emailed: true } : {}),
         };
         state.friendInvites.push(invite);
         return json(200, {
           code: inviteCode,
           link: `https://tryorbit.today/friends/join/${inviteCode}`,
           status: ffPerson?.via === 'linkedin' ? 'linkedin' : email ? 'sent' : 'link',
+          ...(email ? { via: 'gmail' } : {}),
           invite,
         });
       }

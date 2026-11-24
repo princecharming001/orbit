@@ -57,7 +57,8 @@ import {
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { settleCard } from '../../_shared/replies/cards.ts';
 import { iso } from '../../_shared/rows.ts';
-import { linkedinSend } from '../../_shared/sending/transport.ts';
+import { rawMessage } from '../../_shared/sending/mime.ts';
+import { gmailSend, linkedinSend } from '../../_shared/sending/transport.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid, text, uuid } from './body.ts';
 
@@ -266,16 +267,21 @@ async function list(ctx: Ctx): Promise<Response> {
       });
     }
   }
+  // one line an address, whatever the table holds: the newest invite to it (rows from before one-invite-an-address
+  // was enforced may still be there twice)
   const invites = await db.sql<{
     id: string;
     to_email: string | null;
     status: FriendInvite['status'];
     created_at: Date;
+    emailed_at: Date | null;
   }>`
-    select id, to_email, status, created_at from orbit.friend_invites
+    select distinct on (to_email) id, to_email, status, created_at, emailed_at from orbit.friend_invites
      where from_user_id = ${me}::uuid and status = 'pending' and to_email is not null
+       and expires_at > ${ctx.now()}::timestamptz
        and not exists (select 1 from orbit.users u where lower(u.email) = to_email and u.deleted_at is null)
-     order by created_at`;
+     order by to_email, created_at desc`;
+  invites.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   for (const i of invites)
     pending.push({
       id: i.id,
@@ -284,6 +290,7 @@ async function list(ctx: Ctx): Promise<Response> {
       name: null,
       status: i.status,
       createdAt: iso(i.created_at)!,
+      emailed: !!i.emailed_at,
     });
   const out: FriendsListResponse = { friends, pending };
   return json(200, out);
@@ -294,6 +301,64 @@ async function list(ctx: Ctx): Promise<Response> {
 interface MailLike {
   configured: boolean;
   send(m: { to: string; subject: string; text: string }): Promise<{ ok: boolean; error?: string }>;
+}
+
+/**
+ * Email the invite, and say how it went. From the student's own Gmail first: a note from a friend's own address is
+ * the one people open, and it needs nothing set up on Orbit's side. Orbit's own mailer is the fallback for a student
+ * with no Gmail connected. `none` means nothing could send it at all; `failed` means something tried and it did not
+ * go, and the student is told either way (an invite used to sit under "Requested" as if it had been sent).
+ */
+async function mailInvite(
+  ctx: Ctx,
+  u: UserLite,
+  inviteId: string,
+  to: string,
+  link: string,
+): Promise<{ via: 'gmail' | 'orbit' } | { via: null; why: 'none' | 'failed'; error?: string }> {
+  const subject = `${firstOf(u)} wants to pool networks with you on Orbit`;
+  const text = [
+    `${nameOf(u)} invited you to be friends on Orbit.`,
+    'Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.',
+    `Open this link to sign in and accept: ${link}`,
+    `It stops working in ${INVITE_DAYS} days.`,
+  ].join('\n\n');
+  const s = ctx.services();
+  let tried = false;
+  let error: string | undefined;
+  if (s.tokens) {
+    const sent = await gmailSend(
+      s,
+      u.id,
+      rawMessage({
+        from: u.email,
+        fromName: u.full_name ?? undefined,
+        to,
+        subject,
+        body: text,
+        draftId: `invite-${inviteId}`,
+        date: ctx.now(),
+      }),
+      null,
+    ).catch((e): { ok: false; error: string } => ({
+      ok: false,
+      error: e instanceof Error ? e.message : 'gmail',
+    }));
+    if (sent.ok) return { via: 'gmail' };
+    // no Google account, or one that may not send: not a failure, Orbit's own mailer is next
+    if (!['needs_reauth', 'google_unconfigured', 'no_account', 'token_error'].includes(sent.error)) {
+      tried = true;
+      error = `gmail ${sent.error}`;
+    }
+  }
+  const mailer = (s as unknown as { mailer?: MailLike }).mailer;
+  if (mailer?.configured) {
+    tried = true;
+    const r = await mailer.send({ to, subject, text }).catch(() => ({ ok: false, error: 'mailer' }));
+    if (r.ok) return { via: 'orbit' };
+    error = r.error ?? error;
+  }
+  return { via: null, why: tried ? 'failed' : 'none', error };
 }
 
 /**
@@ -366,22 +431,55 @@ async function invite(ctx: Ctx): Promise<Response> {
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('that is not an email address');
   const u = await userLite(db, me);
   if (email && email === normalizeEmail(u.email)) throw badRequest('that is your own address');
-  const [today] = await db.sql<{ n: number }>`
-    select count(*)::int as n from orbit.friend_invites
-     where from_user_id = ${me}::uuid and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
-  if ((today?.n ?? 0) >= INVITES_PER_DAY)
-    throw new HttpError(429, 'rate_limited', `at most ${INVITES_PER_DAY} invites a day`);
-  const code = inviteCode();
-  const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
-  const [row] = await db.sql<{ id: string; created_at: Date }>`
-    insert into orbit.friend_invites (from_user_id, to_email, to_person_id, code, status, created_at, expires_at)
-    values (${me}::uuid, ${email}, ${viaLinkedIn ? personId! : null}::uuid, ${code}, 'pending', ${now}::timestamptz,
-            ${expires}::timestamptz)
-    returning id, created_at`;
+  // One invite an address. A second tap of Invite (two went out a second apart, each its own line under Requested),
+  // or the same address typed again next week, is the invite that is already waiting: the same link, no second
+  // email. Only when the first email never went out is it tried again.
+  type InviteRow = { id: string; code: string; created_at: Date; emailed_at: Date | null };
+  const linkedInTo = viaLinkedIn ? personId! : null;
+  const waiting = async () =>
+    email || linkedInTo
+      ? (
+          await db.sql<InviteRow>`
+            select id, code, created_at, emailed_at from orbit.friend_invites
+             where from_user_id = ${me}::uuid and status = 'pending' and expires_at > ${now}::timestamptz
+               and (to_email = ${email} or to_person_id = ${linkedInTo}::uuid)
+             order by created_at desc limit 1`
+        )[0]
+      : undefined;
+  let row = await waiting();
+  const already = !!row;
+  if (!row) {
+    // an invite to them that ran out is closed first, so the one-waiting-invite rule lets the new one in
+    if (email || linkedInTo)
+      await db.sql`
+        update orbit.friend_invites set status = 'expired', answered_at = ${now}::timestamptz
+         where from_user_id = ${me}::uuid and status = 'pending' and expires_at <= ${now}::timestamptz
+           and (to_email = ${email} or to_person_id = ${linkedInTo}::uuid)`;
+    const [today] = await db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.friend_invites
+       where from_user_id = ${me}::uuid and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
+    if ((today?.n ?? 0) >= INVITES_PER_DAY)
+      throw new HttpError(429, 'rate_limited', `at most ${INVITES_PER_DAY} invites a day`);
+    const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
+    // two requests at the same moment: the index lets one in, and the other finds the row it made
+    [row] = await db.sql<InviteRow>`
+      insert into orbit.friend_invites (from_user_id, to_email, to_person_id, code, status, created_at, expires_at)
+      values (${me}::uuid, ${email}, ${linkedInTo}::uuid, ${inviteCode()}, 'pending',
+              ${now}::timestamptz, ${expires}::timestamptz)
+      on conflict do nothing
+      returning id, code, created_at, emailed_at`;
+    row ??= await waiting();
+    if (!row) throw new HttpError(409, 'conflict', 'that invite is being sent already');
+  }
+  const code = row.code;
   const link = `${ctx.env.appUrl}/friends/join/${code}`;
   let status: FriendsInviteResponse['status'] = 'link';
   let name: string | null = null;
-  if (viaLinkedIn) {
+  let via: FriendsInviteResponse['via'];
+  let notSent: FriendsInviteResponse['notSent'];
+  // a LinkedIn invite that is already waiting on them went out when it was made: never a second message
+  if (viaLinkedIn && already) status = 'linkedin';
+  else if (viaLinkedIn) {
     const sent = await linkedinSend(ctx.services(), {
       accountId: viaLinkedIn.accountId,
       attendeeId: viaLinkedIn.member,
@@ -390,7 +488,7 @@ async function invite(ctx: Ctx): Promise<Response> {
     });
     if (!sent.ok) {
       // nothing went out: the invite does not stay waiting on them
-      await db.sql`update orbit.friend_invites set status = 'revoked' where id = ${row!.id}::uuid`;
+      await db.sql`update orbit.friend_invites set status = 'revoked' where id = ${row.id}::uuid`;
       throw new HttpError(
         502,
         'linkedin_send_failed',
@@ -408,35 +506,54 @@ async function invite(ctx: Ctx): Promise<Response> {
       await requestFriendship(db, u, other.id, now);
       status = 'requested';
       name = nameOf(other);
+    } else if (row.emailed_at) {
+      // it went out before: said, not sent again
+      status = 'sent';
     } else {
-      const mailer = (ctx.services() as unknown as { mailer?: MailLike }).mailer;
-      if (mailer?.configured) {
-        const r = await mailer.send({
-          to: email,
-          subject: `${firstOf(u)} wants to pool networks with you on Orbit`,
-          text: [
-            `${nameOf(u)} invited you to be friends on Orbit.`,
-            'Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.',
-            `Open this link to sign in and accept: ${link}`,
-            `It stops working in ${INVITE_DAYS} days.`,
-          ].join('\n\n'),
-        });
-        if (r.ok) status = 'sent';
+      // claimed before the send, so a second request arriving while this one is out sends nothing
+      const [mine] = await db.sql<{ id: string }>`
+        update orbit.friend_invites set emailed_at = ${now}::timestamptz
+         where id = ${row.id}::uuid and emailed_at is null returning id`;
+      if (!mine) status = 'sent';
+      else {
+        const sent = await mailInvite(ctx, u, row.id, email, link);
+        if (sent.via) {
+          status = 'sent';
+          via = sent.via;
+          await db.sql`update orbit.friend_invites set emailed_via = ${sent.via} where id = ${row.id}::uuid`;
+        } else {
+          // nothing went: the claim is given back, so the next tap tries again
+          await db.sql`update orbit.friend_invites set emailed_at = null where id = ${row.id}::uuid`;
+          notSent = sent.why;
+          await logAudit(ctx, 'friends.invite_not_sent', 'friend_invites', row.id, {
+            why: sent.why,
+            error: sent.error ?? null,
+          });
+        }
       }
     }
   }
-  await logAudit(ctx, 'friends.invite', 'friend_invites', row!.id, { status, byEmail: !!email });
+  await logAudit(ctx, 'friends.invite', 'friend_invites', row.id, {
+    status,
+    byEmail: !!email,
+    ...(already ? { already: true } : {}),
+    ...(via ? { via } : {}),
+  });
   const out: FriendsInviteResponse = {
     code,
     link,
     status,
+    ...(already ? { already: true } : {}),
+    ...(via ? { via } : {}),
+    ...(notSent ? { notSent } : {}),
     invite: {
-      id: row!.id,
+      id: row.id,
       direction: 'out',
       email,
       name,
       status: 'pending',
-      createdAt: iso(row!.created_at)!,
+      createdAt: iso(row.created_at)!,
+      ...(email ? { emailed: status === 'sent' } : {}),
     },
   };
   return json(200, out);

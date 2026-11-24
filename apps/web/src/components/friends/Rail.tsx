@@ -337,7 +337,10 @@ export function RequestsSection({
 
 /** What waits on the other side: a request to someone on Orbit, or an invite by email to someone who is not. */
 export function requestedLine(i: FriendInvite): string {
-  return i.name ? 'Request sent' : 'Invited, not on Orbit yet';
+  if (i.name) return 'Request sent';
+  // an invite nobody was emailed is not "invited" yet: the student still has to pass the link on
+  if (i.emailed === false) return 'Not emailed yet: send them your invite link';
+  return i.emailed ? 'Invite emailed, not on Orbit yet' : 'Invited, not on Orbit yet';
 }
 
 /** Requests the student sent that nobody has answered yet. */

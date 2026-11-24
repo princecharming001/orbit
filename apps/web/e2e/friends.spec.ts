@@ -46,7 +46,17 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     await expect(requested.getByTestId('friends-requested-count')).toHaveText('1');
     const row = requested.getByTestId('friends-requested-row');
     await expect(row.getByTestId('friends-requested-row-name')).toHaveText('noah.patel@cornell.edu');
-    await expect(row.getByTestId('friends-requested-row-line')).toHaveText('Invited, not on Orbit yet');
+    await expect(row.getByTestId('friends-requested-row-line')).toHaveText(
+      'Invite emailed, not on Orbit yet',
+    );
+    await expect(page.getByTestId('toasts')).toContainText(
+      'Invite sent to noah.patel@cornell.edu from your Gmail.',
+    );
+    // the same address again is the invite already waiting: still one line, and it says nothing was sent again
+    await page.getByTestId('friends-invite-email').fill('Noah.Patel@cornell.edu');
+    await page.getByTestId('friends-invite-send').click();
+    await expect(page.getByTestId('toasts')).toContainText('You already invited');
+    await expect(requested.getByTestId('friends-requested-count')).toHaveText('1');
     // the other side: the request arrives and is accepted, sharing everyone back
     expect(api.state.friendInvites.filter((i) => i.status === 'pending')).toHaveLength(1);
     await expect(page.getByTestId('friend-row').first()).toContainText('shares 120 people');
