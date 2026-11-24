@@ -219,6 +219,17 @@ describe('sending (§8.5, §14.6, §16)', () => {
       channel: 'gmail',
       goalId: g.body.goal.id,
     });
+    // Yara is somewhere her send window is not open right now, whatever the hour the test runs at: inside the
+    // window a level 1 approval sends at once, which is right and is not what this checks
+    const hourIn = (zone: string) =>
+      Number(
+        new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', hourCycle: 'h23' }).format(
+          new Date(),
+        ),
+      );
+    const h = hourIn('America/New_York');
+    const zone = h >= 7 && h < 11 ? 'Asia/Tokyo' : 'America/New_York';
+    await t.db.sql`update orbit.people set timezone = ${zone} where id = ${q}::uuid`;
     const r2 = await call<{ draft: { status: string; sendAt: string } }>('/drafts/approve', token, {
       draftId: c2.body.draft.id,
     });
