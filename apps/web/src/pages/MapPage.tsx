@@ -66,6 +66,7 @@ import { planFromInput } from '../engine/targetPlan';
 import { isJobLink, linkIn } from '../integrations/postings';
 import { useSession } from '../state/session';
 import { useShowReasoning } from '../state/showReasoning';
+import { useViewState } from '../state/viewState';
 import { Avatar, Button, Card, Chip, cx, LinkedInMark, useToast, useWorking } from '../ui';
 
 type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
@@ -132,8 +133,10 @@ export function MapPage() {
   const working = useWorking();
   const reachParam = params.get('reach');
   const touch = useCoarsePointer();
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
+  // the lens and the search words are kept while the student is away (state/viewState): back from a profile, the
+  // map is the map they left
+  const [query, setQuery] = useViewState(`map:q:${userId ?? ''}`, '');
+  const [filter, setFilter] = useViewState<Filter>(`map:lens:${userId ?? ''}`, 'all');
   // undefined while routes are being computed, so the panel never claims "no route" before it knows
   const [paths, setPaths] = useState<WarmReachPath[] | undefined>([]);
   // plan 21: routes re-ranked by evidence that landed while the student was reading; applied when they say so

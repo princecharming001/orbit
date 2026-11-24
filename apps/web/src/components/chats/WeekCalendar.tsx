@@ -21,6 +21,7 @@ import {
   type WeekCall,
   weekStart,
 } from '../../engine/callsWeek';
+import { useViewState } from '../../state/viewState';
 import { Avatar, cx } from '../../ui';
 import { PersonCompanyLogo } from '../CompanyLogo';
 
@@ -48,7 +49,8 @@ export function WeekCalendar({ userId }: { userId: string }) {
       // a private window keeps the choice for this visit only
     }
   };
-  const [offset, setOffset] = useState(0);
+  // the week or month looked at is kept while the student is away (state/viewState)
+  const [offset, setOffset] = useViewState(`chats:offset:${userId}`, 0);
   const start = useMemo(() => {
     const s = weekStart(new Date());
     s.setDate(s.getDate() + offset * 7);

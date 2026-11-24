@@ -43,6 +43,7 @@ import { planFromInput } from '../engine/targetPlan';
 import { isServerUser } from '../integrations/orbitApi';
 import { isJobLink, linkIn } from '../integrations/postings';
 import { useSession } from '../state/session';
+import { useViewState } from '../state/viewState';
 import { Avatar, Button, EmptyState, Input, PageHeader, Tabs, useToast, useWorking } from '../ui';
 
 /**
@@ -91,7 +92,15 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [updating, setUpdating] = useState(true);
   const [params, setParams] = useSearchParams();
   // a company page's "Find people there" opens Discover searching for the company
-  const [q, setQ] = useState(() => params.get('q') ?? '');
+  // kept while the student is away (state/viewState): back from a profile, the same search is on the page
+  const linkedQ = params.get('q') ?? '';
+  const [q, setQ] = useViewState(`discover:q:${userId ?? ''}`, linkedQ);
+  // a link that names a search ("Find people there" on a company page) wins over what was typed before
+  const seenLinkedQ = useRef('');
+  useEffect(() => {
+    if (linkedQ && seenLinkedQ.current !== linkedQ) setQ(linkedQ);
+    seenLinkedQ.current = linkedQ;
+  }, [linkedQ, setQ]);
   const [job, setJob] = useState<
     { state: 'reading' } | { state: 'plan'; id: string } | { state: 'error'; message: string }
   >();
@@ -110,7 +119,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   };
   // people acted on or dismissed here leave the page at once: the feed is rebuilt from the database, which can lag a
   // few seconds behind while a LinkedIn sync is writing people
-  const [goneHere, setGoneHere] = useState<Set<string>>(() => new Set());
+  const [goneHere, setGoneHere] = useViewState<Set<string>>(`discover:gone:${userId ?? ''}`, () => new Set());
   const goHere = (memberId: string) => setGoneHere((cur) => new Set(cur).add(memberId));
   const [loading, setLoading] = useState(false);
   const [outcome, setOutcome] = useState<LoadMoreOutcome>();

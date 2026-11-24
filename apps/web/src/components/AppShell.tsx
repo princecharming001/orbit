@@ -20,7 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { type ReactNode, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { useChatEngine } from '../chat/engineContext';
 import type { ChatConversation } from '../chat/types';
 import { withoutRefs } from '../chat/ui/cards/next';
@@ -31,6 +31,7 @@ import { draftLists, startedDrafts } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
 import { PageLoading, preloadPages } from '../pages/lazyPages';
 import { useSession } from '../state/session';
+import { keepScroll, scrollOf } from '../state/viewState';
 import { Avatar, calendarDaysBetween, cx, Skeleton, useToast } from '../ui';
 import { ActivityLine } from './ActivityLine';
 import { RatePrompt } from './account/RatePrompt';
@@ -91,7 +92,8 @@ export function AppShell() {
       return true;
     }
   });
-  const { pathname } = useLocation();
+  const { pathname, key: placeKey } = useLocation();
+  const arrivedBy = useNavigationType();
   useTrackPlace();
   const mainRef = useRef<HTMLElement>(null);
   const fillsScreen = pathname === '/map';
@@ -102,13 +104,55 @@ export function AppShell() {
   const isChat = pathname === '/';
   const engine = useChatEngine();
   const chat = useMemo(() => threadActions(engine), [engine]);
-  // a new page starts at its top, not where the last one was scrolled to (before any card scrolls itself into view)
+  // A page the student goes to starts at its top (before any card scrolls itself into view). A page they come BACK
+  // to (the back or forward button) opens where they left it: down a long list, a profile opened and closed should
+  // not cost them their place. Lists fill in a moment after the page mounts, so the place is set again for a few
+  // frames until the page is tall enough, and given up the moment the student scrolls themselves.
   useLayoutEffect(() => {
     void pathname;
-    if (mainRef.current) mainRef.current.scrollTop = 0;
-    window.scrollTo(0, 0);
     setMore(false);
-  }, [pathname]);
+    const main = mainRef.current;
+    const back = arrivedBy === 'POP' ? scrollOf(placeKey) : 0;
+    if (!back) {
+      if (main) main.scrollTop = 0;
+      window.scrollTo(0, 0);
+      return;
+    }
+    if (!main) return;
+    let frames = 0;
+    let frame = 0;
+    let given = false;
+    const giveUp = () => {
+      given = true;
+    };
+    const place = () => {
+      if (given) return;
+      main.scrollTop = back;
+      // tall enough to hold the place, or a second has passed: done
+      if (main.scrollHeight - main.clientHeight >= back || ++frames > 60) return;
+      frame = requestAnimationFrame(place);
+    };
+    place();
+    main.addEventListener('wheel', giveUp, { passive: true, once: true });
+    main.addEventListener('touchstart', giveUp, { passive: true, once: true });
+    main.addEventListener('keydown', giveUp, { once: true });
+    return () => {
+      given = true;
+      cancelAnimationFrame(frame);
+      main.removeEventListener('wheel', giveUp);
+      main.removeEventListener('touchstart', giveUp);
+      main.removeEventListener('keydown', giveUp);
+    };
+    // the place belongs to the history entry: a change of path is what moves between pages
+  }, [pathname, placeKey, arrivedBy]);
+  // how far down this history entry is scrolled, kept as the student scrolls, for the day they come back to it
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    const keep = () => keepScroll(placeKey, main.scrollTop);
+    main.addEventListener('scroll', keep, { passive: true });
+    return () => main.removeEventListener('scroll', keep);
+  }, [placeKey]);
   // what waits on the student in Drafts: the "To send" tab (drafts worth sending today, not the ones that can wait,
   // and the drafts the student started) plus messages opened in the mail app or LinkedIn and not marked as sent
   const pending =

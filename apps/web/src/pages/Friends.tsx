@@ -59,6 +59,7 @@ import {
 } from '../engine/friends';
 import { isAccountMode, startGoogleSignIn } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
+import { useViewState } from '../state/viewState';
 import { Button, Card, PageHeader, useToast, useWorking } from '../ui';
 
 const TAP = 'pointer-coarse:min-h-11';
@@ -163,8 +164,12 @@ export function FriendsPage() {
     moreToInvite?: boolean;
   }>();
   const [tiles, setTiles] = useState<Record<string, TileState>>({});
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<FriendSuggestion[]>();
+  // the search and what it found are kept while the student is away (state/viewState)
+  const [query, setQuery] = useViewState(`friends:q:${user?.id ?? ''}`, '');
+  const [results, setResults] = useViewState<FriendSuggestion[] | undefined>(
+    `friends:found:${user?.id ?? ''}`,
+    undefined,
+  );
   const [link, setLink] = useState<string>();
   const searchSeq = useRef(0);
   const tile = (id: string, state: TileState) => setTiles((t) => ({ ...t, [id]: state }));
