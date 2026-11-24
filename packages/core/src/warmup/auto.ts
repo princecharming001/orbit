@@ -518,19 +518,23 @@ export function warmUpStopWords(reason: string | undefined, first: string): stri
 
 /**
  * The chat's warm-up plan as a run stands: one action per step, done with the time it ran, skipped with why. A step
- * that engaged with the post carries the post's topic as its note, so the first message can name the post. A run that
- * stopped hands the steps left back to the student under their manual labels; a run the student cancelled is not
- * mirrored at all (the chat leaves the warm-up).
+ * that engaged with the post carries the post's topic as its note, so the first message can name the post. A run Orbit
+ * stopped hands the steps it never reached back to the student, open again under their manual labels; a run the
+ * student stopped leaves them closed (the chat leaves the warm-up).
  */
 export function planFromRun(run: WarmUpRun, slug: string): WarmUpPlan {
   const live = run.status !== 'stopped';
+  // stopped by Orbit (LinkedIn needs a sign-in, the setting went off): the steps it never reached are the student's
+  // to do, not steps anyone skipped. Stopped by the student: nothing is left to do.
+  const handBack = run.status === 'stopped' && run.stopReason !== 'cancelled';
   const actions: WarmUpAction[] = run.steps
     .slice()
     .sort((a, b) => a.seq - b.seq)
     .map((s) => {
       const done = s.status === 'done';
-      const skipped = s.status === 'skipped';
-      const noteWords = s.note ? WARMUP_STEP_NOTE_WORDS[s.note as WarmUpStepNote] : undefined;
+      const open = handBack && s.status !== 'done' && (s.status !== 'skipped' || s.note === 'stopped');
+      const skipped = s.status === 'skipped' && !open;
+      const noteWords = !open && s.note ? WARMUP_STEP_NOTE_WORDS[s.note as WarmUpStepNote] : undefined;
       return {
         id: `w${s.seq}`,
         kind: s.kind,
@@ -546,7 +550,7 @@ export function planFromRun(run: WarmUpRun, slug: string): WarmUpPlan {
     });
   return {
     startedAt: run.startedAt,
-    readyAt: run.finishedAt ?? run.readyAt,
+    readyAt: run.status === 'done' ? (run.finishedAt ?? run.readyAt) : run.readyAt,
     actions,
     auto: {
       runId: run.id,

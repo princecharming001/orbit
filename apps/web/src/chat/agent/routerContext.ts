@@ -119,7 +119,8 @@ async function routerMore(userId: string) {
     db.chats
       .where('userId')
       .equals(userId)
-      .filter((c) => c.stage === 'warming' && !!c.warmUp)
+      // a warm-up Orbit runs itself has no step for the student to mark or skip
+      .filter((c) => c.stage === 'warming' && !!c.warmUp && c.warmUp.auto?.status !== 'running')
       .toArray(),
     db.merges
       .where('userId')

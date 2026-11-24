@@ -501,13 +501,49 @@ describe('the run as the browser shows it', () => {
     });
   });
 
-  it('hands the steps left back to the student when a run stops', () => {
-    const plan = planFromRun(run({ status: 'stopped', stopReason: 'linkedin_sign_in' }), 'priya');
+  /** a run stopped after its first step, as the server leaves it: the steps never reached are closed as "stopped" */
+  const stoppedRun = (reason: string) =>
+    run({
+      status: 'stopped',
+      stopReason: reason,
+      finishedAt: '2026-12-14T16:00:00Z',
+      steps: run().steps.map((s) =>
+        s.status === 'pending' ? { ...s, status: 'skipped' as const, note: 'stopped' } : s,
+      ),
+    });
+
+  it('hands the steps Orbit never reached back to the student when Orbit stops a run', () => {
+    const plan = planFromRun(stoppedRun('linkedin_sign_in'), 'priya');
     expect(plan.auto).toMatchObject({ status: 'stopped', stopReason: 'linkedin_sign_in' });
     expect(plan.actions[0]!.label).toBe('Orbit views their profile');
-    expect(plan.actions[1]!.label).toBe('React to one recent post that you genuinely find useful');
+    expect(plan.actions[0]!.doneAt).toBeTruthy();
+    // open again, under the words of a step the student does
+    expect(plan.actions[1]).toMatchObject({
+      label: 'React to one recent post that you genuinely find useful',
+    });
+    expect(plan.actions[1]!.skippedAt).toBeUndefined();
+    expect(plan.actions[1]!.autoNote).toBeUndefined();
+    expect(plan.actions[2]!.skippedAt).toBeUndefined();
+    // the planned date stands, so the first message is not called ready the moment the run stops
+    expect(plan.readyAt).toBe('2026-12-17T18:00:00Z');
     // the manual rules apply again
-    expect(warmUpProgress(plan, at('2026-12-15T15:00:00Z'), NY).nextAction?.id).toBe('w2');
+    const prog = warmUpProgress(plan, at('2026-12-15T15:00:00Z'), NY);
+    expect(prog.nextAction?.id).toBe('w2');
+    expect(prog.ready).toBe(false);
+    // a step that was skipped for its own reason before the stop stays skipped
+    const gone = stoppedRun('setting_off');
+    gone.steps[1] = { ...gone.steps[1]!, note: 'post_gone' };
+    expect(planFromRun(gone, 'priya').actions[1]!.skippedAt).toBeTruthy();
+  });
+
+  it('leaves nothing to do when the student stopped it', () => {
+    const plan = planFromRun(stoppedRun('cancelled'), 'priya');
+    expect(plan.actions.map((a) => [!!a.doneAt, !!a.skippedAt])).toEqual([
+      [true, false],
+      [false, true],
+      [false, true],
+    ]);
+    expect(plan.actions[1]!.autoNote).toBe('Not run: the warm-up stopped first.');
   });
 
   const settings = { warmUpEnabled: true, warmUpDays: 4 } as UserSettings;
@@ -585,8 +621,7 @@ describe('the run as the browser shows it', () => {
   });
 
   it('gives the student the step cards back when a run stopped', () => {
-    const stopped = run({ status: 'stopped', stopReason: 'setting_off' });
-    const cands = generateCandidates(input(at('2026-12-16T16:00:00Z'), chatWith(stopped)));
+    const cands = generateCandidates(input(at('2026-12-16T16:00:00Z'), chatWith(stoppedRun('setting_off'))));
     expect(cands.find((c) => c.kind === 'warm_up_engage')?.signals.actionId).toBe('w2');
   });
 });

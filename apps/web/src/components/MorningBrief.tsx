@@ -41,7 +41,9 @@ import { photoWanted } from '../engine/photoSignals';
 import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
 import { snoozeSuggestion } from '../engine/send';
 import { decideProposedStage } from '../engine/stages';
+import { opensWarmUpSheet } from '../engine/warmupAuto';
 import { useSession } from '../state/session';
+import { openWarmUpSheet } from '../state/warmUpSheet';
 import { Avatar, Button, Chip, cx, LinkedInMark, useToast } from '../ui';
 import { DeckLayer, useDeckFocus, useDeckKeys, useDeckSwipe } from '../ui/Deck';
 import { runApproval } from './approve';
@@ -810,10 +812,17 @@ function Decision({
     pick_person: () => onLeave(`/notes/new?note=${s.payload.noteId as string}`),
     review: () => void review(),
     start_warm_up: () =>
-      void decide(
-        () => startWarmUpOrOutreach(user, person!.id, 'linkedin', 'recommendation'),
-        `Warm-up started for ${first}. The first step shows in Drafts.`,
-      ),
+      void (async () => {
+        // Orbit can run it: the start sheet shows the plan and the comment, and Start is pressed there
+        if (await opensWarmUpSheet(user, person!.id)) {
+          openWarmUpSheet({ personId: person!.id, source: 'recommendation' });
+          return;
+        }
+        await decide(
+          () => startWarmUpOrOutreach(user, person!.id, 'linkedin', 'recommendation'),
+          `Warm-up started for ${first}. The first step shows in Drafts.`,
+        );
+      })(),
     tomorrow: () =>
       void decide(() => snoozeSuggestion(user.id, s, 1), `Put off until tomorrow.`, { o: 'later' }),
   };
@@ -1218,12 +1227,21 @@ function MoveRow({
               disabled={busy}
               onClick={() =>
                 act(async () => {
-                  await startWarmUpOrOutreach(
-                    user,
-                    m.personId,
-                    'linkedin',
-                    m.kind === 'reach_out' ? 'recommendation' : 'manual',
-                  );
+                  const source = m.kind === 'reach_out' ? 'recommendation' : 'manual';
+                  if (await opensWarmUpSheet(user, m.personId)) {
+                    openWarmUpSheet({
+                      personId: m.personId,
+                      source,
+                      onStarted: () => {
+                        setDoneText(
+                          `Warm-up started for ${first}. Orbit runs it and tells you when it is done.`,
+                        );
+                        setPhase('done');
+                      },
+                    });
+                    return;
+                  }
+                  await startWarmUpOrOutreach(user, m.personId, 'linkedin', source);
                   setDoneText(`Warm-up started for ${first}. The first step shows in Drafts.`);
                   setPhase('done');
                 })

@@ -134,6 +134,9 @@ import type {
   VoiceNoteResponse,
   VoiceRelearnResponse,
   VoiceResponse,
+  WarmUpPreviewResult,
+  WarmUpRun,
+  WarmUpStartResult,
   ZoomConnectStartResponse,
   ZoomMeetingRequest,
   ZoomMeetingResponse,
@@ -472,6 +475,11 @@ export interface ApiRoutes {
   '/search/read': [SearchReadRequest, SearchReadResponse];
   // the owner's cost view (plan 34 E3); anyone else gets 404
   '/admin/costs': [Record<string, never>, CostDigestResponse];
+  // the automated LinkedIn warm-up: the plan before anything runs, Start with the approved comment, Stop, and "seen"
+  '/warmups/preview': [{ personId: string; warmUpDays?: number }, WarmUpPreviewResult];
+  '/warmups/start': [{ warmupId: string; comment: string | null }, WarmUpStartResult];
+  '/warmups/stop': [{ warmupId?: string; personId?: string }, { stopped: boolean; run?: WarmUpRun }];
+  '/warmups/told': [{ warmupId: string }, { ok: boolean }];
 }
 export type ClientRoute = keyof ApiRoutes;
 
@@ -675,7 +683,11 @@ export function methodOf(route: string): HttpMethod {
 
 const REQUEST_TIMEOUT_MS = 25_000;
 /** routes that read the web and look up emails take longer than a normal call (seen live: a 47-second search) */
-const SLOW_ROUTES: Record<string, number> = { '/source/search': 75_000 };
+const SLOW_ROUTES: Record<string, number> = {
+  '/source/search': 75_000,
+  // reads the person's posts on LinkedIn and drafts the comment before it answers
+  '/warmups/preview': 60_000,
+};
 /** refresh this long before the access token expires */
 export const REFRESH_BEFORE_MS = 5 * 60_000;
 

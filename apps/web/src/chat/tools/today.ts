@@ -423,6 +423,10 @@ export const markWarmupStep = defineTool({
     if (!chat || chat.userId !== ctx.user.id || !chat.warmUp) throw new Error('That chat has no warm-up.');
     if (!chat.warmUp.actions.some((a) => a.id === input.actionId))
       throw new Error('That warm-up step is not on this chat.');
+    if (chat.warmUp.auto?.status === 'running')
+      throw new Error(
+        'Orbit is running this warm-up from your LinkedIn, so there is no step to mark. Stop it on their page to do the steps yourself.',
+      );
     await markWarmUpAction(
       ctx.user.id,
       input.chatId,

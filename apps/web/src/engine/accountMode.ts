@@ -113,6 +113,9 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
   if (typeof s.autopilot_paused_until === 'string') ladder.autopilotPausedUntil = s.autopilot_paused_until;
   if (typeof s.daily_send_cap_gmail === 'number') ladder.dailySendCapGmail = s.daily_send_cap_gmail;
   if (typeof s.daily_send_cap_linkedin === 'number') ladder.dailySendCapLinkedin = s.daily_send_cap_linkedin;
+  // "Run warm-ups for me" is on unless the student turned it off (on any device)
+  if (s.warmup_auto === false) ladder.warmUpAuto = false;
+  else if (local?.warmUpAuto === false && 'warmup_auto' in s) ladder.warmUpAuto = true;
   if (local && Object.keys(ladder).length) await db.settings.update(user.id, ladder);
   // the student's own words from setup (plan 24), on a device that has none yet
   const about = ownWordsOf(a.settings?.about as Partial<RecruitingGoals> | undefined);

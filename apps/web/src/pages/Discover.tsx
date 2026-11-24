@@ -40,10 +40,12 @@ import {
   unsaveRecommendation,
 } from '../engine/recommend';
 import { planFromInput } from '../engine/targetPlan';
+import { autoWarmUpMode, opensWarmUpSheet } from '../engine/warmupAuto';
 import { isServerUser } from '../integrations/orbitApi';
 import { isJobLink, linkIn } from '../integrations/postings';
 import { useSession } from '../state/session';
 import { useViewState } from '../state/viewState';
+import { openWarmUpSheet } from '../state/warmUpSheet';
 import { Avatar, Button, EmptyState, Input, PageHeader, Tabs, useToast, useWorking } from '../ui';
 
 /**
@@ -276,6 +278,11 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           ? `Writing to ${first}…`
           : `Getting the first step ready for ${first}…`;
     return run(actionKey(personId, opts.skipWarmUp ? 'write' : 'start'), label, async () => {
+      // Orbit can run the warm-up itself: the plan and the comment are shown first, and Start is pressed there
+      if (!opts.skipWarmUp && (await opensWarmUpSheet(user, personId))) {
+        openWarmUpSheet({ personId, source: 'recommendation' });
+        return;
+      }
       const r = await startWarmUpOrOutreach(
         user,
         personId,
@@ -333,12 +340,18 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
             ? `Starting the warm-up with ${first}…`
             : `Adding ${first} to your people…`;
       void run(actionKey(card.id, action), label, async () => {
-        const r = await actOnFound(user, card.entry.memberId, action);
+        // a warm-up Orbit can run: the person is saved first, then the start sheet shows the plan and the comment
+        const sheet = action === 'warm_up' && !!(await autoWarmUpMode(user));
+        const r = await actOnFound(user, card.entry.memberId, sheet ? 'save' : action);
         if (!r.ok) {
           toast.push({ text: r.message, tone: 'bad', ttl: 6000 });
           return;
         }
         goHere(card.entry.memberId);
+        if (sheet) {
+          openWarmUpSheet({ personId: r.personId, source: 'recommendation' });
+          return;
+        }
         if (action === 'write' && r.draftId) nav(`/people/${r.personId}?open=${r.draftId}`);
         else if (action === 'intro') nav(`/map?reach=${r.personId}`);
         else if (action === 'warm_up')

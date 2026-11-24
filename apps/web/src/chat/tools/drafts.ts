@@ -32,7 +32,9 @@ import {
   undoQueued,
 } from '../../engine/send';
 import { draftLists, startedDrafts } from '../../engine/today';
+import { opensWarmUpSheet } from '../../engine/warmupAuto';
 import { isServerUser } from '../../integrations/orbitApi';
+import { openWarmUpSheet } from '../../state/warmUpSheet';
 import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
@@ -176,6 +178,19 @@ export const createDraft = defineTool({
         return ok('text', out, out, `${text} Pass a kind to write anyway.`, `/people/${person.id}`);
       }
       kind = next.kind;
+    }
+    // Orbit can run the warm-up itself (an Orbit account with LinkedIn connected): the plan and the comment go on
+    // screen for the student to approve, and nothing starts until they press Start there
+    if (kind === 'outreach' && input.warmUp === 'start' && (await opensWarmUpSheet(ctx.user, person.id))) {
+      openWarmUpSheet({ personId: person.id, source: 'manual' });
+      const out = { warmUpSheet: true, person: personRef(person) };
+      return ok(
+        'text',
+        out,
+        out,
+        `The warm-up plan for ${person.firstName} is open on the screen: the days, the post Orbit picked and the comment it drafted. Nothing has started. Tell the student to read the comment, change it or leave it out, and press Start there. After that Orbit does the steps from their LinkedIn and says when it is done.`,
+        `/people/${person.id}`,
+      );
     }
     const r = await composeDraft(ctx.user, person.id, kind, {
       confirmed: !!input.warmUp,

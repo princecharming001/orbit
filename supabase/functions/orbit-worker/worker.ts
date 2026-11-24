@@ -168,6 +168,9 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'roles.topup': 40_000,
   // plan 44: the roles tick works for up to 40 s (TICK_MS) and stops itself before
   'roles.tick': 50_000,
+  // one LinkedIn action, or a look for a comment and then the comment: two calls of up to 20 s each. Never started
+  // with less, so a like or a comment is not cut off between the request and its answer
+  'warmup.step': 45_000,
 };
 export const DEFAULT_RESERVE_MS = 8_000;
 

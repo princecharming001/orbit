@@ -1,4 +1,4 @@
-import type { CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion } from '@orbit/core';
+import type { CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion, User } from '@orbit/core';
 import { draftKindLabel, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useRef, useState } from 'react';
@@ -13,6 +13,7 @@ import { Queue } from '../components/Queue';
 import { RepliesChecked } from '../components/RepliesChecked';
 import { SentForYou } from '../components/SentForYou';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
+import { useStopWarmUp } from '../components/WarmUpCard';
 import { openWeekReview } from '../components/WeekReview';
 import { db } from '../db/schema';
 import { ensureDrafts, generateBrief, isMessageSuggestion, revalidatePending } from '../engine/brief';
@@ -554,7 +555,7 @@ export function InboxPage() {
             ))}
         </div>
         <div className="rail-flat min-w-0">
-          <ComingUp events={events} warming={warming} byId={byId} now={now} />
+          <ComingUp user={user} events={events} warming={warming} byId={byId} now={now} />
           <SentForYou view={autopilot} />
           {quiet.length > 0 && user && (
             <Card data-testid="drafts-quiet">
@@ -620,16 +621,19 @@ export function InboxPage() {
 
 /** Chats in the next seven days and warm-ups under way, with when the next step comes. */
 function ComingUp({
+  user,
   events,
   warming,
   byId,
   now,
 }: {
+  user: User | undefined;
   events: CalendarEvent[];
   warming: { chat: CoffeeChat; next?: { dueAt: string } }[];
   byId: Map<string, Person>;
   now: Date;
 }) {
+  const { stop, stopping } = useStopWarmUp(user);
   return (
     <Card data-testid="coming-up">
       <div className="font-medium mb-3">Coming up</div>
@@ -674,14 +678,26 @@ function ComingUp({
                   {p.displayName}
                 </Link>
                 <div className="text-[12px] text-ink-3 truncate">
-                  Warm-up ·{' '}
+                  {chat.warmUp!.auto?.status === 'running' ? 'Orbit is warming up' : 'Warm-up'} ·{' '}
                   {next
                     ? `next step ${new Date(next.dueAt) <= now ? 'today' : relDate(next.dueAt, now)}`
-                    : new Date(chat.warmUp!.readyAt) <= now
+                    : new Date(chat.warmUp!.readyAt) <= now || chat.warmUp!.auto?.status === 'done'
                       ? 'first message ready'
                       : `first message ${relDate(chat.warmUp!.readyAt, now)}`}
                 </div>
               </div>
+              {next && (
+                <button
+                  type="button"
+                  className="shrink-0 text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink disabled:cursor-progress"
+                  onClick={() => void stop(chat, p.firstName)}
+                  disabled={stopping === chat.id}
+                  aria-label={`Stop the warm-up for ${p.displayName}`}
+                  data-testid="upcoming-warmup-stop"
+                >
+                  Stop
+                </button>
+              )}
             </li>
           );
         })}

@@ -347,12 +347,13 @@ export async function morningDeck(
         id: `wu:${c.id}`,
         kind: 'write',
         text: `Write your first message to ${p.firstName}`,
-        sub: 'The warm-up is done',
+        sub: c.warmUp.auto?.status === 'done' ? 'Orbit finished the warm-up' : 'The warm-up is done',
         href: `/people/${p.id}`,
         personId: p.id,
         chatId: c.id,
       });
-    else if (next && new Date(next.dueAt) <= now) {
+    else if (c.warmUp.auto?.status !== 'running' && next && new Date(next.dueAt) <= now) {
+      // (a warm-up Orbit runs has no step for the student)
       // a step the student put off (Tomorrow) or turned down waits until it is due again
       const card = suggestions.find((s) => s.dedupeKey === `warm:${c.id}:${next.id}`);
       if (card && card.status !== 'pending' && !(card.status === 'snoozed' && live.includes(card))) continue;

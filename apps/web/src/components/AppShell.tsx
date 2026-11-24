@@ -50,6 +50,8 @@ import { OutboxScheduler } from './OutboxScheduler';
 import { ReplyWatch } from './ReplyWatch';
 import { ReadinessChip, ReadinessWatch } from './sync/ReadinessChip';
 import { useLogOut } from './useLogOut';
+import { WarmUpStartSheet } from './WarmUpStartSheet';
+import { WarmUpWatch } from './WarmUpWatch';
 import { WeekReviewLauncher } from './WeekReview';
 
 // the chat is home (New chat and the logo open it); People holds the board and the list, Drafts what waits to be sent
@@ -315,6 +317,8 @@ export function AppShell() {
     <div className="h-full flex">
       <OutboxScheduler />
       <ReplyWatch />
+      <WarmUpWatch />
+      <WarmUpStartSheet />
       <NotesWatch />
       <WeekReviewLauncher />
       <LinkedInAutoSync />

@@ -769,6 +769,9 @@ export const getPerson = defineTool({
         ? {
             chatId: chat.id,
             readyAt: fmtDay(chat.warmUp.readyAt, ctx),
+            // Orbit runs the steps from the student's LinkedIn (running), has finished them (done), or stopped and
+            // handed the rest back (stopped); unset: the student does each step
+            ...(chat.warmUp.auto ? { orbitRunsIt: chat.warmUp.auto.status } : {}),
             steps: chat.warmUp.actions.map((a) => ({
               actionId: a.id,
               kind: a.kind,
@@ -1853,6 +1856,7 @@ export const getSettings = defineTool({
             maxBumps: settings.maxBumps,
             warmUpEnabled: settings.warmUpEnabled,
             warmUpDays: settings.warmUpDays,
+            warmUpAuto: settings.warmUpAuto !== false,
             schedulingLink: settings.schedulingLink,
             briefTimeLocal: settings.briefTimeLocal,
             dismissedHints: settings.dismissedHints ?? [],
