@@ -86,7 +86,9 @@ describe('why someone on the demo account is suggested', () => {
     const line = whyThemFor(all[signals.indexOf(named!)]!.p, all[signals.indexOf(named!)]!.r, ctx).find(
       (w) => w.kind === 'mutuals',
     );
-    expect(line?.text).toMatch(/^You both know [A-Z]/);
+    // by full name, as people the student knows well
+    expect(line?.text).toMatch(/^Knows [A-Z][a-z]+ [A-Z]/);
+    expect(line?.people?.length).toBeGreaterThan(0);
     const alum = signals.find((s) => s.school?.gradYear);
     expect(alum?.school?.myGradYear).toBe(user.graduationYear);
     // an introducer is a way in, named
@@ -94,7 +96,10 @@ describe('why someone on the demo account is suggested', () => {
     if (withIntro) {
       const intro = ctx.people.get(withIntro.r.bestPath!.hops[0]!.toId)!;
       const why = whyThemFor(withIntro.p, withIntro.r, ctx, intro);
-      expect(why.some((w) => w.text === `${intro.firstName} could introduce you`)).toBe(true);
+      const way = why.find((w) => w.kind === 'warm_path');
+      expect(way?.text.startsWith(`${intro.displayName}`)).toBe(true);
+      expect(way?.text.endsWith('could introduce you.')).toBe(true);
+      expect(way?.people).toEqual([{ id: intro.id, name: intro.displayName }]);
     }
   });
 
@@ -120,6 +125,6 @@ describe('why someone on the demo account is suggested', () => {
       { reasons: [] },
       { ...ctx, edges: [], touchpoints: [], affiliations: [] },
     );
-    expect(why.map((w) => w.text)).toEqual(['Only their title and company so far']);
+    expect(why.map((w) => w.text)).toEqual(['Only their title and company so far.']);
   });
 });

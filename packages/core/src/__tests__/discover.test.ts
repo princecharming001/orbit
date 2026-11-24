@@ -243,10 +243,10 @@ describe('Discover scores', () => {
     expect(by('D').fit).toBeGreaterThan(by('F').fit); // an APM beats a director for a student's coffee chat
     expect(by('A').reasons[0]!.code).toBe('alumni_target');
     // the target company is the reason; three mutual connections only say the path is warm
-    expect(by('B').reasons[0]!.text).toBe('Works at Figma, on your target list');
+    expect(by('B').reasons[0]!.text).toBe('Works at Figma. Figma is one of your top target companies.');
     const texts = by('B').reasons.map((r) => r.text);
-    expect(texts.indexOf('3 mutual connections')).toBeGreaterThan(
-      texts.indexOf('Works at Figma, on your target list'),
+    expect(texts.indexOf('LinkedIn shows 3 mutual connections between you.')).toBeGreaterThan(
+      texts.indexOf('Works at Figma. Figma is one of your top target companies.'),
     );
     // a junior answers a student more often than a director does
     expect(by('D').odds).toBeGreaterThan(by('F').odds);
@@ -288,7 +288,9 @@ describe('Discover scores', () => {
     const n = pool.find((c) => c.name === 'N')!;
     const withHistory = scoreDiscoverCandidate(n, p);
     expect(withHistory.fit).toBeGreaterThan(scoreDiscoverCandidate(n, profile()).fit);
-    expect(withHistory.reasons.map((r) => r.text)).toContain('Same kind of role as Maya, who replied to you');
+    expect(withHistory.reasons.map((r) => r.text)).toContain(
+      'Has the same role as Maya at Plaid, who replied to you.',
+    );
   });
 
   it('never says someone works in a role their headline only hopes for, and names a school only with evidence', () => {
@@ -314,7 +316,7 @@ describe('Discover scores', () => {
       p,
     );
     expect(working.reasons.map((r) => r.text)).toContain(
-      "Software Engineer at Acme, the role you're targeting",
+      'Works as a Software Engineer at Acme, the kind of role you are aiming for.',
     );
     // a role true of thousands is never a reason on its own (quality.worthSuggesting needs a specific one)
     expect(working.reasons.every((r) => r.code !== 'target_company' && r.code !== 'alumni_field')).toBe(true);

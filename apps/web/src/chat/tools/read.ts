@@ -33,6 +33,8 @@ import {
   TARGET_STATUS_LABELS,
   TOUCHPOINT_LABELS,
   warmUpProgress,
+  whyCard,
+  whyThem,
   wordsIn,
 } from '@orbit/core';
 import { db } from '../../db/schema';
@@ -57,6 +59,7 @@ import {
 import { linkedInLiveStatus } from '../../engine/linkedinLive';
 import { namedPeopleLabel, previewNoteMatch } from '../../engine/notes';
 import { findPathsOnServer, serverPathView } from '../../engine/paths';
+import { loadPointContext, whySignalsFor } from '../../engine/personPoints';
 import { wentQuiet } from '../../engine/pipeline';
 import { buildPrep, personSummary } from '../../engine/prep';
 import { introducerIdFor, isColdRecommendation } from '../../engine/recommend';
@@ -1591,35 +1594,64 @@ export const listRecommendations = defineTool({
       );
     }
     const status = input.status ?? 'all';
-    const list = recs
+    const chosen = recs
       .filter((r) => (status === 'all' ? r.status === 'new' || r.status === 'saved' : r.status === status))
       .sort((a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score)
       .slice(0, limit)
-      .map((r) => {
-        const p = byId.get(r.personId);
-        if (!p) return undefined;
-        const cold = isColdRecommendation(p, r);
-        const introId = introducerIdFor(r);
-        return {
-          recommendationId: r.id,
-          ...personRef(p),
-          alum: !!p.isAlumni,
-          status: r.status,
-          reasons: r.reasons.slice(0, 3).map((x) => x.text),
-          match: Math.round(r.fitScore * 100),
-          reach: Math.round(r.reachScore * 100),
-          cold,
-          warmUpAdvised: cold && !introId,
-          introducer: introId ? byId.get(introId)?.displayName : undefined,
-          introducerId: introId,
-          dismissedReason: r.dismissedReason,
-        };
-      })
-      .filter(Boolean);
+      .filter((r) => byId.has(r.personId));
+    // the same why as their Discover card: one sentence, then the reasons, read from the person as Orbit knows them now
+    const pointCtx = chosen.length
+      ? await loadPointContext(
+          ctx.user,
+          chosen.map((r) => r.personId),
+          new Date(),
+          people,
+        )
+      : undefined;
+    const list = chosen.map((r) => {
+      const p = byId.get(r.personId)!;
+      const cold = isColdRecommendation(p, r);
+      const introId = introducerIdFor(r);
+      const why = pointCtx
+        ? whyThem(
+            whySignalsFor(
+              p,
+              r,
+              { ...pointCtx, dossier: pointCtx.dossiers.get(p.id) },
+              introId ? byId.get(introId) : undefined,
+            ),
+            { filler: false },
+          )
+        : [];
+      const card = whyCard(why, p.firstName);
+      const summaryLine = card.summary;
+      const reasons = why.length ? card.bullets.map((x) => x.text) : r.reasons.slice(0, 3).map((x) => x.text);
+      return {
+        recommendationId: r.id,
+        ...personRef(p),
+        alum: !!p.isAlumni,
+        status: r.status,
+        ...(summaryLine ? { why: summaryLine } : {}),
+        reasons,
+        match: Math.round(r.fitScore * 100),
+        reach: Math.round(r.reachScore * 100),
+        cold,
+        warmUpAdvised: cold && !introId,
+        introducer: introId ? byId.get(introId)?.displayName : undefined,
+        introducerId: introId,
+        dismissedReason: r.dismissedReason,
+      };
+    });
+    // the reasons can carry a subject line from their mail: the model reads them wrapped
+    const forModel = list.map((x) => ({
+      ...x,
+      why: x.why ? wrapped(ctx, 'reason', x.why, 400) : undefined,
+      reasons: x.reasons.map((t) => wrapped(ctx, 'reason', t, 300)),
+    }));
     const summary = list.length
       ? `${plural(list.length, 'recommendation')}${status !== 'all' ? ` (${status})` : ''} on Discover.`
       : 'No recommendations in that list.';
-    return ok('people', { recommendations: list }, { recommendations: list }, summary, '/discover');
+    return ok('people', { recommendations: list }, { recommendations: forModel }, summary, '/discover');
   },
   toModel,
 });

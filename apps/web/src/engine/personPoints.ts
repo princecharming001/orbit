@@ -27,11 +27,14 @@ import type {
 import {
   functionPhrase,
   heldRole,
+  LEVEL_RANK,
   matchedFunction,
   normalizeCompany,
   placeMatch,
   tieBand,
   titleChangedMeaningfully,
+  titleFunctions,
+  titleLevel,
   whyThem,
 } from '@orbit/core';
 import { db } from '../db/schema';
@@ -69,6 +72,8 @@ export interface PointContext {
    * idA < idB: being copied together on a big thread does not mean two people know each other
    */
   smallThreads?: Set<string>;
+  /** the subject line of the latest small email thread with each person, by person id */
+  subjects?: Map<string, string>;
   dossier?: Dossier;
   now: Date;
 }
@@ -117,14 +122,108 @@ function jobsOf(person: Person, ctx: Pick<PointContext, 'affiliations'>) {
   return { jobs, current };
 }
 
-/** The people the student knows well who really know this person (realTie), closest first, by first name. */
-function mutualNames(person: Person, ctx: PointContext): string[] {
-  const known = ctx.edges
-    .filter((e) => (e.personAId === person.id || e.personBId === person.id) && realTie(e, ctx))
-    .map((e) => ctx.people.get(e.personAId === person.id ? e.personBId : e.personAId))
-    .filter((p): p is Person => !!p && !p.hiddenAt && p.id !== person.id && knownWell(p))
-    .sort((a, b) => b.strength - a.strength);
-  return [...new Set(known.map((p) => p.firstName).filter(Boolean))];
+/** The years of a stint, from its dates: "2021 to 2023", "since 2022", "2024". */
+function yearsOf(start?: string, end?: string, current?: boolean): string | undefined {
+  const y = (s?: string) => s?.match(/\b(19|20)\d{2}\b/)?.[0];
+  const a = y(start);
+  const b = y(end);
+  if (current) return a ? `since ${a}` : undefined;
+  if (a && b) return a === b ? a : `${a} to ${b}`;
+  return a ?? b;
+}
+
+/** How a tie on record says two people know each other, after the first one's name ("worked with Maya at Ramp"). */
+function tieHow(e: Edge, other: Person): string | undefined {
+  const ev = e.evidence as Record<string, unknown>;
+  const first = other.firstName || other.displayName;
+  if (e.type === 'co_tenure' && typeof ev.orgName === 'string') {
+    const from = typeof ev.fromYear === 'number' ? ev.fromYear : undefined;
+    const to = typeof ev.toYear === 'number' ? ev.toYear : undefined;
+    const years =
+      from === undefined
+        ? ''
+        : ev.ongoing
+          ? ` (since ${from})`
+          : to && to !== from
+            ? ` (${from} to ${to})`
+            : ` (${from})`;
+    return `${ev.ongoing ? 'works' : 'worked'} with ${first} at ${ev.orgName}${years}`;
+  }
+  if (e.type === 'introduced_by') return undefined;
+  if (EMAIL_TIES.has(e.type)) return `was on a small email thread with you and ${first}`;
+  return undefined;
+}
+
+/** The people the student knows well who really know this person (realTie), closest first, with how they know them. */
+function mutualPeople(person: Person, ctx: PointContext): { p: Person; how?: string }[] {
+  const out = new Map<string, { p: Person; how?: string }>();
+  for (const e of ctx.edges) {
+    if (!(e.personAId === person.id || e.personBId === person.id) || !realTie(e, ctx)) continue;
+    const p = ctx.people.get(e.personAId === person.id ? e.personBId : e.personAId);
+    if (!p || p.hiddenAt || p.id === person.id || !knownWell(p) || !p.firstName) continue;
+    const had = out.get(p.id);
+    if (!had) out.set(p.id, { p, how: tieHow(e, person) });
+    else if (!had.how) had.how = tieHow(e, person);
+  }
+  // one line per first name, as the card says them
+  const seen = new Set<string>();
+  return [...out.values()]
+    .sort((a, b) => b.p.strength - a.p.strength)
+    .filter((m) => !seen.has(m.p.firstName) && !!seen.add(m.p.firstName));
+}
+
+const INBOUND: Touchpoint['kind'][] = ['email_in', 'linkedin_in', 'text_in'];
+const OUTBOUND: Touchpoint['kind'][] = ['email_out', 'linkedin_out', 'text_out'];
+const CHANNEL: Partial<Record<Touchpoint['kind'], 'email' | 'LinkedIn' | 'text'>> = {
+  email_in: 'email',
+  email_out: 'email',
+  linkedin_in: 'LinkedIn',
+  linkedin_out: 'LinkedIn',
+  text_in: 'text',
+  text_out: 'text',
+};
+
+/** What else is on record with someone the student knows a little, each as a short phrase. */
+function lightTouches(mine: Pick<Touchpoint, 'kind' | 'occurredAt'>[]): { what: string[]; last?: string } {
+  const n = (kinds: Touchpoint['kind'][]) => mine.filter((t) => kinds.includes(t.kind));
+  const say = (count: number, one: string, many: string) =>
+    count === 1 ? one : many.replace('#', String(count));
+  const what: string[] = [];
+  const used: Pick<Touchpoint, 'kind' | 'occurredAt'>[] = [];
+  const add = (kinds: Touchpoint['kind'][], one: string, many: string) => {
+    const xs = n(kinds);
+    if (!xs.length) return;
+    used.push(...xs);
+    what.push(say(xs.length, one, many));
+  };
+  add(['email_cc'], 'you were both on an email thread', 'you were both on # email threads');
+  add(
+    ['linkedin_comment_in'],
+    'they commented on your LinkedIn post',
+    'they commented on # of your LinkedIn posts',
+  );
+  add(
+    ['linkedin_reaction_in'],
+    'they reacted to your LinkedIn post',
+    'they reacted to # of your LinkedIn posts',
+  );
+  add(
+    ['linkedin_comment_out'],
+    'you commented on their LinkedIn post',
+    'you commented on # of their LinkedIn posts',
+  );
+  add(
+    ['instagram_in', 'instagram_out'],
+    'you messaged on Instagram once',
+    'you messaged on Instagram on # days',
+  );
+  add(['x_in', 'x_out'], 'you messaged on X once', 'you messaged on X on # days');
+  add(['note', 'manual_log'], 'you logged a note about them', 'you logged # notes about them');
+  const last = used
+    .map((t) => t.occurredAt)
+    .sort()
+    .at(-1);
+  return { what, last };
 }
 
 /**
@@ -133,11 +232,12 @@ function mutualNames(person: Person, ctx: PointContext): string[] {
  */
 export function whySignalsFor(
   person: Person,
-  rec: Pick<Recommendation, 'reasons'>,
+  rec: Pick<Recommendation, 'reasons'> & Partial<Pick<Recommendation, 'bestPath'>>,
   ctx: PointContext,
-  introducer?: Pick<Person, 'firstName'>,
+  introducer?: Pick<Person, 'firstName'> & Partial<Pick<Person, 'id' | 'displayName'>>,
 ): WhySignals {
   const s: WhySignals = {
+    firstName: person.firstName || undefined,
     title: person.currentTitle,
     company: person.currentOrganizationRaw,
     headline: person.headline,
@@ -145,6 +245,9 @@ export function whySignalsFor(
   };
   const { jobs, current } = jobsOf(person, ctx);
   const orgKey = normalizeCompany(person.currentOrganizationRaw);
+  // a LinkedIn re-import dates a role by when Orbit saw it, not when it began: no "since" from that date
+  if (current?.startDate && current.source !== 'linkedin_csv' && year(current.startDate))
+    s.since = current.startDate;
 
   // ---- the student's goals ----
   const tc = ctx.targetCompanies.find(
@@ -171,7 +274,7 @@ export function whySignalsFor(
       role: roleGoal
         ? { title: role, function: fn ? functionPhrase(fn) || undefined : undefined }
         : undefined,
-      industry: industry?.trim().toLowerCase(),
+      industry: industry?.trim(),
     };
 
   // ---- the school ----
@@ -191,13 +294,41 @@ export function whySignalsFor(
       gradYear: gradYear && !Number.isNaN(gradYear) ? gradYear : undefined,
       myGradYear: ctx.user.graduationYear,
       program,
+      degree: edu?.degree?.trim() || undefined,
     };
   }
 
   // ---- people you both know, someone who can introduce you ----
-  const names = mutualNames(person, ctx);
-  if (names.length) s.mutuals = { names };
-  if (introducer?.firstName) s.warmPath = { name: introducer.firstName };
+  const mates = mutualPeople(person, ctx);
+  if (mates.length)
+    s.mutuals = {
+      names: mates.map((m) => m.p.firstName),
+      people: mates.map((m) => ({
+        id: m.p.id,
+        name: m.p.displayName || m.p.firstName,
+        firstName: m.p.firstName,
+        how: m.how,
+      })),
+    };
+  if (introducer?.firstName) {
+    // the route's last hop says how the introducer knows them ("Lena worked with Maya at Ramp (2021 to 2023)")
+    const hops = rec.bestPath?.hops ?? [];
+    const last = hops.length === 2 && hops[0]!.toId === introducer.id ? hops[1]!.text?.trim() : undefined;
+    const lead = `${introducer.firstName} `;
+    const how = last?.startsWith(lead)
+      ? last
+          .slice(lead.length)
+          .replace(/[.\s]+$/, '')
+          // a stint still going is said in the present: "works with Maya at Ramp (since 2024)"
+          .replace(/^worked with (.+\(since \d{4}\))$/, 'works with $1')
+      : undefined;
+    s.warmPath = {
+      name: introducer.firstName,
+      ...(introducer.id ? { id: introducer.id } : {}),
+      ...(introducer.displayName ? { fullName: introducer.displayName } : {}),
+      ...(how ? { how } : {}),
+    };
+  }
 
   // ---- an employer on both résumés ----
   const mineByOrg = new Map<string, ResumeFacet>();
@@ -211,10 +342,18 @@ export function whySignalsFor(
     const f = mineByOrg.get(k);
     if (!f || seenOrg.has(k)) continue;
     seenOrg.add(k);
+    const theirTitle = j.title?.trim() || undefined;
+    const theirYears = yearsOf(j.startDate, j.endDate, j.isCurrent);
+    // a date imported from LinkedIn says when Orbit saw the role, not when it began
+    const trusted = j.source !== 'linkedin_csv';
+    const myYears = yearsOf(f.startDate, f.endDate, false);
     shared.push({
       name: f.organizationName!,
       mine: f.startDate && !f.endDate ? 'now' : /\bintern/i.test(f.title ?? '') ? 'interned' : 'worked',
       theirs: j.isCurrent ? 'now' : 'before',
+      ...(theirTitle ? { theirTitle } : {}),
+      ...(theirYears && trusted && !j.isCurrent ? { theirYears } : {}),
+      ...(myYears ? { myYears } : {}),
     });
   }
   if (shared.length) s.pastEmployers = shared;
@@ -222,27 +361,77 @@ export function whySignalsFor(
   // ---- the city ----
   const targets = (ctx.goals?.targetLocations ?? []).filter((l) => !/^remote$/i.test(l.trim()));
   const target = placeMatch(person.location, targets);
-  const home = placeMatch(
-    person.location,
-    [ctx.user.currentCity, ctx.user.homeCity].filter((c): c is string => !!c),
-  );
+  const here = ctx.user.currentCity ? placeMatch(person.location, [ctx.user.currentCity]) : undefined;
+  const home = ctx.user.homeCity ? placeMatch(person.location, [ctx.user.homeCity]) : undefined;
   const place = (p: string) => p.split(',')[0]!.trim();
   if (target) s.city = { name: place(target), why: 'target' };
+  else if (here) s.city = { name: place(here), why: 'current' };
   else if (home) s.city = { name: place(home), why: 'home' };
 
   // ---- a recent move (a LinkedIn re-import dates a role by when Orbit saw it, not when it began) ----
   const started = current?.startDate ? new Date(current.startDate) : undefined;
-  if (started && !Number.isNaN(started.getTime()) && current?.source !== 'linkedin_csv') {
-    const monthsAgo = Math.floor((ctx.now.getTime() - started.getTime()) / MONTH);
-    if (monthsAgo >= 0 && monthsAgo < 12)
+  const otherOrg = (a: Affiliation) => normalizeCompany(a.nameRaw) !== normalizeCompany(current?.nameRaw);
+  // the job before this one: it ended when this one began, by dates Orbit can trust (not a LinkedIn import's)
+  const before = current
+    ? jobs
+        .filter((a) => a !== current && !a.isCurrent && a.endDate && a.source !== 'linkedin_csv')
+        .sort((a, b) => b.endDate!.localeCompare(a.endDate!))[0]
+    : undefined;
+  const endedAt = before?.endDate ? new Date(before.endDate) : undefined;
+  const gap =
+    endedAt && started && !Number.isNaN(endedAt.getTime()) && !Number.isNaN(started.getTime())
+      ? Math.abs(started.getTime() - endedAt.getTime()) / 86_400_000
+      : undefined;
+  const handover = gap !== undefined && gap <= 62 ? before : undefined;
+  const changedAt =
+    started && !Number.isNaN(started.getTime()) && current?.source !== 'linkedin_csv'
+      ? started
+      : handover && endedAt
+        ? started && !Number.isNaN(started.getTime())
+          ? started
+          : endedAt
+        : undefined;
+  if (current && changedAt) {
+    const monthsAgo = Math.floor((ctx.now.getTime() - changedAt.getTime()) / MONTH);
+    if (monthsAgo >= 0 && monthsAgo < 12) {
+      const moved = jobs.some((a) => a !== current && otherOrg(a));
+      const promoted =
+        !!handover &&
+        !otherOrg(handover) &&
+        !!current.title &&
+        !!handover.title &&
+        levelRank(current.title) > levelRank(handover.title);
+      // their field before and after, when the move is the one the student is trying to make: out of the field of
+      // their own experience (which they do not target) into one they target
+      const fnOf = (t?: string) => [...titleFunctions(t)][0];
+      const fromFn = handover && otherOrg(handover) ? fnOf(handover.title) : undefined;
+      const toFn = fnOf(current.title);
+      const targetsFns = ctx.goals?.targetFunctions ?? [];
+      const myFns = new Set(
+        ctx.mine
+          .filter((f) => f.kind === 'experience' && !f.excluded)
+          .flatMap((f) => [...titleFunctions(f.title)]),
+      );
+      const sameSwitch =
+        fromFn &&
+        toFn &&
+        fromFn !== toFn &&
+        targetsFns.includes(toFn) &&
+        !targetsFns.includes(fromFn) &&
+        myFns.has(fromFn)
+          ? { from: functionPhrase(fromFn), to: functionPhrase(toFn) }
+          : undefined;
       s.roleChange = {
         monthsAgo,
-        company: current!.nameRaw,
-        title: current!.title,
-        moved: jobs.some(
-          (a) => a !== current && normalizeCompany(a.nameRaw) !== normalizeCompany(current!.nameRaw),
-        ),
+        company: current.nameRaw,
+        title: current.title,
+        moved,
+        at: changedAt.toISOString(),
+        ...(handover ? { fromCompany: handover.nameRaw, fromTitle: handover.title } : {}),
+        ...(promoted ? { promoted } : {}),
+        ...(sameSwitch?.from && sameSwitch.to ? { sameSwitch } : {}),
       };
+    }
   }
 
   // ---- what has passed between you ----
@@ -250,12 +439,17 @@ export function whySignalsFor(
     .filter((t) => t.personId === person.id)
     .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   const last = (kinds: Touchpoint['kind'][]) => mine.find((t) => kinds.includes(t.kind))?.occurredAt;
-  const inbound = last(['email_in', 'linkedin_in', 'text_in']);
-  const outbound = last(['email_out', 'linkedin_out', 'text_out']);
+  const inbound = last(INBOUND);
+  const outbound = last(OUTBOUND);
   const metAt = last(['meeting']);
   // an inbound message after one of the student's is a reply; one with none before it is them writing first
-  const firstOut = mine.filter((t) => ['email_out', 'linkedin_out', 'text_out'].includes(t.kind)).at(-1);
+  const firstOut = mine.filter((t) => OUTBOUND.includes(t.kind)).at(-1);
   const replied = inbound && firstOut && firstOut.occurredAt < inbound;
+  // the conversation, counted: how many each way, over what, from when to when, and who wrote last
+  const talk = mine.filter((t) => INBOUND.includes(t.kind) || OUTBOUND.includes(t.kind));
+  const channels = new Set(talk.map((t) => CHANNEL[t.kind]).filter(Boolean));
+  const subject = ctx.subjects?.get(person.id);
+  const touches = lightTouches(mine);
   const history: NonNullable<WhySignals['history']> = {
     repliedAt: replied ? inbound : undefined,
     theyWroteAt: inbound && !replied ? inbound : undefined,
@@ -264,16 +458,38 @@ export function whySignalsFor(
     connectedOn: person.linkedinConnectedOn,
     knownALittle: person.strength >= 0.3 || rec.reasons.some((r) => r.code === 'warm'),
   };
+  if (talk.length)
+    history.talk = {
+      fromThem: talk.filter((t) => INBOUND.includes(t.kind)).length,
+      fromYou: talk.filter((t) => OUTBOUND.includes(t.kind)).length,
+      channel: channels.size === 1 ? [...channels][0] : channels.size > 1 ? 'mixed' : undefined,
+      firstAt: talk.at(-1)!.occurredAt,
+      lastAt: talk[0]!.occurredAt,
+      lastFrom: INBOUND.includes(talk[0]!.kind) ? 'them' : 'you',
+      ...(subject ? { subject } : {}),
+    };
+  const meetings = mine.filter((t) => t.kind === 'meeting').length;
+  if (meetings) history.meetings = meetings;
+  if (touches.what.length) {
+    history.touches = touches.what;
+    if (touches.last) history.lastTouchAt = touches.last;
+  }
   if (Object.values(history).some(Boolean)) s.history = history;
   return s;
+}
+
+/** A title's level as a number, to tell a promotion from a sideways move (0 when the title says none). */
+function levelRank(title: string): number {
+  const l = titleLevel(title);
+  return l ? LEVEL_RANK[l] : 0;
 }
 
 /** Why this person is suggested: the reasons, strongest first (core whyThem over the signals read here). */
 export function whyThemFor(
   person: Person,
-  rec: Pick<Recommendation, 'reasons'>,
+  rec: Pick<Recommendation, 'reasons'> & Partial<Pick<Recommendation, 'bestPath'>>,
   ctx: PointContext,
-  introducer?: Pick<Person, 'firstName'>,
+  introducer?: Pick<Person, 'firstName'> & Partial<Pick<Person, 'id' | 'displayName'>>,
 ): WhyReason[] {
   return whyThem(whySignalsFor(person, rec, ctx, introducer));
 }
@@ -409,6 +625,18 @@ export async function loadPointContext(
   ]);
   // small threads with one of these people on them: who was on a thread of three or fewer with whom
   const smallThreads = new Set<string>();
+  // the subject of the latest email thread that is only the student and one of these people
+  const subjects = new Map<string, string>();
+  const subjectAt = new Map<string, string>();
+  for (const t of threads) {
+    const on = t.participantPersonIds ?? [];
+    if (on.length !== 1 || !ids.has(on[0]!) || (t.participantEmails ?? []).length > 2) continue;
+    if (t.channel && t.channel !== 'gmail') continue;
+    const at = t.lastMessageAt ?? t.firstMessageAt ?? '';
+    if (!t.subject?.trim() || (subjectAt.get(on[0]!) ?? '') > at) continue;
+    subjects.set(on[0]!, t.subject.trim());
+    subjectAt.set(on[0]!, at);
+  }
   for (const t of threads) {
     // older and synced threads can lack either list; a missing one counts as empty, never a crash
     const on = [...new Set(t.participantPersonIds ?? [])];
@@ -430,6 +658,7 @@ export async function loadPointContext(
     edges: edges.filter((e) => ids.has(e.personAId) || ids.has(e.personBId)),
     touchpoints,
     smallThreads,
+    subjects,
     dossiers: new Map(dossiers.map((d) => [d.personId, d])),
     now,
     forIds: ids,

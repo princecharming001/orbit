@@ -1194,7 +1194,12 @@ function MoveRow({
               {role}
             </span>
           )}
-          {m.sub && <span className="block text-[12px] text-ink-3 truncate">{m.sub}</span>}
+          {m.sub && (
+            // a Discover pick's why is a sentence: two lines of it, the whole of it on hover
+            <span className="block text-[12px] leading-snug text-ink-3 line-clamp-2" title={m.sub}>
+              {m.sub}
+            </span>
+          )}
         </span>
         {phase === 'done' ? (
           <Check size={16} className="text-accent shrink-0" aria-label="Done" />

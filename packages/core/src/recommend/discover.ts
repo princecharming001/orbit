@@ -28,6 +28,7 @@ import {
   titleStatus,
 } from './title';
 import { parseWantToMeet, type WantToMeet, wantFit, wantsAnything } from './wantToMeet';
+import { WANT_TO_MEET_ANY } from './why';
 
 /** Someone the student wrote to (or started writing to): what kind of person they reach out to. */
 export interface OutreachExample {
@@ -381,7 +382,11 @@ export interface DiscoverCandidate {
   /** someone already in Orbit: their closeness and best route */
   known?: { strength: number; pathStrength: number; linkedinConnected?: boolean };
   /** someone the student knows well (Warm or closer) who works at their company now */
-  colleague?: { firstName: string; strength: number };
+  colleague?: {
+    firstName: string;
+    strength: number /** their full name, for the line that names them */;
+    name?: string;
+  };
   /** the target list's priority when the caller matched the company by id */
   targetPriority?: 1 | 2 | 3;
   /** a response prior from elsewhere (recommendPeople's responsePrior), instead of the level's */
@@ -394,7 +399,12 @@ export interface DiscoverCandidate {
 
 export interface DiscoverReason {
   code: string;
+  /** the reason as a full sentence (the search that found them is the search's own words) */
   text: string;
+  /** the same reason as a predicate after their first name, for a card's summary sentence (why.ts whySummary) */
+  clause?: string;
+  /** on target_company: how the target list holds the company ("one of your top target companies") */
+  detail?: string;
 }
 
 export interface DiscoverScore {
@@ -474,13 +484,23 @@ export function dismissPenalty(
 }
 
 /** The student's own organisation, worded by whether the resume says they are there now. */
-function sharedOrgReason(org: DiscoverProfile['pastOrgs'][number], company: string): DiscoverReason {
-  return org.current
-    ? { code: 'shared_org_now', text: `You're both at ${company}` }
-    : {
-        code: 'shared_org',
-        text: `Works at ${company}, where you ${/\bintern/i.test(org.title ?? '') ? 'interned' : 'worked'}`,
-      };
+function sharedOrgReason(
+  org: DiscoverProfile['pastOrgs'][number],
+  company: string,
+  title?: string,
+): DiscoverReason {
+  if (org.current)
+    return {
+      code: 'shared_org_now',
+      text: `You both work at ${company}${title ? `, where they are ${article(title)} ${title}` : ''}.`,
+      clause: `works at ${company} with you`,
+    };
+  const verb = /\bintern/i.test(org.title ?? '') ? 'interned' : 'worked';
+  return {
+    code: 'shared_org',
+    text: `Works at ${company}${title ? ` as ${article(title)} ${title}` : ''}, where you ${verb}${org.title ? ` as ${article(org.title)} ${org.title}` : ''}.`,
+    clause: `works at ${company}, where you ${verb}`,
+  };
 }
 
 /**
@@ -601,45 +621,98 @@ export function scoreDiscoverCandidate(c: DiscoverCandidate, profile: DiscoverPr
   const score = rankScore({ match: fit, reach, odds });
   const goalLink = (inRole && role >= 0.5) || company > 0 || !!school || like >= 0.75 || want >= 0.6;
 
-  // ---- reasons, strongest first; each one the data proves ----
+  // ---- reasons, strongest first; each one the data proves, as a sentence with its specifics ----
   const reasons: DiscoverReason[] = [];
-  const say = (code: string, t: string | undefined) => {
-    if (t && !reasons.some((r) => r.code === code)) reasons.push({ code, text: t });
+  const say = (code: string, t: string | undefined, clause?: string, detail?: string) => {
+    if (!t || reasons.some((r) => r.code === code)) return;
+    const r: DiscoverReason = { code, text: t };
+    if (clause) r.clause = clause;
+    if (detail) r.detail = detail;
+    reasons.push(r);
   };
-  if (c.colleague && c.company)
-    say('colleague', `${c.colleague.firstName}, whom you know, works at ${c.company} too`);
-  if (school && priority && c.company)
-    say('alumni_target', `${profile.school} alum at ${c.company}, on your target list`);
+  const target =
+    priority === 1
+      ? { is: 'one of your top target companies', short: 'one of your top target companies' }
+      : { is: 'on your target list', short: 'a company on your target list' };
   const roleHeld = inRole && !!c.title && role >= 0.6;
+  if (c.colleague && c.company)
+    say(
+      'colleague',
+      `${c.colleague.name || c.colleague.firstName}, whom you know well, also works at ${c.company} and could introduce you.`,
+      `can be introduced by ${c.colleague.firstName}, a colleague of theirs whom you know well`,
+    );
+  if (school && priority && c.company)
+    say(
+      'alumni_target',
+      `Went to ${profile.school}, like you, and now works at ${c.company}, ${target.short}.`,
+      `is a fellow ${profile.school} alum at ${c.company}, ${target.short}`,
+    );
   const where = c.company ? ` at ${c.company}` : '';
   if (school && !priority && roleHeld)
-    say('alumni_field', `${profile.school} alum, now ${article(c.title!)} ${c.title}${where}`);
+    say(
+      'alumni_field',
+      `Went to ${profile.school}, like you, and is now ${article(c.title!)} ${c.title}${where}, the kind of role you are aiming for.`,
+      `is a fellow ${profile.school} alum, now ${article(c.title!)} ${c.title}${where}`,
+    );
   if (!priority && roleHeld && industryOfWork && c.company)
-    say('role_industry', `${c.title}${where}, in ${industryOfWork}, an industry on your list`);
+    say(
+      'role_industry',
+      `Works as ${article(c.title!)} ${c.title}${where}, in ${industryOfWork}, one of the industries on your list.`,
+      `is ${article(c.title!)} ${c.title}${where}, in ${industryOfWork}`,
+    );
   if (want >= 0.6)
     say(
       'want_to_meet',
       wanted.roleHit && c.title
-        ? `${c.title}${where}, who you said you want to meet`
-        : 'Who you said you want to meet',
+        ? `${c.title}${where}: the kind of person you said you want to meet.`
+        : WANT_TO_MEET_ANY,
+      wanted.roleHit && c.title
+        ? `is ${article(c.title)} ${c.title}${where}, the kind of person you said you want to meet`
+        : 'is the kind of person you said you want to meet',
     );
   if (pastOrg && c.company) {
-    const r = sharedOrgReason(pastOrg, c.company);
-    say(r.code, r.text);
+    const r = sharedOrgReason(pastOrg, c.company, roleHeld ? c.title : undefined);
+    say(r.code, r.text, r.clause);
   }
-  if (likeEx?.replied && likeEx.name && like >= 0.75)
-    say('like_replied', `Same kind of role as ${likeEx.name}, who replied to you`);
-  if (school) say('alumni', `Went to ${profile.school}, like you`);
-  if (priority && c.company) say('target_company', `Works at ${c.company}, on your target list`);
-  if (roleHeld) say('function_match', `${c.title}${where}, the role you're targeting`);
+  if (likeEx?.replied && likeEx.name && like >= 0.75) {
+    // where they work, not their title: the card already shows this person's, and two titles read as one said twice
+    const same =
+      !!c.title && !!likeEx.title && c.title.trim().toLowerCase() === likeEx.title.trim().toLowerCase();
+    const at = likeEx.company ? ` at ${likeEx.company}` : '';
+    say(
+      'like_replied',
+      same
+        ? `Has the same role as ${likeEx.name}${at}, who replied to you.`
+        : `Has the same kind of role as ${likeEx.name}${at}, who replied to you.`,
+      `has the same kind of role as ${likeEx.name}, who replied to you`,
+    );
+  }
+  if (school) say('alumni', `Went to ${profile.school}, like you.`, `also went to ${profile.school}`);
+  if (priority && c.company)
+    say(
+      'target_company',
+      `Works at ${c.company}. ${c.company} is ${target.is}.`,
+      `works at ${c.company}, ${target.short}`,
+      target.is,
+    );
+  if (roleHeld)
+    say(
+      'function_match',
+      `Works as ${article(c.title!)} ${c.title}${where}, the kind of role you are aiming for.`,
+      `is ${article(c.title!)} ${c.title}${where}, the kind of role you want`,
+    );
   // a count of mutual connections says how warm the path is, not why to meet them: it comes after the reasons that do
   if (!c.known && c.mutualCount && c.mutualCount > 0)
-    say('mutuals', `${c.mutualCount} mutual connection${c.mutualCount === 1 ? '' : 's'}`);
-  if (like >= 0.75 && !likeEx?.replied) say('like_reached', 'In a role like people you have written to');
-  if (targetPlace) say('location', `Based in ${targetPlace}, where you want to work`);
-  if (industryOfWork && c.company) say('industry', `Works in ${industryOfWork}`);
+    say(
+      'mutuals',
+      `LinkedIn shows ${c.mutualCount} mutual connection${c.mutualCount === 1 ? '' : 's'} between you.`,
+    );
+  if (like >= 0.75 && !likeEx?.replied)
+    say('like_reached', 'Has the same kind of role as people you have written to.');
+  if (targetPlace) say('location', `Based in ${targetPlace}, one of the places you want to work.`);
+  if (industryOfWork && c.company) say('industry', `Works in ${industryOfWork} at ${c.company}.`);
   if (!c.known && c.distance === 2 && !c.mutualCount)
-    say('second_degree', 'Second degree connection on LinkedIn');
+    say('second_degree', 'A second degree connection on LinkedIn: you share at least one connection.');
   if (c.why) say('search', c.why);
   return {
     fit: round(fit),

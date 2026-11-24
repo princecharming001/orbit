@@ -45,7 +45,7 @@ const edge = (a: string, b: string, type: Edge['type'], evidence: Edge['evidence
   evidence,
 });
 
-describe('"You both know X" is said only when it is true', () => {
+describe('"Knows X, whom you know well" is said only when it is true', () => {
   const target = person('t', 'Taylor');
   const ctx = (morgan: Person, edges: Edge[], smallThreads: string[] = []): PointContext => ({
     user: { id: 'u', school: 'Cornell University' },
@@ -62,14 +62,16 @@ describe('"You both know X" is said only when it is true', () => {
     smallThreads: new Set(smallThreads),
     now: NOW,
   });
-  const knows = (c: PointContext) =>
-    whyThemFor(target, rec(target.id), c).find((p) => p.text.startsWith('You both know'));
+  const knows = (c: PointContext) => whyThemFor(target, rec(target.id), c).find((p) => p.kind === 'mutuals');
 
   it('a close friend on a small thread with them: yes', () => {
     const morgan = person('m', 'Morgan', { strength: 0.55, tieScore: 55, tieBand: 'warm' });
-    expect(knows(ctx(morgan, [edge('m', 't', 'email_cothread')], ['m|t']))?.text).toBe(
-      'You both know Morgan',
+    const line = knows(ctx(morgan, [edge('m', 't', 'email_cothread')], ['m|t']));
+    // by name, and how they know each other: the student was on that small thread with both
+    expect(line?.text).toMatch(
+      /^Knows Morgan\b.*, whom you know well\. Morgan was on a small email thread with you and Taylor\.$/,
     );
+    expect(line?.people?.[0]?.id).toBe('m');
   });
 
   it('a big thread, or someone the student knows only lightly: no', () => {
@@ -82,9 +84,17 @@ describe('"You both know X" is said only when it is true', () => {
   it('overlapping years at one employer count, an employer with unknown dates does not', () => {
     const morgan = person('m', 'Morgan', { strength: 0.7, tieScore: 70, tieBand: 'strong' });
     expect(knows(ctx(morgan, [edge('m', 't', 'co_tenure', { datesUnknown: true })]))).toBeUndefined();
-    expect(knows(ctx(morgan, [edge('m', 't', 'co_tenure', { overlapMonths: 14 })]))?.text).toBe(
-      'You both know Morgan',
+    expect(knows(ctx(morgan, [edge('m', 't', 'co_tenure', { overlapMonths: 14 })]))?.text).toMatch(
+      /^Knows Morgan\b.*, whom you know well\.$/,
     );
+    // with the employer and years on record, the line says where and when they worked together
+    expect(
+      knows(
+        ctx(morgan, [
+          edge('m', 't', 'co_tenure', { overlapMonths: 14, orgName: 'Ramp', fromYear: 2021, toYear: 2023 }),
+        ]),
+      )?.text,
+    ).toMatch(/Morgan worked with Taylor at Ramp \(2021 to 2023\)\.$/);
   });
 });
 

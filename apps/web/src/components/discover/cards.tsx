@@ -3,6 +3,7 @@
  * (NetworkCardView), and the compact proactive pick in "Suggested for you" (SuggestionCard). Every card leads with
  * its most specific reason, shows Match, Reach and Reply odds as segmented meters, and has one main action.
  */
+import { whySummary } from '@orbit/core';
 import { Bookmark, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { DiscoverCard, FoundAction, FoundCard, NetworkCard } from '../../engine/discoverFeed';
@@ -86,7 +87,7 @@ export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }
           </button>
         )}
       </div>
-      <WhyThem reasons={card.why} testId="found-reason" />
+      <WhyThem reasons={card.why} firstName={first} testId="found-reason" />
       {/* the meters and the actions sit at the foot, so across a row every card's meters are level */}
       <div className="mt-auto">
         <ScoreBars
@@ -181,7 +182,7 @@ export function NetworkCardView({ card, h }: { card: NetworkCard; h: NetworkHand
           <Bookmark size={16} fill={r.status === 'saved' ? 'currentColor' : 'none'} />
         </button>
       </div>
-      <WhyThem reasons={card.why} points={card.points} testId="rec-why" />
+      <WhyThem reasons={card.why} points={card.points} firstName={p.firstName} testId="rec-why" />
       {/* the meters and the actions sit at the foot, so across a row every card's meters are level */}
       <div className="mt-auto">
         <ScoreBars
@@ -242,11 +243,16 @@ export function SuggestionCard({
   found: FoundHandlers;
   network: NetworkHandlers;
 }) {
-  // the pick's lines: its most specific reason, then the way in when it has one (who could introduce them, people
-  // the student knows), so four picks at target companies do not read the same
-  const line = card.why[0]?.text;
+  // the pick's lines: the sentence on why to write to them (the same one their full card leads with), which names the
+  // way in when there is one; without it, the most specific reason and the way in, so four picks at target companies
+  // do not read the same
+  const first = card.kind === 'found' ? firstName(card.name) : card.person.firstName;
+  const summary = whySummary(card.why, first);
   const lead = card.why[0];
-  const way = card.why.find((w, i) => i > 0 && w.anchor === 'tie' && w.kind !== lead?.kind)?.text;
+  const line = summary ?? lead?.text;
+  const way = summary
+    ? undefined
+    : card.why.find((w, i) => i > 0 && w.anchor === 'tie' && w.kind !== lead?.kind)?.text;
   if (card.kind === 'found') {
     const e = card.entry;
     return (
@@ -345,7 +351,11 @@ export function SuggestionCard({
 function PickLines({ line, way }: { line?: string; way?: string }) {
   return (
     <div className="space-y-0.5 min-w-0">
-      <p className="text-[12.5px] text-ink-2 line-clamp-2" data-testid="suggest-reason">
+      <p
+        className="text-[12.5px] leading-snug text-ink-2 line-clamp-4"
+        data-testid="suggest-reason"
+        title={line}
+      >
         {line}
       </p>
       {way && (

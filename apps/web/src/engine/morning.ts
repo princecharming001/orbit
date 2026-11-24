@@ -28,9 +28,13 @@ import {
   todayKey,
   warmUpProgress,
   weekPace,
+  whySummary,
+  whyThem,
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { isMessageSuggestion } from './brief';
+import { loadPointContext, whySignalsFor } from './personPoints';
+import { introducerIdFor } from './recommend';
 import { type PersonSnapshot, restorePerson, snapshotPerson } from './send';
 import { draftLists, firstsThisWeek, notYetWritten, todayCards, weekStats } from './today';
 
@@ -226,7 +230,8 @@ export function paceFor(
 }
 
 export async function morningDeck(
-  user: Pick<User, 'id' | 'firstName' | 'timezone' | 'onboardingCompletedAt'>,
+  user: Pick<User, 'id' | 'firstName' | 'timezone' | 'onboardingCompletedAt'> &
+    Partial<Pick<User, 'school' | 'graduationYear' | 'majors' | 'currentCity' | 'homeCity'>>,
   now = new Date(),
 ): Promise<MorningDeck> {
   const [settings, suggestions, outbound, chats, people, briefs, events, recs, goals] = await Promise.all([
@@ -382,17 +387,35 @@ export async function morningDeck(
   const picks = recs
     .filter((r) => visible(r.personId) && byId.has(r.personId))
     .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  // each pick says why in the sentence its Discover card leads with, read from the person as Orbit knows them now
+  const room = Math.max(0, MORNING_MAX_MOVES - moves.length);
+  const pickIds = picks.slice(0, room + 4).map((r) => r.personId);
+  const pointCtx = pickIds.length
+    ? await loadPointContext({ ...user, school: user.school ?? '' }, pickIds, now, people)
+    : undefined;
   for (const r of picks) {
     if (moves.length >= MORNING_MAX_MOVES) break;
     const p = byId.get(r.personId)!;
-    // a reason saved with the recommendation is said only while it still holds (an alum label taken off since)
-    // the most specific one first (a target company or an alum in the field before the role alone)
+    const introId = introducerIdFor(r);
+    const why =
+      pointCtx?.forIds.has(p.id) &&
+      whyThem(
+        whySignalsFor(
+          p,
+          r,
+          { ...pointCtx, dossier: pointCtx.dossiers.get(p.id) },
+          introId ? byId.get(introId) : undefined,
+        ),
+        { filler: false },
+      );
+    // without it, a reason saved with the recommendation, said only while it still holds (an alum label taken off
+    // since), the most specific one first (a target company or an alum in the field before the role alone)
     const reason = cardReason(r.reasons.filter((x) => reasonHolds(x, p)));
     add({
       id: `rec:${r.id}`,
       kind: 'reach_out',
       text: `Reach out to ${p.firstName}`,
-      sub: reason?.text,
+      sub: (why && whySummary(why, p.firstName)) || reason?.text,
       href: `/people/${p.id}`,
       personId: p.id,
       recommendationId: r.id,
