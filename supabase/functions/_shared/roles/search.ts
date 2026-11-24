@@ -5,7 +5,7 @@
  *                searches a day per student; after that the stored results, with a note. A change of wants only
  *                (places, kinds, chips, eligibility) is not a full search: it re-filters and re-ranks, and rows read
  *                against the same evidence are scored again in code, with no model call.
- *   more         reads the next 15 closely (three model calls of five, side by side) and returns them
+ *   more         reads the next 10 closely (five model calls of two, side by side) and returns them
  *   list         what is stored, free: the matches, or Saved
  *   scoreOne     one posting by link or pasted text, scored now
  *   act          save, dismiss with a reason, applied, interviewing; watch a company
@@ -60,7 +60,7 @@ import {
 } from './score.ts';
 
 export const SEARCHES_PER_DAY = 3;
-export const MORE_SIZE = 15;
+export const MORE_SIZE = 10;
 export const TOPUP_SIZE = 20;
 export const SEARCHES_USED_NOTE =
   'You have run three searches today. These are your latest results, and more are read tonight.';
@@ -267,7 +267,7 @@ export async function startSearch(
   return respond(s, userId, search!, stored);
 }
 
-/** POST /roles/more: the next 15 read closely. */
+/** POST /roles/more: the next 10 read closely. */
 export async function more(
   s: Services,
   deps: RolesDeps,

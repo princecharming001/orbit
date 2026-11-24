@@ -6,7 +6,7 @@
  *   - the search: only open roles at the profile's levels, a dismissed role never returns, status survives a profile
  *     change, a wants-only change makes no model call, three full searches a day then stored results
  *   - the reading: requirements read once per text and counted against the shared limit, quotes not in the text
- *     refused, a posting with instructions in it changes nothing, more() reads 15 and finishes
+ *     refused, a posting with instructions in it changes nothing, more() reads 10 and finishes
  *   - the nightly top-up reads at most 20; account export and delete cover the new tables; the LinkedIn job search runs
  *     once a day per query and only through the student's own active account
  */
@@ -574,7 +574,7 @@ describe('/roles/search and /roles/more', () => {
     expect(await listedTitles(r.body.searchId)).toEqual(['Senior Software Engineer', 'Software Engineer II']);
   });
 
-  it('more() reads 15 in three calls side by side and finishes well under 25 seconds', async () => {
+  it('more() reads 10 (requirements one posting a call, answers two a call, side by side) well under 25 seconds', async () => {
     const h = harness();
     const u = await student(h);
     for (let i = 0; i < 20; i++) await addJob({ title: `Software Engineer Intern ${i}`, company: `Co${i}` });
@@ -583,13 +583,13 @@ describe('/roles/search and /roles/more', () => {
     const started = Date.now();
     const m = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
     expect(Date.now() - started).toBeLessThan(25_000);
-    expect(m.body.matches).toHaveLength(15);
-    expect(m.body.read).toBe(15);
+    expect(m.body.matches).toHaveLength(10);
+    expect(m.body.read).toBe(10);
     expect(m.body.done).toBe(false);
-    expect(h.count('score')).toBe(3);
-    expect(h.count('requirements')).toBe(3);
+    expect(h.count('score')).toBe(5);
+    expect(h.count('requirements')).toBe(10);
     const m2 = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
-    expect(m2.body.matches).toHaveLength(5);
+    expect(m2.body.matches).toHaveLength(10);
     expect(m2.body.done).toBe(true);
     const again = await h.call<RolesSearchResponse>('/roles/search', u.token, {});
     expect(again.body.searchId).toBe(r.body.searchId);
@@ -719,7 +719,8 @@ describe('reading closely', () => {
       const r = await h.call<RolesSearchResponse>('/roles/search', u.token, {});
       await h.call('/roles/more', u.token, { searchId: r.body.searchId });
     }
-    expect(h.count('requirements')).toBe(1);
+    // one call a posting, and the second student reuses both
+    expect(h.count('requirements')).toBe(2);
     expect(h.count('score')).toBe(2);
     const [use] = await t.db.sql<{
       n: number;
@@ -735,7 +736,8 @@ describe('reading closely', () => {
     await h.call('/roles/profile', a.token, { save: profile({ courses: ['Databases', 'Systems'] }) });
     const r = await h.call<RolesSearchResponse>('/roles/search', a.token, {});
     const m = await h.call<RolesSearchResponse>('/roles/more', a.token, { searchId: r.body.searchId });
-    expect(h.count('requirements')).toBe(2);
+    // only the changed posting is read again
+    expect(h.count('requirements')).toBe(3);
     expect(
       m.body.matches
         .find((x) => x.job.title === 'Software Engineer Intern')!
@@ -885,7 +887,8 @@ describe('roles.topup', () => {
       select count(*) filter (where state = 'read')::int as read, count(*)::int as all
         from orbit.role_matches where user_id = ${u.userId}::uuid`;
     expect(c).toEqual({ read: 20, all: 20 });
-    expect(h.count('score')).toBe(4);
+    // two roles a call
+    expect(h.count('score')).toBe(10);
     // the next night reads the next ten, never one it already has
     await handlers['roles.topup']!(job, ctx);
     const [c2] = await t.db.sql<{ read: number }>`

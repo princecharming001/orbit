@@ -22,6 +22,7 @@ import { normalizeCompany } from '../../../packages/core/src/text/normalize.ts';
 import { sha256Hex } from '../../functions/_shared/crypto.ts';
 import type { RoleSources } from '../../functions/_shared/roles/contracts.ts';
 import { readProfile, saveProfile } from '../../functions/_shared/roles/profile.ts';
+import { ROLE_TIMEOUTS } from '../../functions/_shared/roles/score.ts';
 import { scoreOne } from '../../functions/_shared/roles/search.ts';
 import { makeServices } from '../../functions/_shared/services.ts';
 import { agentConfig, fakeNet, type NetCall, signedInUser } from '../helpers/agents.ts';
@@ -107,6 +108,9 @@ const benchSources: RoleSources = {
 
 describe.skipIf(!LIVE)('Roles bench (live, through the CLI)', () => {
   let t: TestDb;
+  // the command line starts slowly: its calls get the time a live API call never needs
+  if (LIVE) Object.assign(ROLE_TIMEOUTS, { text: 30_000, requirements: 180_000, score: 180_000 });
+
   beforeAll(async () => {
     t = await freshDb();
   });
