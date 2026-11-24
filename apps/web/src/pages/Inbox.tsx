@@ -1,7 +1,6 @@
 import type { CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { CHANNEL_LABELS, draftKindLabel, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { RefreshCw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
@@ -24,6 +23,7 @@ import { isScheduled } from '../engine/queue';
 import { lastTouch } from '../engine/search';
 import { draftLists, notYetWritten, startedDrafts, todayCards } from '../engine/today';
 import { useSession } from '../state/session';
+import { useViewState } from '../state/viewState';
 import {
   Avatar,
   Button,
@@ -65,13 +65,17 @@ const PROVIDER_LABELS: Record<string, string> = {
  */
 export function InboxPage() {
   const { user, userId } = useSession();
-  const [tab, setTab] = useState<'pending' | 'scheduled' | 'snoozed' | 'outbox' | 'sent'>();
-  const [showLater, setShowLater] = useState(false);
-  const [showMore, setShowMore] = useState(false);
+  // the tab, the open draft and what was unfolded are kept while the student is away (state/viewState)
+  const [tab, setTab] = useViewState<'pending' | 'scheduled' | 'snoozed' | 'outbox' | 'sent' | undefined>(
+    `drafts:tab:${userId ?? ''}`,
+    undefined,
+  );
+  const [showLater, setShowLater] = useViewState(`drafts:later:${userId ?? ''}`, false);
+  const [showMore, setShowMore] = useViewState(`drafts:more:${userId ?? ''}`, false);
   // Refresh and "They replied" each wait on Claude: the button spins, a working toast says so, a failure says so
   const refreshing = useWorking();
   const replying = useWorking();
-  const [picked, setPicked] = useState<string>();
+  const [picked, setPicked] = useViewState<string | undefined>(`drafts:open:${userId ?? ''}`, undefined);
   // wide enough for a list and an open draft side by side (measured on the page, so the chat's side panel counts)
   const rootRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -283,7 +287,8 @@ export function InboxPage() {
         : notSent.some((o) => o.status === 'failed')
           ? 'outbox'
           : 'pending');
-  const refresh = async () => {
+  // today's cards again, from the latest email, calendar and notes ("Check now" runs it after reading for replies)
+  const rebuild = async () => {
     if (!user) return;
     await refreshing.run('refresh', 'Reading your latest email, calendar and notes…', async () => {
       await generateBrief(user, 'daily');
@@ -323,29 +328,24 @@ export function InboxPage() {
     <div ref={rootRef}>
       <PageHeader
         title="Drafts"
-        subtitle={<RepliesChecked />}
-        actions={
-          // with nobody in Orbit yet there is nothing to refresh
-          visiblePeople > 0 && (
-            <span className="inline-flex items-center gap-2">
-              {lastReview && (
-                // plan 23 §4.8: the review stays a tap away until the next one
-                <Button variant="ghost" onClick={openWeekReview} data-testid="drafts-last-review">
+        // one quiet line: when Orbit last looked, a way to look again (which also rebuilds today's cards from what it
+        // read), and last week's review a tap away until the next one (plan 23 §4.8). No buttons beside the title.
+        subtitle={
+          <RepliesChecked
+            onChecked={visiblePeople > 0 ? rebuild : undefined}
+            more={
+              lastReview ? (
+                <button
+                  type="button"
+                  onClick={openWeekReview}
+                  className="underline underline-offset-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded"
+                  data-testid="drafts-last-review"
+                >
                   Last week's review
-                </Button>
-              )}
-              <Button
-                onClick={() => void refresh()}
-                loading={!!refreshing.busy}
-                title="Rebuild today's cards from your latest email, calendar and notes"
-                aria-label="Refresh"
-                className="px-2.5 @[40rem]:px-3.5"
-                data-testid="drafts-refresh"
-              >
-                {!refreshing.busy && <RefreshCw size={14} />} <span>Refresh</span>
-              </Button>
-            </span>
-          )
+                </button>
+              ) : undefined
+            }
+          />
         }
       />
       {problems.length > 0 && (

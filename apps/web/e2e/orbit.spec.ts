@@ -1203,7 +1203,8 @@ test.describe('First-run guidance and plain next steps', () => {
       });
       idb.close();
     });
-    await page.getByTestId('drafts-refresh').click();
+    // "Check now" reads for replies and then rebuilds the day's cards
+    await page.getByTestId('replies-check-now').click();
     // a refresh rebuilds the day's cards, which a loaded machine can take a while over
     await expect(page.getByTestId('toasts')).toContainText(/updated/i, {
       timeout: 20_000,
