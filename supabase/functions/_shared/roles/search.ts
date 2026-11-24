@@ -194,13 +194,14 @@ async function restOf(db: Db, userId: string, searchId: string, stored: StoredPr
 }
 
 async function counts(db: Db, searchId: string, evidenceHash: string) {
-  // a role taken down since it was listed is not left to read (it is never claimed, and has left the table)
+  // the open roles of the search: one taken down since it was listed has left the table, so it is neither listed,
+  // read nor left to read (it is never claimed)
   const [c] = await db.sql<{ listed: number; read: number; left: number }>`
     select count(*)::int as listed,
            count(*) filter (where m.state = 'read' and m.evidence_hash = ${evidenceHash})::int as read,
-           count(*) filter (where m.state = 'to_read' and m.status <> 'dismissed' and j.closed_at is null)::int as left
+           count(*) filter (where m.state = 'to_read' and m.status <> 'dismissed')::int as left
       from orbit.role_matches m join orbit_private.jobs j on j.id = m.job_id
-     where m.search_id = ${searchId}::uuid`;
+     where m.search_id = ${searchId}::uuid and j.closed_at is null`;
   return c ?? { listed: 0, read: 0, left: 0 };
 }
 

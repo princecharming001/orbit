@@ -35,7 +35,7 @@ async function signedIn(page: Page, opts: { roles?: boolean; step?: number } = {
 
 /** The student's own resume, as Orbit read it (the lines a resume upload leaves in the browser). */
 async function seedResume(page: Page) {
-  await page.evaluate(async () => {
+  await page.evaluate(async (GRAD) => {
     const db = (
       window as unknown as {
         __orbitDb: Record<
@@ -101,47 +101,50 @@ async function seedResume(page: Page) {
         confirmed: true,
       },
     ]);
-  });
+  }, GRAD);
 }
 
 /** The student's own LinkedIn profile as Orbit keeps it; `described`: its jobs say what they did. */
 async function seedLinkedIn(page: Page, described: boolean) {
-  await page.evaluate(async (d) => {
-    const db = (
-      window as unknown as {
-        __orbitDb: Record<
-          string,
-          { put(x: unknown): Promise<unknown>; toArray(): Promise<{ id: string }[]> }
-        >;
-      }
-    ).__orbitDb;
-    const [u] = await db.users!.toArray();
-    await db.kv!.put({
-      key: `self:linkedin:${u!.id}`,
-      value: {
-        readAt: new Date().toISOString(),
-        v: 2,
-        profile: {
-          headline: 'Computer Science at Cornell',
-          experience: [
-            {
-              title: 'Software Engineering Intern',
-              company: 'Brex',
-              current: false,
-              start: '2026-06',
-              end: '2026-08',
-              ...(d ? { description: 'Built a reconciliation service for card transactions in Go.' } : {}),
-            },
-          ],
-          education: [
-            { school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: String(GRAD) },
-          ],
-          throttled: [],
-          skills: ['Go', 'SQL', 'TypeScript', 'React'],
+  await page.evaluate(
+    async ([d, GRAD]) => {
+      const db = (
+        window as unknown as {
+          __orbitDb: Record<
+            string,
+            { put(x: unknown): Promise<unknown>; toArray(): Promise<{ id: string }[]> }
+          >;
+        }
+      ).__orbitDb;
+      const [u] = await db.users!.toArray();
+      await db.kv!.put({
+        key: `self:linkedin:${u!.id}`,
+        value: {
+          readAt: new Date().toISOString(),
+          v: 2,
+          profile: {
+            headline: 'Computer Science at Cornell',
+            experience: [
+              {
+                title: 'Software Engineering Intern',
+                company: 'Brex',
+                current: false,
+                start: '2026-06',
+                end: '2026-08',
+                ...(d ? { description: 'Built a reconciliation service for card transactions in Go.' } : {}),
+              },
+            ],
+            education: [
+              { school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: String(GRAD) },
+            ],
+            throttled: [],
+            skills: ['Go', 'SQL', 'TypeScript', 'React'],
+          },
         },
-      },
-    });
-  }, described);
+      });
+    },
+    [described, GRAD] as const,
+  );
 }
 
 /** Through the profile screen to the table, every role read. */
