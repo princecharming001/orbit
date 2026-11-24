@@ -383,7 +383,24 @@ function MonthGrid({
   );
 }
 
-/** The list: what is coming by day, then what happened, each call a row with the person and their company. */
+/** Whole minutes a call runs, when it has an end ("30 min", "1 hr", "1 hr 30 min"). */
+function callLength(c: WeekCall): string | undefined {
+  const min = Math.round((new Date(c.endAt).getTime() - new Date(c.startAt).getTime()) / 60_000);
+  if (!(min > 0) || min > 12 * 60) return undefined;
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h} hr ${m} min` : `${h} hr`;
+}
+
+const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+/**
+ * The list, as an agenda: the day stands in a column at the left, said once for all its calls (a number with its
+ * weekday, or Today, Tomorrow, Yesterday), then the time with how long the call runs, the person, and what to do
+ * about it. A call that is over offers a note instead of a link to join. Months are named where they change, so a
+ * long run of days reads as a calendar and not as a column of headings.
+ */
 function CallList({
   list,
   people,
@@ -392,86 +409,155 @@ function CallList({
   people: Map<string, Person>;
 }) {
   if (!list) return null;
-  const group = (calls: WeekCall[]) => {
-    const out: { day: string; calls: WeekCall[] }[] = [];
-    for (const c of calls) {
-      const day = new Date(c.startAt).toLocaleDateString('en-US', {
-        weekday: 'long',
-        month: 'short',
-        day: 'numeric',
-      });
-      const last = out[out.length - 1];
-      if (last?.day === day) last.calls.push(c);
-      else out.push({ day, calls: [c] });
-    }
-    return out;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const near = (d: Date): string | undefined => {
+    const at = new Date(d);
+    at.setHours(0, 0, 0, 0);
+    const days = Math.round((at.getTime() - today.getTime()) / DAY);
+    return days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days === -1 ? 'Yesterday' : undefined;
   };
-  const section = (title: string, calls: WeekCall[], empty: string, testId: string): ReactNode => (
-    <div className="mb-6" data-testid={testId}>
-      <h3 className="mb-1 text-[12px] font-medium uppercase tracking-wide text-ink-3">{title}</h3>
-      {calls.length === 0 ? (
-        <p className="py-2 text-[13px] text-ink-3">{empty}</p>
-      ) : (
-        group(calls).map((g) => (
-          <div key={g.day} className="border-t border-line-2 py-2">
-            <div className="mb-1 text-[12.5px] text-ink-2">{g.day}</div>
-            <ul>
-              {g.calls.map((c) => {
-                const p = c.personId ? people.get(c.personId) : undefined;
-                return (
-                  <li key={c.id} className="flex items-center gap-3 py-1.5" data-testid="chats-list-call">
-                    <span className="w-[68px] shrink-0 text-[13px] tabular text-ink-2">
-                      {clockTime(new Date(c.startAt))}
-                    </span>
-                    {p && <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={26} />}
-                    <span className="min-w-0 flex-1">
-                      {p ? (
-                        <Link
-                          to={`/people/${p.id}`}
-                          className="block text-[13.5px] font-medium truncate hover:underline"
-                        >
-                          {p.displayName}
-                        </Link>
-                      ) : (
-                        <span className="block text-[13.5px] font-medium truncate">{c.title}</span>
-                      )}
-                      {p?.currentOrganizationRaw && (
-                        <span className="flex items-center gap-1 text-[12px] text-ink-3 min-w-0">
-                          <PersonCompanyLogo person={p} size={12} />
-                          <span className="truncate">
-                            {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ')}
+  const section = (
+    title: string,
+    calls: WeekCall[],
+    empty: string,
+    testId: string,
+    past: boolean,
+  ): ReactNode => {
+    let lastDay = '';
+    let lastMonth = '';
+    return (
+      <section className="mb-8 max-w-[860px]" data-testid={testId}>
+        <h3 className="mb-2 flex items-baseline gap-2 text-[12px] font-medium uppercase tracking-wide text-ink-3">
+          {title}
+          {calls.length > 0 && <span className="tabular font-normal normal-case">{calls.length}</span>}
+        </h3>
+        {calls.length === 0 ? (
+          <p className="border-t border-line-2 py-3 text-[13px] text-ink-3">{empty}</p>
+        ) : (
+          <ul className="border-t border-line-2">
+            {calls.map((c) => {
+              const p = c.personId ? people.get(c.personId) : undefined;
+              const at = new Date(c.startAt);
+              const key = dayKey(at);
+              const first = key !== lastDay;
+              lastDay = key;
+              const month = at.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+              const newMonth = month !== lastMonth;
+              lastMonth = month;
+              const length = callLength(c);
+              const word = near(at);
+              const role = p ? [p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ') : '';
+              return (
+                <li key={c.id} data-testid="chats-list-call">
+                  {newMonth && (
+                    <div
+                      className="bg-canvas-2/50 px-3 py-1.5 text-[11.5px] text-ink-3 border-b border-line-2"
+                      data-testid="chats-list-month"
+                    >
+                      {month}
+                    </div>
+                  )}
+                  <div
+                    className={cx(
+                      'group grid grid-cols-[64px_84px_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-2.5 transition-colors hover:bg-canvas-2/50',
+                      // one rule between days; calls on the same day sit together
+                      first && !newMonth && 'border-t border-line-2',
+                    )}
+                  >
+                    <div className="self-start pt-0.5" data-testid="chats-list-day">
+                      {first &&
+                        (word ? (
+                          <span className={cx('text-[12.5px] font-medium', past ? 'text-ink-2' : 'text-ink')}>
+                            {word}
                           </span>
-                        </span>
+                        ) : (
+                          <span className="flex items-baseline gap-1.5">
+                            <span
+                              className={cx(
+                                'text-[17px] leading-none tabular font-medium',
+                                past ? 'text-ink-2' : 'text-ink',
+                              )}
+                            >
+                              {at.getDate()}
+                            </span>
+                            <span className="text-[11px] uppercase tracking-wide text-ink-3">
+                              {at.toLocaleDateString('en-US', { weekday: 'short' })}
+                            </span>
+                          </span>
+                        ))}
+                    </div>
+                    <div className="leading-tight">
+                      <span className={cx('block text-[13px] tabular', past ? 'text-ink-3' : 'text-ink-2')}>
+                        {clockTime(at)}
+                      </span>
+                      {length && <span className="block text-[11.5px] text-ink-3">{length}</span>}
+                    </div>
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      {p && <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={28} />}
+                      <span className="min-w-0">
+                        {p ? (
+                          <Link
+                            to={`/people/${p.id}`}
+                            className="block truncate text-[13.5px] font-medium hover:underline"
+                          >
+                            {p.displayName}
+                          </Link>
+                        ) : (
+                          <span className="block truncate text-[13.5px] font-medium">{c.title}</span>
+                        )}
+                        {p && role && (
+                          <span className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
+                            {p.currentOrganizationRaw && <PersonCompanyLogo person={p} size={12} />}
+                            <span className="truncate">{role}</span>
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {!past && c.conferenceUrl && (
+                        <a
+                          href={c.conferenceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border border-line px-2.5 text-[12.5px] text-ink hover:bg-canvas-2"
+                          data-testid="chats-list-join"
+                        >
+                          <Video size={13} aria-hidden /> Join
+                        </a>
                       )}
-                    </span>
-                    {c.conferenceUrl && (
-                      <a
-                        href={c.conferenceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-[12.5px] text-ink-2 hover:text-ink"
-                      >
-                        <Video size={13} aria-hidden /> Join
-                      </a>
-                    )}
-                    {p && (
-                      <Link to={callHref(p)} className="text-[12.5px] text-ink-2 hover:text-ink">
-                        Prep
-                      </Link>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))
-      )}
-    </div>
-  );
+                      {p && !past && (
+                        <Link
+                          to={callHref(p)}
+                          className="inline-flex h-7 items-center rounded-[6px] px-2.5 text-[12.5px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
+                          data-testid="chats-list-prep"
+                        >
+                          Prep
+                        </Link>
+                      )}
+                      {p && past && (
+                        <Link
+                          to={`/notes/new?person=${p.id}`}
+                          className="inline-flex h-7 items-center rounded-[6px] px-2.5 text-[12.5px] text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                          data-testid="chats-list-note"
+                        >
+                          Add a note
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+    );
+  };
   return (
     <div data-testid="chats-list">
-      {section('Coming up', list.upcoming, 'No calls coming up.', 'chats-list-upcoming')}
-      {section('Earlier', list.past, 'No calls in the last 30 days.', 'chats-list-past')}
+      {section('Coming up', list.upcoming, 'No calls coming up.', 'chats-list-upcoming', false)}
+      {section('Earlier', list.past, 'No calls in the last 30 days.', 'chats-list-past', true)}
     </div>
   );
 }
