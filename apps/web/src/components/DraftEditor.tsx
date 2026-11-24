@@ -53,7 +53,7 @@ import { googleClientId } from '../integrations/google';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSyncStatus } from '../state/account';
 import { useSession } from '../state/session';
-import { Avatar, Button, ButtonLink, cx, Input, relDate, Textarea, useToast } from '../ui';
+import { Avatar, Button, ButtonLink, ChannelMark, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, handoffToast, openHandoff, runApproval } from './approve';
 import { DraftFiles } from './DraftFiles';
 import { ForwardNote } from './ForwardNote';
@@ -859,6 +859,7 @@ export function DraftEditor({
             <div className="flex items-center gap-3 px-1 py-2">
               <span className="w-14 shrink-0 text-[12.5px] text-ink-3">To</span>
               <span className="flex min-w-0 items-center gap-2 text-[13.5px]" data-testid="draft-mail-to">
+                <ChannelMark channel={draft.channel} />
                 {person && (
                   <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={22} />
                 )}
@@ -1100,6 +1101,8 @@ export function DraftEditor({
         {thread && (
           <div className="flex items-center gap-3 border-b border-line-2 py-2 text-[14px] leading-none">
             <span className="w-[62px] shrink-0 text-[13px] text-ink-3">To</span>
+            {/* where it goes, as a small sign before the name: an email and a LinkedIn message read alike */}
+            <ChannelMark channel={draft.channel} />
             <span className="min-w-0 flex-1 truncate" data-testid="draft-to">
               {isLinkedIn
                 ? `${person?.displayName ?? first} on LinkedIn`
@@ -1210,10 +1213,16 @@ export function DraftEditor({
             Reset to suggested
           </button>
         )}
-        {onCancel && (
-          <Button variant="ghost" size="sm" onClick={cancel} className="ml-auto" data-testid="draft-cancel">
-            Close
-          </Button>
+        {(!thread || onCancel) && (
+          <span className="ml-auto flex items-center gap-2">
+            {/* a card names its person in its own heading and has no To line: the sign stands by the buttons */}
+            {!thread && <ChannelMark channel={draft.channel} />}
+            {onCancel && (
+              <Button variant="ghost" size="sm" onClick={cancel} data-testid="draft-cancel">
+                Close
+              </Button>
+            )}
+          </span>
         )}
       </div>
       {linkedInNotice && (

@@ -1,6 +1,6 @@
 import { FUNCTION_LABELS, initials } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, CircleAlert, Info, X } from 'lucide-react';
+import { Check, CircleAlert, Info, Instagram, MessageCircle, Twitter, X } from 'lucide-react';
 import {
   type ButtonHTMLAttributes,
   type CSSProperties,
@@ -374,6 +374,64 @@ export function LinkedInMark({ url, name, testId }: { url: string; name: string;
     >
       in
     </a>
+  );
+}
+
+/** The channels a message can go out on, as the draft and the outbox name them. */
+type MarkChannel = 'gmail' | 'linkedin' | 'instagram' | 'x' | 'imessage';
+const CHANNEL_SAID: Record<MarkChannel, string> = {
+  gmail: 'Email',
+  linkedin: 'LinkedIn message',
+  instagram: 'Instagram message',
+  x: 'X message',
+  imessage: 'Text message',
+};
+Object.setPrototypeOf(CHANNEL_SAID, null);
+
+/**
+ * A small sign of where a message goes: the Gmail logo for an email, the LinkedIn square for a LinkedIn message, the
+ * app's own mark for Instagram, X and texts. Quiet on purpose (it sits beside the recipient), and named for a screen
+ * reader and on hover, so "Send to Jai" never leaves it open which inbox Jai will find it in.
+ */
+export function ChannelMark({
+  channel,
+  size = 15,
+  className,
+}: {
+  /** a draft's channel; one with no inbox of its own ("clipboard") shows no sign */
+  channel: MarkChannel | (string & {});
+  size?: number;
+  className?: string;
+}) {
+  const said = CHANNEL_SAID[channel as MarkChannel];
+  if (!said) return null;
+  return (
+    <span
+      role="img"
+      aria-label={said}
+      title={said}
+      className={cx('inline-flex shrink-0 items-center justify-center text-ink-3', className)}
+      data-testid="draft-channel"
+      data-channel={channel}
+    >
+      {channel === 'gmail' ? (
+        <GmailLogo size={size} />
+      ) : channel === 'linkedin' ? (
+        <span
+          className="inline-flex items-center justify-center rounded-[3px] bg-[#0a66c2] font-bold leading-none text-white"
+          style={{ width: size, height: size, fontSize: Math.round(size * 0.58) }}
+          aria-hidden
+        >
+          in
+        </span>
+      ) : channel === 'instagram' ? (
+        <Instagram size={size} aria-hidden />
+      ) : channel === 'x' ? (
+        <Twitter size={size} aria-hidden />
+      ) : (
+        <MessageCircle size={size} aria-hidden />
+      )}
+    </span>
   );
 }
 
