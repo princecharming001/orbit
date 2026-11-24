@@ -15,7 +15,16 @@ vi.mock('../../integrations/anthropic', async (orig) => ({
   llmSearchJudge: llm.judge,
 }));
 
-import { itemSaid, type JudgeItem, judge, questionSaid, SCREEN_BATCH, screen, screenLine } from './judge';
+import {
+  itemSaid,
+  type JudgeItem,
+  judge,
+  questionSaid,
+  SCREEN_BATCH,
+  SCREEN_MAX,
+  screen,
+  screenLine,
+} from './judge';
 
 const doc = (id: string, name: string, headline: string): PersonDoc =>
   ({
@@ -173,6 +182,33 @@ describe('the judge keeps the answers it is given', () => {
     expect(out.answers.get('a')!.get('position:0')).toEqual({ answer: 'likely' });
   });
 
+  it('who someone is may be read from their name, as a likely that quotes the name, and nothing else may', async () => {
+    llm.judge.mockResolvedValue({
+      people: [
+        {
+          person: 'P1',
+          answers: [
+            { question: 'Q1', answer: 'likely', quote: 'Ada Quist' },
+            { question: 'Q2', answer: 'yes', quote: 'she/her' },
+          ],
+        },
+      ],
+    });
+    const who = [
+      { key: 'criterion:0', text: 'Is a woman' },
+      { key: 'criterion:1', text: 'Has a Danish name' },
+    ];
+    const out = await judge('u1', 'danish women', [{ doc: items[0]!.doc, questions: who }]);
+    // the name is in what the reader was given, so a likely resting on it stands
+    expect(out.answers.get('a')!.get('criterion:0')).toEqual({ answer: 'likely', quote: 'Ada Quist' });
+    // words that are not in their text do not make a yes
+    expect(out.answers.get('a')!.get('criterion:1')).toEqual({ answer: 'unknown' });
+    const system = llm.judge.mock.calls[0]![0] as string;
+    expect(system).toMatch(/answer likely, never yes, and quote the name exactly as it is written/);
+    expect(system).toMatch(/A name answers nothing else/);
+    expect(system).toMatch(/never guess someone's work, employer, school or place from a name/);
+  });
+
   it('the reader is told a founder says nothing of what the company is worth, and how a known company may count', async () => {
     llm.judge.mockResolvedValue({ people: [] });
     await judge('u1', 'unicorn founders', items.slice(0, 1));
@@ -191,7 +227,7 @@ describe('the first pass over a long list', () => {
   const said = (call: unknown[]) =>
     (call[1] as (w: (tag: string, t: string) => string) => string)((_t, t) => t);
 
-  it('one line a person, their work and never their name', () => {
+  it('one line a person: their name, then their work', () => {
     const d = {
       ...doc('a', 'Ada Quist', 'Building things'),
       roles: [
@@ -200,14 +236,15 @@ describe('the first pass over a long list', () => {
       ],
     } as unknown as PersonDoc;
     const line = screenLine(d);
-    expect(line).toBe('Co-founder at PostHog | before: Engineer at Arachnys | says: Building things');
-    expect(line).not.toMatch(/Ada|Quist/);
+    expect(line).toBe(
+      'name: Ada Quist | Co-founder at PostHog | before: Engineer at Arachnys | says: Building things',
+    );
   });
 
   it('everyone is looked at, a batch a call; only the people picked go on', async () => {
     llm.judge.mockImplementation(async (_s: string, build: unknown) => {
       const text = (build as (w: (tag: string, t: string) => string) => string)((_t, t) => t);
-      return { keep: text.includes('P4: says: Co-founder at PostHog') ? ['P4'] : [] };
+      return { keep: text.includes('P4: name: Person 3 | says: Co-founder at PostHog') ? ['P4'] : [] };
     });
     const kept = await screen(
       'u1',
@@ -221,7 +258,11 @@ describe('the first pass over a long list', () => {
     const first = said(llm.judge.mock.calls[0]!);
     expect(first).toContain('- Founded a company valued at over $1 billion');
     expect(first).toContain(`P${SCREEN_BATCH}: `);
-    expect(first).not.toContain('Person 3');
+    // a name is there for "who someone is" only, and the pass is told so
+    expect(llm.judge.mock.calls[0]![0]).toMatch(/A name says nothing about anyone's work/);
+    expect(llm.judge.mock.calls[0]![0]).toMatch(
+      /pick the people whose first and last name plainly point that way/,
+    );
     expect(llm.judge.mock.calls[0]![0]).toMatch(
       /A company you do not recognise is not a reason to pick someone/,
     );
@@ -255,6 +296,19 @@ describe('the first pass over a long list', () => {
     expect(llm.judge).toHaveBeenCalledTimes(3);
     expect(again!.looked.size).toBe(many.length);
     expect([...again!.keep]).toEqual([`p${SCREEN_BATCH}`]);
+  });
+
+  it('at most so many people are looked at anew in one search; the next search carries on from there', async () => {
+    const crowd = Array.from({ length: SCREEN_MAX + 30 }, (_, i) =>
+      doc(`c${i}`, `Crowd ${i}`, `Founder ${i}`),
+    );
+    llm.judge.mockResolvedValue({ keep: [] });
+    const first = await screen('u1', 'x', ['Is a woman'], crowd);
+    expect(first!.looked.size).toBe(SCREEN_MAX);
+    expect(llm.judge).toHaveBeenCalledTimes(SCREEN_MAX / SCREEN_BATCH);
+    const second = await screen('u1', 'x', ['Is a woman'], crowd);
+    expect(second!.looked.size).toBe(crowd.length);
+    expect(llm.judge).toHaveBeenCalledTimes(SCREEN_MAX / SCREEN_BATCH + 1);
   });
 
   it('nothing to ask picks nobody and asks nothing', async () => {

@@ -119,8 +119,9 @@ describe('a criterion over more people than one search reads', () => {
     expect(reads).toHaveLength(1);
     expect(text(reads[0]!)).toContain('cofounder at posthog');
     expect(text(reads[0]!)).not.toContain('Tiny Co');
-    // no name goes to the first pass
-    expect(passes.map(text).join('\n')).not.toMatch(/Founder Number|James Far/);
+    // the first pass sees each name, and is told what a name may and may not answer
+    expect(passes.map(text).join('\n')).toContain('name: James Far | Co-founder at PostHog');
+    expect(passes[0]![0]).toMatch(/A name says nothing about anyone's work/);
     expect(r.notes).toEqual([
       `${FOUNDERS} more of your people pass the filters, but nothing Orbit has on them says "${CRITERION}". Make it a nice to have to list them too.`,
     ]);
@@ -145,7 +146,7 @@ describe('a criterion over more people than one search reads', () => {
     );
     expect(r.notes).toEqual([
       `80 of your people pass the filters, but nothing Orbit has on them says "${CRITERION}". Make it a nice to have to list them.`,
-      `Orbit has not read ${FOUNDERS + 1 - 80} more of your people against "${CRITERION}" yet. Search again to read more of them.`,
+      `Orbit has read 80 of ${FOUNDERS + 1} people who pass the filters against "${CRITERION}" so far. Search again to read more.`,
     ]);
   });
 

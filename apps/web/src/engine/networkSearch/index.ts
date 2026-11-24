@@ -24,7 +24,7 @@ import { claudeReachable } from '../../integrations/anthropic';
 import { callApi, isServerUser } from '../../integrations/orbitApi';
 import { companyFacts, refreshFacets, refreshProfiles } from './data';
 import { loadWorld, type SearchWorld } from './docs';
-import { JUDGE_FIRST, judge, openQuestions, SCREEN_MAX, screen } from './judge';
+import { JUDGE_FIRST, judge, openQuestions, screen } from './judge';
 import { lookupsFor, runLookups } from './lookup';
 
 export interface SearchRowView {
@@ -187,9 +187,11 @@ async function judgeMore(
   only?: Set<string>,
 ): Promise<void> {
   const docs = new Map(world.docs.map((d) => [d.id, d]));
-  const items = toJudge(set, docs, limit, only);
+  // after a first pass, everyone it kept is handed over: the ones read before are free, `limit` are read anew, so
+  // the same search again reads further down the list instead of the same people
+  const items = toJudge(set, docs, only ? limit * 6 : limit, only);
   if (!items.length) return;
-  const out = await judge(set.userId, set.ask, items, signal, world.ctx.facts);
+  const out = await judge(set.userId, set.ask, items, signal, world.ctx.facts, only ? limit : undefined);
   for (const [id, m] of out.answers) {
     const merged = set.judged.get(id) ?? new Map<string, JudgedAnswer>();
     for (const [k, v] of m) merged.set(k, v);
@@ -224,10 +226,8 @@ async function firstPass(
   );
   if (open.length <= limit) return undefined;
   const docs = new Map(world.docs.map((d) => [d.id, d]));
-  const looked = open
-    .slice(0, SCREEN_MAX)
-    .map((r) => docs.get(r.id))
-    .filter((d): d is PersonDoc => !!d);
+  // everyone who passes the filters: the pass itself reads only so many anew, and remembers the rest
+  const looked = open.map((r) => docs.get(r.id)).filter((d): d is PersonDoc => !!d);
   const pass = await screen(
     set.userId,
     set.ask,

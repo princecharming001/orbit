@@ -897,7 +897,7 @@ describe('one run: the network and beyond, as one list', () => {
       // the two who pass the filter and are held back for the criterion are counted; the no and the other job are not
       expect(r.notes).toEqual([
         '1 more of your people pass the filters, but nothing Orbit has on them says "Works at a venture capital firm". Make it a nice to have to list them too.',
-        'Orbit has not read 1 more of your people against "Works at a venture capital firm" yet. Search again to read more of them.',
+        'Orbit has read 2 of 3 people who pass the filters against "Works at a venture capital firm" so far. Search again to read more.',
       ]);
       expect(r.unchecked).toBe(false);
       expect(net.runNetworkSearch.mock.calls[0]![2]).toMatchObject({ screen: true });
@@ -911,7 +911,54 @@ describe('one run: the network and beyond, as one list', () => {
       const r = await runPeopleSearch({ id: 'u1', school: '' }, mine);
       expect(r.rows).toEqual([]);
       expect(r.notes[0]).toMatch(/^1 of your people pass the filters, but nothing Orbit has on them says/);
-      expect(r.notes[1]).toMatch(/^Orbit has not read 1 more of your people against/);
+      expect(r.notes[1]).toBe(
+        'Orbit has read 1 of 2 people who pass the filters against "Works at a venture capital firm" so far. Search again to read more.',
+      );
+    });
+
+    it('"Indian girls": no filter, two criteria read from the name, and the column says it is a reading of the name', async () => {
+      const who = form({ reach: 'mine' }, [
+        ['Is a woman', 'must'],
+        ['Has an Indian name', 'must'],
+      ]);
+      const likelyFrom = (key: string, quote: string) => ({
+        ...check(key, 'likely'),
+        evidence: `"${quote}"`,
+        source: 'judge' as const,
+      });
+      network([
+        row('p1', 'Neha Sarda', 'likely', [
+          likelyFrom('criterion:0', 'Neha Sarda'),
+          likelyFrom('criterion:1', 'Sarda'),
+        ]),
+        row('p2', 'Priya Shah', 'likely', [
+          { ...check('criterion:0', 'yes'), evidence: '"she/her"', source: 'judge' as const },
+          likelyFrom('criterion:1', 'Priya Shah'),
+        ]),
+        row('p3', 'Dan Lee', 'unchecked', [check('criterion:0', 'no'), check('criterion:1', 'unknown')]),
+        row('p4', 'Not Read', 'likely', [
+          { ...check('criterion:0', 'likely'), unread: true },
+          { ...check('criterion:1', 'likely'), unread: true },
+        ]),
+      ]);
+      const r = await runPeopleSearch({ id: 'u1', school: '' }, who);
+      expect(r.rows.map((x) => x.name).sort()).toEqual(['Neha Sarda', 'Priya Shah']);
+      const neha = r.rows.find((x) => x.name === 'Neha Sarda')!;
+      expect(neha.checks.map((c) => [c.answer, c.evidence])).toEqual([
+        ['likely', 'A guess from their name'],
+        ['likely', 'A guess from their name'],
+      ]);
+      // read from a name, so never a full match
+      expect(neha.match).toBeLessThanOrEqual(85);
+      // her own words are words, not a guess
+      expect(r.rows.find((x) => x.name === 'Priya Shah')!.checks[0]).toMatchObject({
+        answer: 'yes',
+        evidence: '"she/her"',
+      });
+      // with no filter, "the rest do not fit" is not said; how far the reading got is
+      expect(r.notes).toEqual([
+        'Orbit has read 3 of your 4 people against all of your criteria so far. Search again to read more.',
+      ]);
     });
 
     it('a nice-to-have nobody read is a dash that says so, never a thumb, and keeps the person listed', async () => {
