@@ -13,6 +13,13 @@ import { loadDemo } from './helpers';
 
 const LINK = 'https://boards.greenhouse.io/stripe/jobs/6120000';
 
+/**
+ * The year the made-up student graduates: two years from now, so they are a student (graduating more than a year
+ * away) whenever the suite runs. The level comes from dates by the server's own rule (core `profileLevelOf`): a
+ * graduation within a year is a new grad, who is shown entry roles and not internships.
+ */
+const GRAD = new Date().getFullYear() + 2;
+
 /** Signed in to an account that finished setup elsewhere, with Roles on (or off) for it. */
 async function signedIn(page: Page, opts: { roles?: boolean; step?: number } = {}): Promise<FakeOrbitApi> {
   const api = await withFakeApi(page);
@@ -80,7 +87,7 @@ async function seedResume(page: Page) {
         kind: 'education',
         title: 'BS Computer Science',
         organizationName: 'Cornell University',
-        endDate: '2027-05-31',
+        endDate: `${GRAD}-05-31`,
         text: 'BS Computer Science.',
         keywords: [],
         confirmed: true,
@@ -126,7 +133,9 @@ async function seedLinkedIn(page: Page, described: boolean) {
               ...(d ? { description: 'Built a reconciliation service for card transactions in Go.' } : {}),
             },
           ],
-          education: [{ school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: '2027' }],
+          education: [
+            { school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: String(GRAD) },
+          ],
           throttled: [],
           skills: ['Go', 'SQL', 'TypeScript', 'React'],
         },
@@ -158,7 +167,7 @@ test.describe('Roles (plan 44, fake orbit-api)', () => {
     await expect(page.getByTestId('profile-use-linkedin')).toHaveCount(0);
     await page.getByTestId('profile-read').click();
     await expect(page.getByTestId('profile-where-line')).toHaveText(
-      'Student, B.S. Computer Science, Cornell University, graduating May 2027',
+      `Student, B.S. Computer Science, Cornell University, graduating May ${GRAD}`,
     );
     await expect(page.getByTestId('profile-note')).toHaveCount(0);
     await page.getByTestId('profile-find').click();

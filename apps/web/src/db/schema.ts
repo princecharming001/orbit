@@ -359,7 +359,7 @@ export interface RoleMatchRow {
   match: RoleMatch;
   /** when this copy was written */
   keptAt: string;
-  /** the search it came from ('pasted' for a posting the student scored); the table lists the current search's */
+  /** the search it came from ('pasted' for a posting the student scored); the table lists the current search's and those */
   searchId?: string;
 }
 

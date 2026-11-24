@@ -33,9 +33,9 @@ import { PlanFit } from '../../chat/ui/cards/PlanFit';
 import { RolesCard } from '../../chat/ui/cards/RolesCard';
 import { db, wipeDatabase } from '../../db/schema';
 import { setFeatureForTests } from '../../engine/features';
-import { keptMatches, keptSearch, resetRolesForTests, tableMatches } from '../../engine/roles';
+import { keptMatches, keptProfile, keptSearch, resetRolesForTests, tableMatches } from '../../engine/roles';
 import { SAMPLE_JOBS } from '../../engine/rolesSample';
-import { createRolesSim } from '../../engine/rolesSim';
+import { createRolesSim, NOT_READ_NOTE } from '../../engine/rolesSim';
 import { refreshAccount, setOrbitApiFetchForTests } from '../../integrations/orbitApi';
 import { RolesPage } from '../../pages/Roles';
 import { forgetViews } from '../../state/viewState';
@@ -45,6 +45,13 @@ import { ToastProvider } from '../../ui';
 import { RolesTable, whyWords } from './RolesTable';
 
 const T0 = '2026-11-24T12:00:00.000Z';
+
+/**
+ * The year the made-up student graduates: two years from now, so they are a student (graduating more than a year
+ * away) whenever the suite runs. The level comes from dates by the server's own rule (core `profileLevelOf`): a
+ * graduation within a year is a new grad, who is shown entry roles and not internships.
+ */
+const GRAD = new Date().getFullYear() + 2;
 
 async function seedResume(userId: string) {
   await db.resumes.put({
@@ -84,7 +91,7 @@ async function seedResume(userId: string) {
       kind: 'education',
       title: 'BS Computer Science',
       organizationName: 'Cornell University',
-      endDate: '2027-05-31',
+      endDate: `${GRAD}-05-31`,
       text: 'BS Computer Science.',
       keywords: [],
       confirmed: true,
@@ -215,7 +222,7 @@ describe('the first visit and the profile screen', () => {
     await click($('profile-read'));
     await until(() => $('roles-profile'));
     expect($('profile-where-line')!.textContent).toBe(
-      'Student, B.S. Computer Science, Cornell University, graduating May 2027',
+      `Student, B.S. Computer Science, Cornell University, graduating May ${GRAD}`,
     );
     expect($$('profile-skills-chip').map((c) => c.textContent)).toEqual(
       expect.arrayContaining(['Go', 'Python', 'SQL', 'React', 'TypeScript']),
@@ -231,6 +238,43 @@ describe('the first visit and the profile screen', () => {
     // asked once, never guessed
     expect($('profile-sponsorship-yes')!.getAttribute('aria-pressed')).toBe('false');
     expect($('profile-sponsorship-no')!.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('the server leaves the levels to the profile: they show ticked, and Find roles is ready at once', async () => {
+    await show();
+    await until(() => $('profile-use-resume'));
+    await click($('profile-read'));
+    await until(() => $('roles-profile'));
+    // what the server sent has no levels picked (it means the ones that fit a student)
+    expect(api.state.roles.state().proposed?.wants.levels).toEqual([]);
+    expect($('profile-level-chip-intern')!.getAttribute('aria-pressed')).toBe('true');
+    expect(($('profile-find') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('left before Find roles, then a reload: the review opens on what Orbit read, with no second read and no search', async () => {
+    await show();
+    await until(() => $('profile-use-resume'));
+    await click($('profile-read'));
+    await until(() => $('roles-profile'));
+    const reads = () => api.state.roleCalls.filter((c) => c.route === '/roles/profile' && 'read' in c.body);
+    expect(reads()).toHaveLength(1);
+    // the reload: the page's own memory is gone, the server still has what it read
+    act(() => root.unmount());
+    forgetViews();
+    resetRolesForTests();
+    root = createRoot(host);
+    await show();
+    await until(() => $('roles-profile'));
+    expect($('profile-where-line')!.textContent).toBe(
+      `Student, B.S. Computer Science, Cornell University, graduating May ${GRAD}`,
+    );
+    expect(reads()).toHaveLength(1);
+    // nothing was searched on a profile the student never confirmed
+    expect(api.state.roleCalls.some((c) => c.route === '/roles/search')).toBe(false);
+    expect(await keptProfile(user.id)).toBeUndefined();
+    await click($('profile-find'));
+    await until(() => $$('role-row').length > 0);
+    expect(api.state.roles.state().profile).toBeTruthy();
   });
 
   it('edit a skill, untick a kind, widen the level and answer sponsorship: the saved profile has each', async () => {
@@ -275,7 +319,9 @@ describe('the first visit and the profile screen', () => {
               end: '2026-08',
             },
           ],
-          education: [{ school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: '2027' }],
+          education: [
+            { school: 'Cornell University', degree: 'BS', field: 'Computer Science', end: String(GRAD) },
+          ],
           throttled: [],
           skills: ['Go', 'SQL', 'TypeScript'],
         },
@@ -493,7 +539,9 @@ describe('every state in plan 44 §2.5', () => {
     await buildAndSearch();
     expect($$('role-fit')).toHaveLength(0);
     expect($$('role-fit-rough').length).toBe($$('role-row').length);
-    expect($('roles-note-model')!.textContent).toContain('could not read these roles closely');
+    expect($('roles-note-model')!.textContent).toBe(
+      `${NOT_READ_NOTE} Rows marked "Not read closely yet" have no score.`,
+    );
   });
 
   it('offline, or reloaded: the last matches from the browser copy, with when they were read', async () => {

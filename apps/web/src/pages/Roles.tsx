@@ -19,7 +19,7 @@ import { RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CompaniesView, companyGroups } from '../components/roles/CompaniesView';
-import { ProfileSetup } from '../components/roles/ProfileSetup';
+import { openProfileReview, ProfileSetup } from '../components/roles/ProfileSetup';
 import { RoleFiltersBar } from '../components/roles/RoleFilters';
 import { RolePanel } from '../components/roles/RolePanel';
 import { RolesCoverage } from '../components/roles/RolesCoverage';
@@ -38,6 +38,7 @@ import {
   keptSearch,
   pathOf,
   pathsFor,
+  proposedProfile,
   type RoleFilters,
   type RolesRun,
   RUN_KEY,
@@ -135,7 +136,11 @@ function RolesBody({ user }: { user: User }) {
   useEffect(() => {
     if (kept === null && !synced.current) {
       synced.current = true;
-      void syncProfile(user);
+      // no confirmed profile on the server either, but one Orbit already read: the review screen opens on it
+      void syncProfile(user).then((k) => {
+        const proposed = k ? undefined : proposedProfile(userId);
+        if (proposed) openProfileReview(userId, proposed);
+      });
     }
   }, [kept, user]);
 
@@ -393,7 +398,8 @@ function RolesBody({ user }: { user: User }) {
         )}
         {search?.note && (
           <p className="text-[12.5px] text-ink-2" data-testid="roles-note-model">
-            {search.note} Rows marked "Not read closely yet" have no score.
+            {search.note}
+            {table.some((m) => !m.fit) ? ' Rows marked "Not read closely yet" have no score.' : ''}
           </p>
         )}
         {run.error && !running && (
