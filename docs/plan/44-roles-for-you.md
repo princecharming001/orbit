@@ -623,22 +623,19 @@ switch goes on.
 
 Budget for testing stays inside the $10 limit: the boards are free, and model calls in tests go through the shim.
 
-## 14. Decisions that are yours
+## 14. Decisions (answered 2026-11-24)
 
-1. **The SimplifyJobs lists.** They would add about 8,000 internship and new grad roles at companies the three job
-   boards do not reach (the big companies). The repositories carry no licence, which means their data is not
-   licensed for reuse. Options: leave them out (my recommendation for launch), ask Simplify for permission, or use
-   them only as links out with credit. I will not build them in without your say.
-2. **Workday and other company career sites.** They reach the largest employers but are not published APIs. Same
-   question, per site.
-3. **Who it is for.** The first build keeps intern, new grad and early roles only. Say so if experienced roles should
-   be in from the start.
-4. **Who pays for the model calls.** Orbit's key with the caps in section 11 (my assumption), or only students who
-   bring their own key.
-5. **The name of the tab.** "Roles" in this plan.
-6. **One live LinkedIn job search from your account**, in stage 0, to confirm that source works before the plan
-   leans on it. It counts as one of your LinkedIn searches for the day. Without it, LinkedIn stays out of the first
-   build and the tab starts with the job boards and pasted postings.
+| Question | Your answer | What the build does |
+|---|---|---|
+| SimplifyJobs lists | Include. Use any source that makes the product better | Both lists are read once a day. Each listing links to the company's own posting, which is also how Orbit finds thousands of company boards, Workday sites included |
+| Workday and other career sites | Include those that are easy to read | Workday's public job search (checked live: NVIDIA 1,102 roles, Salesforce 801, each with full text), plus Workable, SmartRecruiters and Recruitee |
+| Who it is for | Everyone, matched to the person | Roles of every level are kept. The level searched follows the profile: a student sees internships, a new grad entry roles, someone with five years mid and senior roles. The student can widen it |
+| Who pays for model calls | Orbit's key with the caps in section 11 | As planned |
+| Tab name | Roles | As planned |
+| LinkedIn job search | Yes | Checked live from your account on 2026-11-24: one search returned 247 intern and entry software roles, Netflix among them, and a role's full text reads with one more call |
+
+Sections 4.5 and 5 change with the audience: intake no longer drops senior roles, and the filter in step 1 is the
+profile's level (intern; entry; entry and mid; mid and senior; senior and above), with "not said" kept at every level.
 
 ## 15. Build order
 

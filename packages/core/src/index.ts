@@ -62,6 +62,7 @@ export * from './recommend/wantToMeet';
 export * from './recommend/why';
 export * from './resume/parse';
 export * from './resume/profile';
+export * from './roles/index';
 export * from './resume/schools';
 export * from './safety/firstTouch';
 export * from './safety/rules';

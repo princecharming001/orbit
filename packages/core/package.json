@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./vader": "./src/scoring/vader.ts",
     "./search": "./src/search/index.ts",
-    "./search-places": "./src/search/places.data.ts"
+    "./search-places": "./src/search/places.data.ts",
+    "./roles": "./src/roles/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

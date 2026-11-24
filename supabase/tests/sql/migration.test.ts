@@ -114,6 +114,8 @@ describe('orbit core migration', () => {
       // plan 29 §B2.5: the hourly outcome roll, scheduled by 20261101_orbit_autopilot_phase3.sql
       'orbit-outcomes',
       'orbit-retention',
+      // plan 44: Roles, the ten-minute tick (boards, discovery, SimplifyJobs lists, nightly top-up), 20261211_orbit_roles.sql
+      'orbit-roles',
       // plan 32 §6.4: the LinkedIn connections census, every three hours, same migration
       'orbit-search-census',
       // plan 33: profile reading, every two hours, scheduled by 20261109_orbit_profile_reading.sql
