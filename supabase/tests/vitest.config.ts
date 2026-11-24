@@ -8,6 +8,12 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: /^@orbit\/core$/, replacement: `${core}index.ts` },
+      // the package's own named entries (packages/core/package.json "exports"), which the browser's code imports:
+      // roles-contract.test.ts runs the browser's Roles engine against the real routes
+      { find: /^@orbit\/core\/search$/, replacement: `${core}search/index.ts` },
+      { find: /^@orbit\/core\/roles$/, replacement: `${core}roles/index.ts` },
+      { find: /^@orbit\/core\/vader$/, replacement: `${core}scoring/vader.ts` },
+      { find: /^@orbit\/core\/search-places$/, replacement: `${core}search/places.data.ts` },
       { find: /^@orbit\/core\/(.*)$/, replacement: `${core}$1.ts` },
     ],
   },
