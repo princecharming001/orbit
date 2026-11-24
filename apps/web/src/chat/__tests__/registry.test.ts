@@ -232,6 +232,8 @@ describe('every tool parses and executes its example input against the demo', ()
       get_dossier: { personId: ids.person.id },
       research_left: {},
       find_people: { purpose: 'fundraising', query: 'seed investors in climate' },
+      // plan 44: the demo student's sample roles, read from the sample resume and LinkedIn the first time
+      find_roles: { query: 'What roles fit me?' },
       add_sourced: { recommendationIds: ['rec_1'] },
       list_replies: {},
       list_inbox: { channel: 'email' },

@@ -1,8 +1,8 @@
 import { normalizeCompany, TARGET_STATUS_LABELS, type TargetCompany, type User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useInView } from 'react-intersection-observer';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { askIntroKey, useAskIntro } from '../components/askIntro';
 import { CompanyLogo } from '../components/CompanyLogo';
 import { ThroughFriends } from '../components/friends/ThroughFriends';
@@ -64,16 +64,23 @@ export function CompanyPage() {
   );
   const [reach, setReach] = useState<CompanyReach>();
   const [reachFailed, setReachFailed] = useState(false);
-  // the plan for this target, newest first (plan 23 §4.1)
-  const plan = useLiveQuery(
-    async () =>
-      tc
-        ? ((await db.targetPlans.where('targetCompanyId').equals(tc.id).toArray()).sort((a, b) =>
-            b.builtAt.localeCompare(a.builtAt),
-          )[0] ?? null)
-        : undefined,
-    [tc?.id],
-  );
+  // the plan for this target, newest first (plan 23 §4.1); a link that names one (Roles' "Find a way in", which plans
+  // for the role it was opened on) shows that one, even when it names nobody yet
+  const [params] = useSearchParams();
+  const askedPlan = params.get('plan') ?? undefined;
+  const plan = useLiveQuery(async () => {
+    if (!tc) return undefined;
+    const all = await db.targetPlans.where('targetCompanyId').equals(tc.id).toArray();
+    return (
+      (askedPlan ? all.find((p) => p.id === askedPlan) : undefined) ??
+      all.sort((a, b) => b.builtAt.localeCompare(a.builtAt))[0] ??
+      null
+    );
+  }, [tc?.id, askedPlan]);
+  const planRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (askedPlan && plan?.id === askedPlan) planRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [askedPlan, plan?.id]);
   const [filter, setFilter] = useState<Filter>('all');
   useEffect(() => {
     if (!userId || !org) return;
@@ -209,8 +216,8 @@ export function CompanyPage() {
       )}
       {/* the plan only earns a place here when it names people to write to; where the application stands and the
           deadline are already at the top of the page */}
-      {plan && plan.steps.length > 0 && (
-        <section className="mt-8" data-testid="company-plan-card">
+      {plan && (plan.steps.length > 0 || plan.id === askedPlan) && (
+        <section ref={planRef} className="mt-8 scroll-mt-6" data-testid="company-plan-card">
           <h2 className="text-[16px] font-semibold mb-3">Who to write first</h2>
           <TargetPlanCard plan={plan} hideTarget />
         </section>

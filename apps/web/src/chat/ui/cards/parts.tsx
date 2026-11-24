@@ -33,6 +33,7 @@ export function hrefLabel(href: string): string {
   if (path.startsWith('/settings')) return 'Settings';
   if (path.startsWith('/people')) return 'People';
   if (path.startsWith('/discover')) return 'Discover';
+  if (path.startsWith('/roles')) return 'Roles';
   if (path.startsWith('/notes')) return 'Notes';
   return 'Open';
 }

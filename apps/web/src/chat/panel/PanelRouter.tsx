@@ -22,6 +22,7 @@ import {
   PageLoading,
   People,
   PersonPage,
+  RolesPage,
   SettingsPage,
 } from '../../pages/lazyPages';
 import { panelAnchorHref } from './routes';
@@ -107,6 +108,7 @@ export function PanelRoutes() {
         <Route path="/companies/:id" element={<CompanyPage />} />
         <Route path="/map" element={<MapPage />} />
         <Route path="/discover" element={<Discover />} />
+        <Route path="/roles" element={<RolesPage />} />
         <Route path="/inbox" element={<InboxPage />} />
         <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
         <Route path="/notes/new" element={<NotesNew />} />

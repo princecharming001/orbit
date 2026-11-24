@@ -8,7 +8,7 @@
  * shows up for them on their next read, with nothing rebuilt.
  */
 import type { OptionalSource } from '@orbit/core';
-import { Instagram, MessageCircle, Twitter } from 'lucide-react';
+import { Briefcase, Instagram, MessageCircle, Twitter } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../../components/IntegrationRow';
 import { SettingsHeader } from '../../components/settings/kit';
@@ -18,6 +18,7 @@ import {
   accountUser,
   callApi,
   isSignedIn,
+  refreshAccount,
   refreshOwner,
   subscribeSession,
 } from '../../integrations/orbitApi';
@@ -175,6 +176,7 @@ export function LaunchSection() {
           />
         ))}
       </RowGroup>
+      <FeatureRows />
       {error && (
         <p className="mt-3 text-[12.5px] text-bad" role="alert" data-testid="launch-error">
           {error}
@@ -206,6 +208,97 @@ export function LaunchSection() {
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+/** Plan 44 §9.4: the features the owner can switch on for every student, beside the sources. */
+const FEATURE_NAMES: Record<string, { name: string; line: string }> = {
+  roles: {
+    name: 'Roles tab',
+    line: 'Roles that fit each student, with a score out of 10 and who they know there',
+  },
+};
+
+/**
+ * The owner's switch for a feature (GET /admin/features, PUT /admin/features/:feature), as the source switches work:
+ * on, students see it the next time Orbit asks; off, the tab, its chat tool and its card go. A server from before the
+ * switch answers 404, and the group is left out.
+ */
+function FeatureRows() {
+  const toast = useToast();
+  const [rows, setRows] = useState<{ feature: string; offered: boolean }[] | null>();
+  const [busy, setBusy] = useState<string>();
+  const [error, setError] = useState<string>();
+  const load = useCallback(async () => {
+    const r = await callApi('/admin/features', {});
+    if (r.ok) setRows(r.value.features.filter((f) => FEATURE_NAMES[f.feature]));
+    else setRows(null);
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  if (!rows?.length) return null;
+  const set = async (feature: string, offered: boolean) => {
+    setBusy(feature);
+    setError(undefined);
+    try {
+      const r = await callApi(`/admin/features/${feature}`, { offered });
+      if (!r.ok) {
+        setError(r.message);
+        return;
+      }
+      const name = FEATURE_NAMES[feature]?.name ?? feature;
+      toast.push({
+        text: offered ? `${name} is on for every student.` : `${name} is off. Students no longer see it.`,
+        tone: offered ? 'good' : undefined,
+      });
+      await load();
+      // the owner is a student too: their own side bar follows at once
+      await refreshAccount().catch(() => undefined);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  return (
+    <div className="mt-6" data-testid="launch-features">
+      <RowGroup title="Features">
+        {rows.map((f) => (
+          <IntegrationRow
+            key={f.feature}
+            testId={`launch-feature-${f.feature}`}
+            mark={
+              <AppMark>
+                <Briefcase size={16} aria-hidden />
+              </AppMark>
+            }
+            name={FEATURE_NAMES[f.feature]!.name}
+            status={
+              <RowStatus tone={f.offered ? 'good' : 'muted'} testId={`launch-feature-${f.feature}-state`}>
+                {f.offered ? 'On for every student' : 'Off'}
+              </RowStatus>
+            }
+            line={FEATURE_NAMES[f.feature]!.line}
+            actions={
+              <label className="flex items-center gap-2 text-[12.5px] text-ink-2">
+                Offered to students
+                <Switch
+                  checked={f.offered}
+                  label={`Offer the ${FEATURE_NAMES[f.feature]!.name} to students`}
+                  busy={busy === f.feature}
+                  onChange={(next) => void set(f.feature, next)}
+                  data-testid={`launch-feature-${f.feature}-switch`}
+                />
+              </label>
+            }
+          />
+        ))}
+      </RowGroup>
+      {error && (
+        <p className="mt-3 text-[12.5px] text-bad" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

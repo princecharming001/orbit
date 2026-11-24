@@ -18,6 +18,7 @@ import {
   toLlmError,
   type Wrap,
 } from '../../integrations/anthropic';
+import { offeredTools } from '../offered';
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
 import { recordToolAction } from './actions';
 import { sentenceGate, withoutButtonTalk } from './buttonTalk';
@@ -740,7 +741,9 @@ export async function runTurn(
       return env;
     },
   };
-  let tools = buildRunnerTools(registry, toolHooks);
+  // a tool whose feature is off for the student is never offered to the model (plan 44 §9.4)
+  const offered = offeredTools(registry, user.id);
+  let tools = buildRunnerTools(offered, toolHooks);
 
   const params = turnParams(deps, tools, messages, knowledge);
   let runner = deps.client.beta.messages.toolRunner(params, requestOptions());
@@ -917,7 +920,7 @@ export async function runTurn(
       ) {
         toolSearchRejected = true;
         console.warn('[orbit chat] tool search was refused, sending the turn with every tool loaded', err);
-        tools = buildRunnerTools(registry, toolHooks, { toolSearch: false });
+        tools = buildRunnerTools(offered, toolHooks, { toolSearch: false });
         runner = deps.client.beta.messages.toolRunner(
           { ...runner.params, tools: withWebSearch(tools) },
           requestOptions(),

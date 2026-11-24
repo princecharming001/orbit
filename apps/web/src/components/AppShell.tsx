@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Archive,
+  Briefcase,
   CalendarClock,
   Compass,
   Ellipsis,
@@ -26,6 +27,7 @@ import type { ChatConversation } from '../chat/types';
 import { withoutRefs } from '../chat/ui/cards/next';
 import { isRunning, threadActions, useThread } from '../chat/ui/threadStore';
 import { db } from '../db/schema';
+import { useFeature } from '../engine/features';
 import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
@@ -63,6 +65,8 @@ const NAV_MORE = [
   { to: '/map', label: 'Map', icon: MapIcon },
   { to: '/discover', label: 'Discover', icon: Compass },
 ];
+/** plan 44: Roles, after Discover, only while the owner's switch has it on for the student (engine/features) */
+const NAV_ROLES = { to: '/roles', label: 'Roles', icon: Briefcase };
 const PHONE_TABS = [
   { to: '/', label: 'Chat', icon: MessageSquare },
   ...NAV_TOP.filter((n) => n.to !== '/chats' && n.to !== '/friends'),
@@ -73,6 +77,7 @@ const PHONE_MORE = [
   { to: '/chats', label: 'Chats', icon: CalendarClock },
   { to: '/friends', label: 'Friends', icon: UserPlus },
   { to: '/discover', label: 'Discover', icon: Compass },
+  NAV_ROLES,
   { to: '/notes/new', label: 'Add note', icon: NotebookPen },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
@@ -83,6 +88,9 @@ export function AppShell() {
   const { user, userId } = useSession();
   const nav = useNavigate();
   const [palette, setPalette] = useState(false);
+  const roles = useFeature('roles', userId);
+  const navMore = roles ? [...NAV_MORE, NAV_ROLES] : NAV_MORE;
+  const phoneMore = roles ? PHONE_MORE : PHONE_MORE.filter((n) => n !== NAV_ROLES);
   const [more, setMore] = useState(false);
   // labelled by default, as Tsenta's sidebar is; a student who collapses it keeps the icon rail
   const [expanded, setExpanded] = useState(() => {
@@ -359,7 +367,7 @@ export function AppShell() {
             ),
           )}
           <div className="my-2 h-px bg-line mx-2.5" role="separator" />
-          {NAV_MORE.map(({ to, label, icon }) => railLink(to, label, icon))}
+          {navMore.map(({ to, label, icon }) => railLink(to, label, icon))}
         </nav>
         {expanded && <Recent chat={chat} />}
         <div className={cx('mt-auto pb-3 pt-2 flex flex-col gap-0.5', !expanded && 'items-center')}>
@@ -463,7 +471,7 @@ export function AppShell() {
               </div>
               <ReadinessChip className="px-0.5" />
               <ActivityLine below className="px-0.5 pb-1" />
-              {PHONE_MORE.map(({ to, label, icon: Icon }) => (
+              {phoneMore.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}
                   to={to}
@@ -530,7 +538,7 @@ export function AppShell() {
             onClick={() => setMore((m) => !m)}
             className={cx(
               'relative min-w-0 min-h-11 flex flex-col items-center justify-center gap-0.5 text-[10.5px]',
-              more || PHONE_MORE.some((n) => pathname.startsWith(n.to))
+              more || phoneMore.some((n) => pathname.startsWith(n.to))
                 ? 'text-ink font-medium'
                 : 'text-ink-3',
             )}

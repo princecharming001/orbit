@@ -34,6 +34,25 @@ describe("the student's own LinkedIn profile", () => {
     expect(await readOwnProfile(user, { now: later })).toBe('read');
   });
 
+  it('a read kept before job descriptions were kept is read once more, and then keeps them (plan 44 §3)', async () => {
+    const kept = await ownProfile(user.id);
+    // a read from before: no version, and the descriptions dropped
+    await db.kv.put({
+      key: `self:linkedin:${user.id}`,
+      value: {
+        readAt: kept!.readAt,
+        profile: { ...kept!.profile, experience: kept!.profile.experience.map(({ description: _, ...x }) => x) },
+      },
+    });
+    const soon = new Date(Date.parse(kept!.readAt) + 60_000);
+    expect(await readOwnProfile(user, { now: soon })).toBe('read');
+    const again = await ownProfile(user.id);
+    expect(again?.v).toBe(2);
+    expect(again?.profile.experience.some((x) => !!x.description)).toBe(true);
+    expect((await aboutMe(user)).jobs.some((j) => !!j.description)).toBe(true);
+    expect(await readOwnProfile(user, { now: soon })).toBe('fresh');
+  });
+
   it('knows every school (the high school too), the jobs, skills and the rest', async () => {
     const me = await aboutMe(user);
     expect(schoolsOf(me, 'high_school')).toEqual(['Lincoln High School']);

@@ -6,6 +6,7 @@ import { rememberResolution } from '../../engine/companyRef';
 import { MODEL, makeWrap } from '../../integrations/anthropic';
 import { refreshPrefs } from '../../integrations/prefs';
 import { parsePick, resolutionOf, routedText } from '../clarify';
+import { offeredTools } from '../offered';
 import type {
   ChatAction,
   ChatConversation,
@@ -205,7 +206,12 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     ]);
     let ctx = first;
     const route = (t: string, thread?: Awaited<ReturnType<typeof threadContextFor>>) =>
-      routeUtterance(t, { registry: deps.registry, ...ctx, firstName: user.firstName, thread });
+      routeUtterance(t, {
+        registry: offeredTools(deps.registry, user.id),
+        ...ctx,
+        firstName: user.firstName,
+        thread,
+      });
     // a pick from a question back finishes the ask it interrupted; the tools read the pick from the conversation
     const intent = route(routedText(text), thread);
     if (intent.kind !== 'tool') return sayText(conversation, intent, onEvent);
@@ -306,7 +312,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         store.messages(conversation.id),
       ]);
       const intent = routeUtterance(routedText(text), {
-        registry: deps.registry,
+        registry: offeredTools(deps.registry, user.id),
         ...ctx,
         firstName: user.firstName,
         thread,

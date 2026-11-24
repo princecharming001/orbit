@@ -21,6 +21,11 @@ export interface LinkedInPosition {
   current: boolean;
   start?: string;
   end?: string;
+  /**
+   * What they did in the job, in their own words, when LinkedIn gives it (plan 44 §3): the lines the Roles profile
+   * quotes for "shown in work". Kept as the proxy sends it; older reads have none.
+   */
+  description?: string;
 }
 
 export interface LinkedInSchool {

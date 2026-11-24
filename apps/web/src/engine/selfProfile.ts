@@ -34,7 +34,15 @@ export const SELF_SECTIONS = [
 export interface SelfProfile {
   readAt: string;
   profile: LinkedInProfile;
+  /** how this read was kept; a read from before SELF_VERSION is read once more (it dropped each job's description) */
+  v?: number;
 }
+
+/**
+ * 2: each job's description is kept (plan 44 §3). A profile read before it is read once more, so the Roles profile
+ * has the student's own words for what they did; a profile with no descriptions on LinkedIn simply has none.
+ */
+export const SELF_VERSION = 2;
 
 export type SchoolLevel = 'high_school' | 'college' | 'graduate' | 'other';
 
@@ -88,6 +96,7 @@ function demoSelf(
         current: false,
         start: `${grad - 2}-06`,
         end: `${grad - 2}-08`,
+        description: 'Built a reconciliation service for card transactions in Go.',
       },
       {
         title: 'Teaching Assistant, CS 2110',
@@ -133,7 +142,13 @@ export async function readOwnProfile(
 ): Promise<'read' | 'fresh' | 'off' | 'failed'> {
   const now = opts.now ?? new Date();
   const kept = await ownProfile(user.id);
-  if (!opts.force && kept && now.getTime() - Date.parse(kept.readAt) < SELF_FRESH_MS) return 'fresh';
+  if (
+    !opts.force &&
+    kept &&
+    (kept.v ?? 1) >= SELF_VERSION &&
+    now.getTime() - Date.parse(kept.readAt) < SELF_FRESH_MS
+  )
+    return 'fresh';
   const tried = (await db.kv.get(TRIED(user.id)))?.value as string | undefined;
   if (!opts.force && tried && now.getTime() - Date.parse(tried) < RETRY_MS) return 'failed';
   // the demo student has a sample profile whether or not the demo's LinkedIn is connected
@@ -153,7 +168,10 @@ export async function readOwnProfile(
     await db.kv.put({ key: TRIED(user.id), value: now.toISOString() });
     return 'failed';
   }
-  await db.kv.put({ key: KEY(user.id), value: { readAt: now.toISOString(), profile } satisfies SelfProfile });
+  await db.kv.put({
+    key: KEY(user.id),
+    value: { readAt: now.toISOString(), profile, v: SELF_VERSION } satisfies SelfProfile,
+  });
   return 'read';
 }
 
@@ -169,7 +187,15 @@ export interface AboutMe {
     start?: string;
     end?: string;
   }[];
-  jobs: { title?: string; company?: string; current: boolean; start?: string; end?: string }[];
+  jobs: {
+    title?: string;
+    company?: string;
+    current: boolean;
+    start?: string;
+    end?: string;
+    /** what they did there, when LinkedIn gives it */
+    description?: string;
+  }[];
   skills: string[];
   languages: string[];
   certifications: string[];
@@ -216,6 +242,7 @@ export async function aboutMe(
       current: x.current,
       start: x.start,
       end: x.end,
+      ...(x.description ? { description: x.description } : {}),
     })),
     skills: p?.skills ?? [],
     languages: (p?.languages ?? []).map((l) => (l.proficiency ? `${l.name} (${l.proficiency})` : l.name)),

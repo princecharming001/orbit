@@ -13,6 +13,8 @@ const PANEL_ROUTES: RegExp[] = [
   /^\/companies\/[^/]+$/,
   /^\/map$/,
   /^\/discover$/,
+  // plan 44: Roles, and one role opened on it (?role=)
+  /^\/roles$/,
   /^\/inbox$/,
   /^\/drafts$/,
   /^\/notes\/new$/,
@@ -94,6 +96,7 @@ const STATIC_TITLES: Record<string, string> = {
   '/people': 'People',
   '/map': 'Map',
   '/discover': 'Discover',
+  '/roles': 'Roles',
   '/inbox': 'Drafts',
   '/drafts': 'Drafts',
   '/notes/new': 'Add a note',

@@ -24,6 +24,7 @@ import {
   People,
   PersonPage,
   RemoveMePage,
+  RolesPage,
   SendManyPage,
   SettingsPage,
 } from './pages/lazyPages';
@@ -111,6 +112,8 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
                     <Route path="/companies/:id" element={<CompanyPage />} />
                     <Route path="/map" element={<MapPage />} />
                     <Route path="/discover" element={<Discover />} />
+                    {/* plan 44: roles that fit, behind the owner's feature switch (the page says so when it is off) */}
+                    <Route path="/roles" element={<RolesPage />} />
                     {/* plan 29 Part A: friends pool their networks; a join link lands here with its code */}
                     <Route path="/friends" element={<FriendsPage />} />
                     <Route path="/friends/join/:code" element={<FriendsPage />} />

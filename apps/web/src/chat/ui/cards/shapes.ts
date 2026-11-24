@@ -13,6 +13,8 @@ import type {
   OutboundMessage,
   Person,
   PersonFact,
+  RoleMatch,
+  RolesCoverage,
   Suggestion,
 } from '@orbit/core';
 import type { PeopleSearchResult } from '../../../engine/peopleSearch';
@@ -690,6 +692,31 @@ function readListPerson(x: unknown): ListPerson | undefined {
       const src = str(o.photo);
       return src && /^https:\/\//.test(src) ? src : undefined;
     })(),
+  };
+}
+
+/**
+ * Roles that fit (plan 44, find_roles): the ask, the matches as the server scored them and what was searched, kept
+ * with the message so the card draws the same table after a reload. A row without a job or an id is left out.
+ */
+export function readRoles(
+  d: unknown,
+): { query: string; matches: RoleMatch[]; coverage?: RolesCoverage; stretch: boolean } | undefined {
+  const o = obj(unpack(d));
+  const matches = arr(o.matches).filter((m): m is RoleMatch => {
+    const x = obj(m);
+    const j = obj(x.job);
+    return typeof x.id === 'string' && typeof j.title === 'string' && typeof j.companyName === 'string';
+  });
+  if (!Array.isArray(o.matches)) return undefined;
+  return {
+    query: str(o.query) ?? 'Roles that fit you',
+    matches: matches.map((m) => ({
+      ...m,
+      job: { ...m.job, places: Array.isArray(m.job.places) ? m.job.places : [] },
+    })),
+    coverage: o.coverage ? (obj(o.coverage) as unknown as RolesCoverage) : undefined,
+    stretch: o.stretch === true,
   };
 }
 

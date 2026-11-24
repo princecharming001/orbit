@@ -27,6 +27,7 @@ import type {
   RecruitingGoals,
   Resume,
   ResumeFacet,
+  RoleMatch,
   StageEvent,
   StoredFile,
   Suggestion,
@@ -348,6 +349,20 @@ export interface SocialLookupRow {
  * accounts say. An account's server keeps these as ties, which arrive as edges; the demo's are read into the graph
  * only while the source is in use.
  */
+/**
+ * Plan 44: one role matched to the student, as the server last answered it, kept in this browser so a reload, an
+ * offline visit and a chat card opened later show the last matches. `id` is `<userId>:<match id>`.
+ */
+export interface RoleMatchRow {
+  id: string;
+  userId: string;
+  match: RoleMatch;
+  /** when this copy was written */
+  keptAt: string;
+  /** the search it came from ('pasted' for a posting the student scored); the table lists the current search's */
+  searchId?: string;
+}
+
 export interface SocialTieRow {
   id: string;
   userId: string;
@@ -502,6 +517,7 @@ export class OrbitDB extends Dexie {
   socialAsks!: EntityTable<SocialAskRow, 'id'>;
   socialLookups!: EntityTable<SocialLookupRow, 'id'>;
   socialTies!: EntityTable<SocialTieRow, 'id'>;
+  roleMatches!: EntityTable<RoleMatchRow, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -684,6 +700,11 @@ export class OrbitDB extends Dexie {
       socialAsks: 'id, userId, personId, status',
       socialLookups: 'id, userId, targetPersonId',
       socialTies: 'id, userId, aId, bId',
+    });
+    // plan 44: the student's last role matches, for a reload, an offline visit and a chat card; the profile and the
+    // search's place are kept in kv (roles:profile:<userId>, roles:search:<userId>)
+    this.version(20).stores({
+      roleMatches: 'id, userId',
     });
   }
 }

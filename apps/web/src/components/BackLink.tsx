@@ -28,6 +28,7 @@ export function backLabel(path: string): string {
   if (p.startsWith('/map')) return 'Back to map';
   if (p.startsWith('/people')) return 'Back to People';
   if (p.startsWith('/discover')) return 'Back to Discover';
+  if (p.startsWith('/roles')) return 'Back to Roles';
   if (p.startsWith('/inbox')) return 'Back to Drafts';
   if (p.startsWith('/companies')) return 'Back to the company';
   if (p.startsWith('/settings')) return 'Back to Settings';

@@ -40,4 +40,12 @@ export const KNOWN: Known[] = [
     id: `cap:${c}:`,
     why: 'plan 43 optional sources: the no-key router has no words for them; the model routes them',
   })),
+  // plan 44: Roles exists only while the owner's switch has it on, and never for a local copy with no Orbit account
+  // (the sample student here): there is no tool to route to, by design. The demo routes these (offline-demo), and
+  // the tool and card are covered in Roles.test.tsx, roles.test.ts and e2e/roles.spec.ts.
+  {
+    id: 'cap:roles_find:',
+    why: 'plan 44: Roles is off for a local copy with no account (the feature switch); the demo routes it',
+    match: 'not understood',
+  },
 ];

@@ -41,6 +41,7 @@ import { resolutionsFor, resolveCompanyRef } from '../../engine/companyRef';
 import { conversationWith } from '../../engine/conversation';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
+import { featureOn } from '../../engine/features';
 import { friendRouteOf, friendRoutes } from '../../engine/friends';
 import { isGivenName } from '../../engine/given-names';
 import {
@@ -2066,6 +2067,8 @@ const PAGES = {
   map: '/map',
   reach: '/map?reach=1',
   discover: '/discover',
+  // plan 44: roles that fit (only while Roles is on for the student)
+  roles: '/roles',
   drafts: '/inbox',
   add_note: '/notes/new',
   settings: '/settings',
@@ -2115,7 +2118,7 @@ export const openPage = defineTool({
   name: 'open_page',
   kind: 'read',
   description:
-    'Call this when the student wants to change, add, connect or find a setting (pass `setting`), or asks to go to, open or show a page of the app (People with its board, list and companies views, a person, a company, the Map, reach mode, Discover, Drafts, Add note, a Settings section, the landing page), or to change a view the page itself holds (a People view, a Map filter). Returns the in-app link the UI offers as "Open in app"; nothing else changes.',
+    'Call this when the student wants to change, add, connect or find a setting (pass `setting`), or asks to go to, open or show a page of the app (People with its board, list and companies views, a person, a company, the Map, reach mode, Discover, Roles, Drafts, Add note, a Settings section, the landing page), or to change a view the page itself holds (a People view, a Map filter). Returns the in-app link the UI offers as "Open in app"; nothing else changes.',
   input: z.object({
     page: z.enum(Object.keys(PAGES) as [keyof typeof PAGES, ...(keyof typeof PAGES)[]]).describe('The page.'),
     id: z.string().optional().describe('The person or organization id for a person or company page.'),
@@ -2182,6 +2185,9 @@ export const openPage = defineTool({
         href,
       );
     }
+    // plan 44: Roles is a page only while it is on for the student
+    if (input.page === 'roles' && !featureOn('roles', ctx.user.id))
+      throw new Error('Roles is not on for you yet. Orbit turns it on for everyone at once.');
     let href: string = PAGES[input.page];
     if (input.page === 'person')
       href = `/people/${input.id ?? input.personId ?? ''}${input.tab ? `?tab=${input.tab}` : ''}`;

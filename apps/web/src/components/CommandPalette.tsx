@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
+import { featureOn } from '../engine/features';
 import { rankPeople } from '../engine/search';
 import { useSession } from '../state/session';
 import { Avatar, cx, Modal } from '../ui';
@@ -33,6 +34,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { kind: 'action', id: 'map', label: 'Open the map', to: '/map' },
       { kind: 'action', id: 'reach', label: 'Find someone who can introduce you', to: '/map?reach=1' },
       { kind: 'action', id: 'discover', label: 'Discover people to meet', to: '/discover' },
+      // plan 44: only while Roles is on for the student
+      ...(featureOn('roles', userId)
+        ? [{ kind: 'action', id: 'roles', label: 'Roles that fit you', to: '/roles' }]
+        : []),
       { kind: 'action', id: 'settings', label: 'Settings', to: '/settings' },
     ].filter((a) => !s || a.label.toLowerCase().includes(s));
     // a name that starts with what was typed ranks first ("Lena" finds Lena Novak before Elena Cohen), then a word
@@ -49,7 +54,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       })),
       ...actions.map((a) => ({ ...a, kind: 'action' as const, sub: undefined, person: undefined })),
     ];
-  }, [q, people]);
+  }, [q, people, userId]);
   useEffect(() => {
     if (open) {
       setQ('');

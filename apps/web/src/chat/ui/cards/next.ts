@@ -312,3 +312,18 @@ export function afterStage(name: string, stage?: string, personId?: string): Nex
       return undefined;
   }
 }
+
+/** Plan 44: roles that fit, in the words the router sends to find_roles. */
+export const findRoles: NextStep = { label: 'Roles that fit me', message: 'What roles fit me?' };
+
+/** Plan 44: the way in for one role, the plan for its posting (the router's "plan my way into" phrase). */
+export const wayIntoRole = (title: string, company: string): NextStep => ({
+  label: `Find a way into ${company}`,
+  message: `Plan my way into the ${title} role at ${company}`,
+});
+
+/** Plan 44: the internships among the roles that fit. */
+export const findInternships: NextStep = {
+  label: 'Internships to apply to',
+  message: 'Internships I should apply to',
+};

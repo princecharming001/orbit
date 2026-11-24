@@ -20,6 +20,7 @@ import { noteTools } from './tools/notes';
 import { peopleTools } from './tools/people';
 import { pipelineTools } from './tools/pipeline';
 import { readTools } from './tools/read';
+import { roleTools } from './tools/roles';
 import { searchTools } from './tools/search';
 import { settingsTools } from './tools/settings';
 import { todayTools } from './tools/today';
@@ -45,6 +46,7 @@ const all: AnyTool[] = [
   ...autopilotTools,
   ...voiceTools,
   ...searchTools,
+  ...roleTools,
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 for (let i = 1; i < all.length; i++)

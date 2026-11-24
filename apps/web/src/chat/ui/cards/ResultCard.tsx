@@ -58,6 +58,7 @@ import {
   KnownPeopleCard,
 } from './PeopleCards';
 import { PeopleTableCard, readTable } from './PeopleTable';
+import { PlanFit } from './PlanFit';
 import {
   CardHead,
   DraftOwnersContext,
@@ -73,6 +74,7 @@ import {
   TurnPersonCardsContext,
   useFold,
 } from './parts';
+import { RolesCard } from './RolesCard';
 import { SetupCard } from './Setup';
 import {
   type PersonView,
@@ -229,6 +231,8 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return <PrepCard env={env} />;
     case 'plan':
       return <PlanResult env={env} />;
+    case 'roles':
+      return <RolesCard env={env} send={actions.send} />;
     case 'messages':
       return readMessages(d) ? <MessagesCard env={env} send={actions.send} /> : <Summary env={env} />;
     case 'list':
@@ -267,7 +271,13 @@ function PlanResult({ env }: { env: ResultEnvelope }) {
   const id = (env.data as { ui?: { planId?: string } } | undefined)?.ui?.planId;
   const plan = useLiveQuery(() => (id ? db.targetPlans.get(id) : undefined), [id]);
   if (!plan) return <Summary env={env} />;
-  return <TargetPlanCard plan={plan} />;
+  // plan 44: how well the student fits the posting, while Roles is on
+  return (
+    <div>
+      <PlanFit url={plan.posting.url} />
+      <TargetPlanCard plan={plan} />
+    </div>
+  );
 }
 
 /** The envelope's own words, when the data is not something the UI can draw. */

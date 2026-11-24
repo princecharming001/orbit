@@ -98,6 +98,18 @@ import type {
   ResearchGetResponse,
   ResearchPersonRequest,
   ResearchPersonResponse,
+  RolesActRequest,
+  RolesActResponse,
+  RolesListRequest,
+  RolesListResponse,
+  RolesMoreRequest,
+  RolesMoreResponse,
+  RolesProfileRequest,
+  RolesProfileResponse,
+  RolesScoreRequest,
+  RolesScoreResponse,
+  RolesSearchRequest,
+  RolesSearchResponse,
   ScoreExplainRequest,
   ScoreExplainResponse,
   ScoreLabelRequest,
@@ -152,6 +164,11 @@ export interface AccountUser {
    * keeps it here. Missing reads as not the owner.
    */
   isOwner?: boolean;
+  /**
+   * Plan 44 §9.4: the features the owner switched on for every student (`features` beside `isOwner` on /auth/session
+   * and /auth/me), kept here. Missing reads as none.
+   */
+  features?: string[];
 }
 
 export interface SessionResponse {
@@ -161,6 +178,8 @@ export interface SessionResponse {
   user: AccountUser;
   /** plan 43: the owner's account (ORBIT_OWNER_ID) */
   isOwner?: boolean;
+  /** plan 44: the features that are on ("roles") */
+  features?: string[];
 }
 
 /** One integration as /sync/status reports it. */
@@ -338,7 +357,18 @@ export interface ApiRoutes {
   ];
   '/texts/days': [TextDaysRequest, { written: number; people?: Record<string, string> }];
   '/auth/logout': [{ refreshToken?: string }, { ok: boolean }];
-  '/auth/me': [Record<string, never>, { user: AccountUser; isOwner?: boolean }];
+  '/auth/me': [Record<string, never>, { user: AccountUser; isOwner?: boolean; features?: string[] }];
+  // plan 44: Roles. Every route posts; a search is read in steps (/roles/search, then /roles/more until done), each
+  // step well inside the client's 25 seconds (the server answers at once and reads 10 roles a call in the background)
+  '/roles/profile': [RolesProfileRequest, RolesProfileResponse];
+  '/roles/search': [RolesSearchRequest, RolesSearchResponse];
+  '/roles/more': [RolesMoreRequest, RolesMoreResponse];
+  '/roles/list': [RolesListRequest, RolesListResponse];
+  '/roles/score': [RolesScoreRequest, RolesScoreResponse];
+  '/roles/act': [RolesActRequest, RolesActResponse];
+  // plan 44 §9.4: the owner's switch for a feature (GET the list, PUT one); anyone else gets 404
+  '/admin/features': [Record<string, never>, AdminFeaturesResponse];
+  [route: `/admin/features/${string}`]: [{ offered: boolean }, { ok: true }];
   '/sync/status': [Record<string, never>, SyncStatus];
   '/sync/pull': [SyncPullRequest, SyncPullResponse];
   '/sync/push': [{ changes: PushChange[] }, { results: PushResult[] }];
@@ -517,6 +547,11 @@ export interface AdminSourcesResponse {
   }[];
 }
 
+/** GET /admin/features (plan 44 §9.4): each feature the owner can switch on for every student. */
+export interface AdminFeaturesResponse {
+  features: { feature: string; offered: boolean }[];
+}
+
 /** One `cost.digest` row the worker writes each morning (plan 34 E2), as /admin/costs returns it. */
 export interface CostDigestResponse {
   rows: { at: string; details: Record<string, unknown> }[];
@@ -624,10 +659,16 @@ export function methodOf(route: string): HttpMethod {
     route === '/meet/status' ||
     route === '/social/asks' ||
     route === '/admin/sources' ||
+    route === '/admin/features' ||
     /^\/social\/lookups\/[^/]+$/.test(route)
   )
     return 'GET';
-  if (route.startsWith('/sources/') || route.startsWith('/admin/sources/')) return 'PUT';
+  if (
+    route.startsWith('/sources/') ||
+    route.startsWith('/admin/sources/') ||
+    route.startsWith('/admin/features/')
+  )
+    return 'PUT';
   if (/^\/social\/links\/[^/]+$/.test(route)) return 'DELETE';
   return 'POST';
 }
@@ -1003,7 +1044,11 @@ export async function completeSignIn(hash: string): Promise<SignInOutcome> {
     const e = r.reason === 'unconfigured' ? 'unconfigured' : r.status === 401 ? 'expired' : 'sign_in_failed';
     return { ok: false, error: e, message: signInErrorText(e) };
   }
-  const user = { ...r.value.user, isOwner: r.value.isOwner === true };
+  const user = {
+    ...r.value.user,
+    isOwner: r.value.isOwner === true,
+    features: featureList(r.value.features ?? r.value.user.features),
+  };
   await adopt(r.value, user);
   return { ok: true, user };
 }
@@ -1017,8 +1062,9 @@ export async function refreshOwner(): Promise<boolean> {
   const r = await callApi('/auth/me', {});
   if (!r.ok || !account) return account?.isOwner === true;
   const isOwner = r.value.isOwner === true;
-  if (account.isOwner !== isOwner) {
-    account = { ...account, isOwner };
+  const features = featureList(r.value.features ?? r.value.user?.features);
+  if (account.isOwner !== isOwner || (account.features ?? []).join() !== features.join()) {
+    account = { ...account, isOwner, features };
     if (tokens.refreshToken)
       await writeLocalRow(SESSION_ROW, {
         refreshToken: tokens.refreshToken,
@@ -1028,6 +1074,14 @@ export async function refreshOwner(): Promise<boolean> {
   }
   return isOwner;
 }
+
+/** The feature names the server sent, as a clean list (an older server sends none). */
+function featureList(x: unknown): string[] {
+  return Array.isArray(x) ? [...new Set(x.filter((f): f is string => typeof f === 'string'))].sort() : [];
+}
+
+/** Plan 44: ask the server what this account is (owner, features on) once more; the same call as refreshOwner. */
+export const refreshAccount = refreshOwner;
 
 /** Sign out: the server revokes this session, then this browser forgets it. Local data stays. */
 export async function signOutAccount(): Promise<void> {

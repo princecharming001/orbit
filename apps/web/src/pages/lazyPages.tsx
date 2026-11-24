@@ -21,6 +21,7 @@ const load = {
   FriendsPage: () => import('./Friends').then((m) => ({ default: m.FriendsPage })),
   NotesNew: () => import('./NotesNew').then((m) => ({ default: m.NotesNew })),
   SendManyPage: () => import('./SendMany').then((m) => ({ default: m.SendManyPage })),
+  RolesPage: () => import('./Roles').then((m) => ({ default: m.RolesPage })),
 };
 export const Landing = lazy(load.Landing);
 export const LogInPage = lazy(load.LogInPage);
@@ -37,6 +38,7 @@ export const CompanyPage = lazy(load.CompanyPage);
 export const FriendsPage = lazy(load.FriendsPage);
 export const SendManyPage = lazy(load.SendManyPage);
 export const NotesNew = lazy(load.NotesNew);
+export const RolesPage = lazy(load.RolesPage);
 
 let preloaded = false;
 /**
@@ -57,6 +59,7 @@ export function preloadPages(): void {
     load.FriendsPage,
     load.MapPage,
     load.NotesNew,
+    load.RolesPage,
   ];
   const next = () => {
     const page = pages.shift();

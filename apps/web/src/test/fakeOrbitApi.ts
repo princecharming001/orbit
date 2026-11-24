@@ -34,6 +34,7 @@ import type {
   WarmPath,
 } from '@orbit/core';
 import { readiness } from '@orbit/core';
+import { createRolesSim, type RolesSim } from '../engine/rolesSim';
 import type { AccountUser, TextDaysRequest } from '../integrations/orbitApi';
 
 /** /zoom/notes and /meet/notes: the notes kept for the events asked about, the rest none. */
@@ -195,6 +196,19 @@ export interface FakeState {
   };
   /** plan 43: the signed-in account is the owner's (isOwner beside the user on /auth/session and /auth/me) */
   isOwner: boolean;
+  /**
+   * plan 44 §9.4: the features the owner switched on, sent beside the user on /auth/session and /auth/me; the owner's
+   * Launch row (GET /admin/features, PUT /admin/features/:feature) changes it
+   */
+  features: string[];
+  /**
+   * plan 44: the Roles routes, answered from the sample roles the demo uses (engine/rolesSim): a profile read from the
+   * lines sent, a search read 10 at a time, Saved, Watch and a pasted posting scored now. Tests switch the model off
+   * (`roles.setModelOff`) or take a posting down (`roles.close`).
+   */
+  roles: RolesSim;
+  /** every /roles/* call, with its body, in order */
+  roleCalls: { route: string; body: Record<string, unknown> }[];
   /** plan 43: the owner's Launch list (GET /admin/sources); `offered` follows `sources.offered` */
   admin: {
     source: OptionalSource;
@@ -464,6 +478,9 @@ export function createFakeOrbitApi(
     voice: { cardProse: [], notes: [], soundsLikeYou: null, relearnedAt: null, relearnRequests: 0 },
     sources: { offered: [], states: {}, shareFollows: {} },
     isOwner: false,
+    features: [],
+    roles: createRolesSim({ now: () => new Date(clock) }),
+    roleCalls: [],
     admin: [
       { source: 'instagram', env: false, missing: [], students: { on: 0, connected: 0 } },
       {
@@ -548,7 +565,7 @@ export function createFakeOrbitApi(
     if (route === '/auth/session') {
       if (body.code !== code)
         return error(401, 'unauthorized', 'that sign-in link has expired; sign in again');
-      return json(200, { ...issue(), user: state.user, isOwner: state.isOwner });
+      return json(200, { ...issue(), user: state.user, isOwner: state.isOwner, features: state.features });
     }
     if (route === '/auth/refresh') {
       if (!state.refresh || body.refreshToken !== state.refresh)
@@ -645,6 +662,27 @@ export function createFakeOrbitApi(
         ]),
       );
       return json(200, { offered: state.sources.offered, states });
+    }
+    // plan 44 §9.4: the owner's switch for a feature; anyone else is refused
+    const adminFeature = route.match(/^\/admin\/features\/([^/]+)$/);
+    if (route === '/admin/features' || adminFeature) {
+      if (!state.isOwner) return error(403, 'forbidden', 'Only the owner of this Orbit can do this.');
+      if (route === '/admin/features')
+        return json(200, { features: [{ feature: 'roles', offered: state.features.includes('roles') }] });
+      if (req.method !== 'PUT') return error(405, 'method_not_allowed', 'use PUT');
+      const name = decodeURIComponent(adminFeature![1]!);
+      if (name !== 'roles') return error(404, 'not_found', 'no such feature');
+      state.features = body.offered
+        ? [...new Set([...state.features, name])]
+        : state.features.filter((f) => f !== name);
+      return json(200, { ok: true });
+    }
+    // plan 44: Roles, only while the owner offers it
+    if (route.startsWith('/roles/')) {
+      state.roleCalls.push({ route, body });
+      if (!state.features.includes('roles')) return error(404, 'not_found', 'Roles is not offered.');
+      const r = await state.roles.handle(route, body);
+      return r.ok ? json(200, r.value) : error(r.status, r.code, r.message);
     }
     // plan 43: the owner's Launch section; anyone else is refused
     const adminSource = route.match(/^\/admin\/sources\/([^/]+)$/);
@@ -1266,7 +1304,7 @@ export function createFakeOrbitApi(
         state.refresh = undefined;
         return json(200, { ok: true });
       case '/auth/me':
-        return json(200, { user: state.user, isOwner: state.isOwner });
+        return json(200, { user: state.user, isOwner: state.isOwner, features: state.features });
       case '/sync/status':
         return json(200, {
           counts: state.status.counts,

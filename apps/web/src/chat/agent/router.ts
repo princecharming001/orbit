@@ -431,6 +431,38 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
         .trim();
       if (what) return viaTool('plan_for_posting', { text: what }, undefined, 'plan for a posting');
     }
+    // plan 44: roles that fit the student ("What roles fit me?", "internships I should apply to", "roles at Stripe"),
+    // only while Roles is on for them (the registry the router gets leaves find_roles out otherwise)
+    if (has('find_roles') && !linkIn(raw)) {
+      const at =
+        /^(?:show me |find (?:me )?|any |list )?(?:the )?(?:open )?(?:roles?|jobs?|internships?|openings?|positions?)\s+(?:at|with)\s+(.+?)[?.]*$/i.exec(
+          raw.trim(),
+        );
+      const fits =
+        /\b(what|which)\s+(jobs?|roles?|internships?|positions?)\s+(would\s+|do\s+|might\s+)?(fit|suit|match)/i.test(
+          lower,
+        ) ||
+        /\b(jobs?|roles?|internships?|positions?)\s+(that\s+)?(fit|suit|match)\s+(me|my)\b/i.test(lower) ||
+        /\b(jobs?|roles?|internships?)\s+(should\s+i|i\s+should)\s+apply\b/i.test(lower) ||
+        /\b(find|show)\s+(me\s+)?(new grad roles|internships|roles|jobs)\s+(for me|that fit)\b/i.test(lower);
+      if (at || fits) {
+        const level = /\bintern/i.test(lower)
+          ? 'internship'
+          : /\bnew grad|entry[- ]level/i.test(lower)
+            ? 'new_grad'
+            : undefined;
+        return viaTool(
+          'find_roles',
+          {
+            query: raw.trim().slice(0, 200),
+            ...(at ? { company: at[1]!.trim().slice(0, 120) } : {}),
+            ...(level ? { level } : {}),
+          },
+          undefined,
+          'find roles that fit you',
+        );
+      }
+    }
     // plan 23 §4.9: what Orbit sends on its own lives in Settings, Limits
     if (
       (/\b(bumps?|thank-?yous?|scheduling repl(?:y|ies))\b/i.test(lower) &&
