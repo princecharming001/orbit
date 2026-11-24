@@ -15,7 +15,7 @@
  *   - a failed call leaves the rows as they were (likely stays likely), and the card says not everyone was checked.
  */
 import type { FactsIndex, JudgedAnswer, PersonDoc, Row } from '@orbit/core/search';
-import { hashString, matchFacts } from '@orbit/core/search';
+import { hashString, matchFacts, verifyQuote } from '@orbit/core/search';
 import { db } from '../../db/schema';
 import { claudeReachable, llmSearchJudge, type Wrap } from '../../integrations/anthropic';
 import { z } from '../../zod';
@@ -118,15 +118,8 @@ export function personText(d: PersonDoc, facts?: FactsIndex): string {
   return lines.join('\n');
 }
 
-const fold = (s: string) =>
-  s.toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
-
-/** A quote counts only when it is in the text (ignoring case, curly quotes and spacing) and says something. */
-export function verifyQuote(text: string, quote: string | null | undefined): string | undefined {
-  const q = (quote ?? '').trim().replace(/^["']|["']$/g, '');
-  if (q.replace(/\W/g, '').length < 3) return undefined;
-  return fold(text).includes(fold(q)) ? q : undefined;
-}
+/** The evidence rule lives in core (plan 44 §6.1), shared with the server's role scoring. */
+export { verifyQuote };
 
 /** A model answer after the quote rule. */
 export function settle(answer: JudgedAnswer['answer'], quote: string | undefined): JudgedAnswer {
