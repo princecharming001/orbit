@@ -653,6 +653,22 @@ export async function mergePeople(
           and ((person_a = $2::uuid and person_b = $3::uuid) or (person_a = $3::uuid and person_b = $2::uuid))`,
       p,
     );
+    // A question that was open about the record folded away is now a question about the one it became: it moves
+    // over, unless the same question is already open there. (It used to be deleted, so "is this address the same
+    // person?" was dropped unanswered whenever its LinkedIn record turned out to be a double.)
+    await tx.query(
+      `update orbit.merge_suggestions m
+          set person_a = case when m.person_a = $2::uuid then $3::uuid else m.person_a end,
+              person_b = case when m.person_b = $2::uuid then $3::uuid else m.person_b end
+        where m.user_id = $1::uuid and m.status = 'open'
+          and (m.person_a = $2::uuid or m.person_b = $2::uuid)
+          and not exists (
+            select 1 from orbit.merge_suggestions o
+             where o.user_id = m.user_id and o.status = 'open' and o.id <> m.id
+               and $3::uuid in (o.person_a, o.person_b)
+               and (case when m.person_a = $2::uuid then m.person_b else m.person_a end) in (o.person_a, o.person_b))`,
+      p.slice(0, 3),
+    );
     await tx.query(
       `delete from orbit.merge_suggestions where user_id = $1::uuid and status = 'open'
           and (person_a = $2::uuid or person_b = $2::uuid)`,

@@ -38925,6 +38925,19 @@ async function mergePeople(db2, userId, survivor, loser, o = {}) {
       p
     );
     await tx.query(
+      `update orbit.merge_suggestions m
+          set person_a = case when m.person_a = $2::uuid then $3::uuid else m.person_a end,
+              person_b = case when m.person_b = $2::uuid then $3::uuid else m.person_b end
+        where m.user_id = $1::uuid and m.status = 'open'
+          and (m.person_a = $2::uuid or m.person_b = $2::uuid)
+          and not exists (
+            select 1 from orbit.merge_suggestions o
+             where o.user_id = m.user_id and o.status = 'open' and o.id <> m.id
+               and $3::uuid in (o.person_a, o.person_b)
+               and (case when m.person_a = $2::uuid then m.person_b else m.person_a end) in (o.person_a, o.person_b))`,
+      p.slice(0, 3)
+    );
+    await tx.query(
       `delete from orbit.merge_suggestions where user_id = $1::uuid and status = 'open'
           and (person_a = $2::uuid or person_b = $2::uuid)`,
       p.slice(0, 2)
