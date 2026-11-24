@@ -97,14 +97,35 @@ export type AddOutcome =
   | { ok: true; people: { id: string; displayName: string; chatId: string }[] }
   | { ok: false; message: string };
 
+const PULL_WAITS_MS = [0, 1500, 2500, 4000];
+
+/** Pulls until every one of these people is in the browser's own copy, a few tries, then gives up quietly. */
+export async function pullUntilHere(
+  userId: string,
+  personIds: string[],
+  waits: number[] = PULL_WAITS_MS,
+): Promise<boolean> {
+  for (const wait of waits) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    await pullNow(userId).catch(() => undefined);
+    const here = await db.people.bulkGet(personIds);
+    if (here.every(Boolean)) return true;
+  }
+  return false;
+}
+
 /** Add sourced candidates the student picked: each becomes a person with a chat at "to contact". No research starts. */
 export async function addSourced(user: Pick<User, 'id'>, recommendationIds: string[]): Promise<AddOutcome> {
   if (!isServerUser(user.id)) return notHere();
   if (!recommendationIds.length) return { ok: false, message: 'Pick someone to add first.' };
   const r = await callApi('/source/add', { recommendationIds });
   if (!r.ok) return { ok: false, message: r.message };
-  // the new people and their chats come down with the next pull; do it now so their pages open
-  await pullNow(user.id).catch(() => undefined);
+  // The new people and their chats come down with a pull, and a pull leaves out rows written in the last couple of
+  // seconds (they may still be mid-transaction). So pull until they are here: "Added, open" must open a page.
+  await pullUntilHere(
+    user.id,
+    r.value.people.map((p) => p.id),
+  );
   return { ok: true, people: r.value.people };
 }
 

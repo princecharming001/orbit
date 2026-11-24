@@ -545,6 +545,12 @@ export async function runTurn(
 ): Promise<void> {
   const { store, conversation, user, registry } = deps;
   const clock = deps.now ?? (() => new Date());
+  // the student's own words this turn: a tool that reads an ask (find_people) checks the model's restating against them
+  const typed = userBlocks
+    .flatMap((b) => (b.type === 'text' ? [b.text] : []))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   const nonce = conversationNonce(conversation.id);
   const { wrap } = makeWrap(nonce);
 
@@ -704,6 +710,7 @@ export async function runTurn(
             toolUseId,
             signal,
             caller: 'llm',
+            ...(typed ? { said: typed } : {}),
           });
           if (once.used()) markUntrusted(env);
         } catch (e) {

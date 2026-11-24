@@ -122,6 +122,8 @@ export interface ToolContext {
   caller: 'llm' | 'router' | 'ui';
   /** a button on a card the student tapped (plan 37 §4): their own clear choice, like their typed words */
   tapped?: boolean;
+  /** the student's own latest message, as they typed it: what they asked for, before the model restated it */
+  said?: string;
 }
 
 /**

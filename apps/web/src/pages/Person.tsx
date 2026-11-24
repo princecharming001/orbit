@@ -66,6 +66,7 @@ import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
 import { lastTouch } from '../engine/search';
 import { useSources } from '../engine/sources';
+import { pullUntilHere } from '../engine/sourcing';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
@@ -150,7 +151,22 @@ export function PersonPage() {
   const nav = useNavigate();
   const toast = useToast();
   // null: looked it up and it is not there (merged, deleted, bad link); undefined: still loading.
-  const person = useLiveQuery(async () => (id ? ((await db.people.get(id)) ?? null) : null), [id]);
+  const found = useLiveQuery(async () => (id ? ((await db.people.get(id)) ?? null) : null), [id]);
+  // Someone just added on the server may not be in this browser yet: look once more before saying they are not here
+  const [looked, setLooked] = useState<string>();
+  useEffect(() => {
+    if (found !== null || !id || !user || looked === id) return;
+    if (!isServerUser(user.id)) {
+      setLooked(id);
+      return;
+    }
+    let live = true;
+    void pullUntilHere(user.id, [id]).finally(() => live && setLooked(id));
+    return () => {
+      live = false;
+    };
+  }, [found, id, user?.id, looked]);
+  const person = found === null && looked !== id ? undefined : found;
   const chats = useLiveQuery(() => (id ? db.chats.where('personId').equals(id).toArray() : []), [id]) ?? [];
   const tpsQ = useLiveQuery(() => (id ? db.touchpoints.where('personId').equals(id).toArray() : []), [id]);
   // a source that is off is hidden from the page too, its touches kept (plan 43 §3.2)

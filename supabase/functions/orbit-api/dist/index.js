@@ -89,6 +89,11 @@ async function featuresOffered(db2, envList3 = [], clock) {
   for (const f2 of await launchedFeatures(db2, clock)) if (!out.includes(f2)) out.push(f2);
   return out;
 }
+async function featuresShownTo(db2, envList3 = [], owner2 = false) {
+  const out = await featuresOffered(db2, envList3);
+  if (!owner2) return out;
+  return [...out, ...KNOWN_FEATURES.filter((f2) => !out.includes(f2))];
+}
 async function featureOffered(db2, feature, envList3 = []) {
   return (await featuresOffered(db2, envList3)).includes(feature);
 }
@@ -4018,7 +4023,7 @@ async function session(ctx) {
     expiresAt: t.expiresAt,
     user,
     isOwner: isOwner2({ env: ctx.env, userId }),
-    features: await featuresOffered(ctx.db, ctx.env.features ?? [])
+    features: await featuresShownTo(ctx.db, ctx.env.features ?? [], isOwner2({ env: ctx.env, userId }))
   });
 }
 async function refresh(ctx) {
@@ -4043,7 +4048,7 @@ async function me(ctx) {
   return json(200, {
     user,
     isOwner: isOwner2(ctx),
-    features: await featuresOffered(ctx.db, ctx.env.features ?? [])
+    features: await featuresShownTo(ctx.db, ctx.env.features ?? [], isOwner2(ctx))
   });
 }
 
