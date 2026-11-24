@@ -90,4 +90,5 @@ export * from './text/school';
 export * from './types';
 export * from './util/ids';
 export * from './util/strictSchema';
+export * from './warmup/auto';
 export * from './warmup/rules';

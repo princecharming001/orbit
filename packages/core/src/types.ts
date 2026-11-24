@@ -316,6 +316,12 @@ export interface UserSettings {
   meetingLink?: MeetingLinkChoice;
   warmUpEnabled: boolean;
   warmUpDays: number; // days of warm-up before cold LinkedIn outreach
+  /**
+   * "Run warm-ups for me": with an Orbit account and LinkedIn connected, Orbit does the warm-up steps from the
+   * student's LinkedIn after they approve the plan once. On unless turned off (false); off, the steps are reminders
+   * the student does by hand. Synced as users.settings.warmup_auto (stored only when off).
+   */
+  warmUpAuto?: boolean;
   anthropicApiKey?: string;
   googleClientId?: string;
   /** first-run hints the student closed; they never come back */
@@ -921,12 +927,32 @@ export interface WarmUpAction {
   doneAt?: string;
   skippedAt?: string;
   note?: string; // what the student engaged with (post topic / their comment), used as the warm-up hook in outreach
+  /** a step Orbit ran or could not run: what happened, in a few plain words ("The post is gone") */
+  autoNote?: string;
 }
 
 export interface WarmUpPlan {
   startedAt: string;
   readyAt: string; // earliest date outreach is suggested
   actions: WarmUpAction[];
+  /**
+   * Orbit runs this warm-up from the student's LinkedIn (warmup/auto.ts): the server run it mirrors and where that
+   * run stands. `stopped` hands the steps left back to the student. Unset: the student does every step by hand.
+   */
+  auto?: WarmUpAutoState;
+}
+
+export interface WarmUpAutoState {
+  runId: ID;
+  status: 'running' | 'done' | 'stopped';
+  /** why a run stopped before its last step (WarmUpStopReason in warmup/auto.ts) */
+  stopReason?: string;
+  finishedAt?: string;
+  /** the comment the student approved at Start, exactly as it is posted; null when they left it out */
+  comment?: string | null;
+  /** the post the like and the comment go on */
+  postUrl?: string;
+  postExcerpt?: string;
 }
 
 export interface MeetingNote {

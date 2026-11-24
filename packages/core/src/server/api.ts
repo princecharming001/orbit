@@ -681,6 +681,11 @@ export interface ProfileSettingsRequest {
    */
   hideMarketers?: boolean;
   /**
+   * "Run warm-ups for me": Orbit does the LinkedIn warm-up steps from the student's account after they approve the
+   * plan (users.settings.warmup_auto); on unless turned off, and turning it off stops the warm-ups under way
+   */
+  warmUpAuto?: boolean;
+  /**
    * the ladder's kinds the student handed to Orbit (plan 23 §4.9, plan 29 §B2.1): the whole list replaces
    * users.settings.auto_kinds, and the server cadence auto-approves drafts of those kinds
    */

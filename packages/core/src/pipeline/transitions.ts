@@ -20,7 +20,7 @@ export const STAGE_ORDER: ChatStage[] = [...ACTIVE_STAGES, ...CLOSED_STAGES];
 /** What each stage means, in one plain sentence (the Pipeline legend). */
 export const STAGE_HELP: Record<ChatStage, string> = {
   identified: 'Someone you plan to write to. Nothing sent yet.',
-  warming: 'Doing a few small LinkedIn steps first, so your name is familiar when you write.',
+  warming: 'A few small LinkedIn steps come first, so your name is familiar when you write.',
   outreach_sent: 'You sent the first message and are waiting for a reply.',
   replied: 'They wrote back.',
   scheduling: 'You are finding a time to talk.',

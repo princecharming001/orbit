@@ -162,24 +162,41 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
     // warm-up
     if (chat.stage === 'warming' && chat.warmUp) {
       const prog = warmUpProgress(chat.warmUp, now, inp.timezone);
+      // Orbit ran it (warmup/auto.ts): the words say so, and nothing is called skipped that the student never skipped
+      const byOrbit = chat.warmUp.auto?.status === 'done';
       if (prog.ready) {
         out.push({
           kind: 'new_outreach',
           personId: chat.personId,
           chatId: chat.id,
           dedupeKey: `new:${chat.personId}:${chat.id}`,
-          reasonText: prog.skippedAll
-            ? `You skipped the warm-up. Message ${person.firstName} without it?`
-            : prog.done < prog.total
-              ? `The warm-up days are over (${prog.done} of ${prog.total} steps done); ready to message ${person.firstName}`
-              : `Warm-up done; ready to message ${person.firstName}`,
-          signals: { warmUpDone: prog.done, warmUpSkipped: prog.skippedAll || undefined },
+          reasonText: byOrbit
+            ? prog.done === 0
+              ? `Orbit could not run the warm-up. Message ${person.firstName} without it?`
+              : prog.done < prog.total
+                ? `Orbit finished the warm-up (${prog.done} of ${prog.total} steps ran); ready to message ${person.firstName}`
+                : `Orbit finished the warm-up; ready to message ${person.firstName}`
+            : prog.skippedAll
+              ? `You skipped the warm-up. Message ${person.firstName} without it?`
+              : prog.done < prog.total
+                ? `The warm-up days are over (${prog.done} of ${prog.total} steps done); ready to message ${person.firstName}`
+                : `Warm-up done; ready to message ${person.firstName}`,
+          signals: {
+            warmUpDone: prog.done,
+            warmUpSkipped: prog.skippedAll || undefined,
+            warmUpByOrbit: byOrbit || undefined,
+          },
           payload: { channel: 'linkedin' },
           urgency: 0.6,
           goalRelevance: rel,
           confidence: 1,
         });
-      } else if (prog.nextAction && warmUpStepDue(prog.nextAction, now, inp.timezone)) {
+      } else if (
+        // a warm-up Orbit is running asks nothing of the student: no step card until it is done or handed back
+        chat.warmUp.auto?.status !== 'running' &&
+        prog.nextAction &&
+        warmUpStepDue(prog.nextAction, now, inp.timezone)
+      ) {
         // the next step waits for its own day (no card in between), so the warm-up is spread out as promised
         out.push({
           kind: 'warm_up_engage',
