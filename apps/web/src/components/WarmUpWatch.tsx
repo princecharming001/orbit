@@ -1,7 +1,8 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { tellWarmUpDone, tickDemoWarmUps, warmUpsToTell } from '../engine/warmupAuto';
+import { db } from '../db/schema';
+import { stopMovedWarmUps, tellWarmUpDone, tickDemoWarmUps, warmUpsToTell } from '../engine/warmupAuto';
 import { mirrorWarmUpRuns } from '../engine/warmupMirror';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { useSession } from '../state/session';
@@ -44,6 +45,22 @@ export function WarmUpWatch() {
       clearInterval(t);
     };
   }, [userId, ready, tz]);
+
+  // a card moved out of Warming up by hand while Orbit was running its warm-up: the run stops on the server too
+  const moved = useLiveQuery(
+    async () =>
+      userId && ready
+        ? db.chats
+            .where('userId')
+            .equals(userId)
+            .filter((c) => c.warmUp?.auto?.status === 'running' && (c.stage !== 'warming' || !!c.archivedAt))
+            .count()
+        : 0,
+    [userId, ready],
+  );
+  useEffect(() => {
+    if (userId && moved) void stopMovedWarmUps({ id: userId }).catch(() => undefined);
+  }, [moved, userId]);
 
   // the runs that are done and not said yet (a live query: it fires when a pull brings one)
   const done = useLiveQuery(async () => (userId && ready ? warmUpsToTell(userId) : []), [userId, ready]);

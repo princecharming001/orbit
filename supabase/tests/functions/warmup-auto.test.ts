@@ -394,7 +394,10 @@ describe('the preview', () => {
     // someone else's person is not found at all
     const other = await student();
     const theirs = await priya(other.userId);
-    expect((await k.call('/warmups/preview', u.token, { personId: theirs })).status).toBe(404);
+    expect((await k.call<Preview>('/warmups/preview', u.token, { personId: theirs })).body).toEqual({
+      ok: false,
+      reason: 'unknown_person',
+    });
     expect(k.unipile()).toEqual([]);
     expect(k.ai.requests).toEqual([]);
     // no Unipile key on this server
@@ -404,6 +407,26 @@ describe('the preview', () => {
         .reason,
     ).toBe('unconfigured');
     expect(bare.unipile()).toEqual([]);
+  });
+
+  it('makes at most 25 new plans a day for one student, and says to try later after that', async () => {
+    const k = setup();
+    const u = await student();
+    // the day's reads are counted where every LinkedIn call is counted, by the database's own day
+    await t.db
+      .sql`select public.orbit_linkedin_calls_add(${u.account}, 'posts', 'warmup', ${WARMUP_AUTO_CAPS.previewsPerDay - 1}::int, 0, 0)`;
+    const last = await k.call<Preview>('/warmups/preview', u.token, { personId: await priya(u.userId) });
+    expect(last.body.ok).toBe(true);
+    const calls = k.unipile().length;
+    const over = await k.call<Preview>('/warmups/preview', u.token, { personId: await priya(u.userId) });
+    expect(over.body).toEqual({ ok: false, reason: 'busy' });
+    expect(k.unipile()).toHaveLength(calls);
+    // another student is not held by it
+    const other = await student();
+    expect(
+      (await k.call<Preview>('/warmups/preview', other.token, { personId: await priya(other.userId) })).body
+        .ok,
+    ).toBe(true);
   });
 
   it('says so when LinkedIn cannot be read, or the account needs a new sign-in', async () => {
@@ -1264,6 +1287,19 @@ describe('what stops a warm-up', () => {
         insert into orbit.chats (user_id, person_id, stage) values (${userId}::uuid, ${personId}::uuid, 'replied')`,
     ],
     [
+      'the student moves the card back to To contact',
+      'cancelled',
+      ({ userId, personId }) => t.db.sql`
+        insert into orbit.chats (user_id, person_id, stage) values (${userId}::uuid, ${personId}::uuid, 'identified')`,
+    ],
+    [
+      'the student archives the card',
+      'cancelled',
+      ({ userId, personId }) => t.db.sql`
+        insert into orbit.chats (user_id, person_id, stage, stage_entered_at, archived_at)
+        values (${userId}::uuid, ${personId}::uuid, 'warming', ${new Date(MONDAY - DAY)}::timestamptz, now())`,
+    ],
+    [
       'the browser’s pipeline says a message went out',
       'messaged',
       ({ userId, personId }) => t.db.sql`
@@ -1283,13 +1319,20 @@ describe('what stops a warm-up', () => {
       expect(viaTick.out.kind).toBe('nothing');
     });
 
-  it('a chat in the "warming" stage, or a message from before the start, stops nothing', async () => {
+  it('a chat in the "warming" stage, an old card, or a message from before the start, stops nothing', async () => {
     const k = setup();
     const u = await student();
     const p = await priya(u.userId);
     const run = await begin(k, u.token, p);
     await t.db
       .sql`insert into orbit.chats (user_id, person_id, stage) values (${u.userId}::uuid, ${p}::uuid, 'warming')`;
+    // an old card for the same person that went quiet last year, one that sat at To contact before the warm-up, and
+    // a conversation from long ago
+    await t.db.sql`
+      insert into orbit.chats (user_id, person_id, stage, stage_entered_at)
+      values (${u.userId}::uuid, ${p}::uuid, 'no_response', ${new Date(MONDAY - 200 * DAY)}::timestamptz),
+             (${u.userId}::uuid, ${p}::uuid, 'identified', ${new Date(MONDAY - 2 * DAY)}::timestamptz),
+             (${u.userId}::uuid, ${p}::uuid, 'replied', ${new Date(MONDAY - 300 * DAY)}::timestamptz)`;
     await addThread(t, u.userId, p, [
       { direction: 'in', at: new Date(MONDAY - 30 * DAY).toISOString(), body: 'An old note' },
       { direction: 'out', at: new Date(MONDAY - 29 * DAY).toISOString(), body: 'An old answer' },

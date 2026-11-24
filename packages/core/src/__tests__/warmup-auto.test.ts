@@ -50,6 +50,7 @@ describe('WARMUP_AUTO_CAPS', () => {
     // far under what LinkedIn tolerates per account per day (about 100 of each), whatever is changed later
     for (const n of Object.values(WARMUP_AUTO_CAPS.perDay)) expect(n).toBeLessThanOrEqual(25);
     expect(WARMUP_AUTO_CAPS.commentMaxChars).toBeLessThanOrEqual(1250);
+    expect(WARMUP_AUTO_CAPS.previewsPerDay).toBe(25);
   });
 });
 

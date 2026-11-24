@@ -6,6 +6,7 @@ import { leaveFakeApi, signInToFakeApi } from '../test/account';
 import { advanceWarmup, type FakeOrbitApi } from '../test/fakeOrbitApi';
 import { createLocalUser } from './account';
 import { startWarmUpOrOutreach } from './brief';
+import { moveChat } from './move';
 import { pullNow, refreshSyncStatus } from './serverSync';
 import { updateLimits } from './settings';
 import {
@@ -14,6 +15,7 @@ import {
   opensWarmUpSheet,
   previewAutoWarmUp,
   startAutoWarmUp,
+  stopMovedWarmUps,
   stopWarmUp,
   tellWarmUpDone,
   tickDemoWarmUps,
@@ -375,6 +377,28 @@ describe('an Orbit account with LinkedIn connected', () => {
     });
     expect((await db.chats.get(chat.id))?.stage).toBe('warming');
     expect((await db.chats.get(chat.id))?.warmUp?.auto?.status).toBe('running');
+  });
+
+  it('a card moved out of Warming up by hand stops the run on the server too', async () => {
+    const { run, chat } = await begin();
+    // in the pipeline, not with Stop: back to To contact
+    await moveChat(user, chat, 'identified', 'user:select');
+    expect((await db.chats.get(chat.id))?.warmUp?.auto?.status).toBe('running');
+    expect(await stopMovedWarmUps(user)).toBe(1);
+    expect(api.state.warmups.stopped).toEqual([run.id]);
+    const after = (await db.chats.get(chat.id))!;
+    expect(after.stage).toBe('identified');
+    expect(after.warmUp?.auto).toMatchObject({ status: 'stopped', stopReason: 'cancelled' });
+    // once: nothing is left to stop, and the stopped run coming down changes nothing
+    expect(await stopMovedWarmUps(user)).toBe(0);
+    advanceWarmup(api, run.id, { steps: 0 });
+    await pullNow(user.id);
+    expect((await db.chats.get(chat.id))?.stage).toBe('identified');
+    expect(api.calls.filter((c) => c.route === '/warmups/stop')).toHaveLength(1);
+    // a card still warming up is left alone
+    const other = await begin2('9c3f4e5a-6d7b-4c8d-ae9f-1a2b3c4d5e6f');
+    expect(await stopMovedWarmUps(user)).toBe(0);
+    expect(api.state.warmups.runs.find((r) => r.id === other.run.id)?.status).toBe('running');
   });
 
   it('a warm-up stopped on another device leaves the warm-up here too', async () => {

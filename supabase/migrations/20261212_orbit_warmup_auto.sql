@@ -17,7 +17,8 @@
 --                         (packages/core/src/warmup/auto.ts), the one place they are set.
 --   orbit.warmup_stop_reason  why a running warm-up must stop now (the person replied, was written to, became a
 --                         connection, is marked do not contact, hidden or merged; LinkedIn is disconnected, parked or
---                         needs a new sign-in; the student turned "Run warm-ups for me" off), or null
+--                         needs a new sign-in; the student turned "Run warm-ups for me" off, or moved the card out of
+--                         Warming up), or null
 --   orbit.enqueue_warmup_steps  every five minutes: stops the warm-ups that must stop, puts a step whose worker died
 --                         back in line, and queues one warmup.step job per step whose time has come
 --
@@ -251,15 +252,25 @@ as $$
          and coalesce(d.sent_at, d.updated_at) > w.started_at) then 'messaged'
     -- they accepted a connection request, or the two connected some other way
     when p.linkedin_connected_on is not null and not w.connected_at_start then 'connected'
-    -- the browser's pipeline says the same things when it knows first (a reply it read, a send marked by hand)
+    -- the browser's pipeline says the same things when it knows first (a reply it read, a send marked by hand). Only
+    -- a card that entered its stage after the warm-up started counts: an old card for the same person (one that went
+    -- quiet last year) says nothing about this warm-up.
     when exists (
       select 1 from orbit.chats c
        where c.user_id = w.user_id and c.person_id = w.person_id and c.archived_at is null
+         and c.stage_entered_at > w.started_at
          and c.stage in ('replied', 'scheduling', 'scheduled', 'completed', 'followed_up', 'nurturing')) then 'replied'
     when exists (
       select 1 from orbit.chats c
        where c.user_id = w.user_id and c.person_id = w.person_id and c.archived_at is null
+         and c.stage_entered_at > w.started_at
          and c.stage in ('outreach_sent', 'no_response', 'declined')) then 'messaged'
+    -- the student took the card out of Warming up by hand (back to To contact, or archived): that is a Stop
+    when exists (
+      select 1 from orbit.chats c
+       where c.user_id = w.user_id and c.person_id = w.person_id
+         and ((c.stage in ('identified', 'archived') and c.stage_entered_at > w.started_at)
+              or c.archived_at > w.started_at)) then 'cancelled'
     else null
   end
   from orbit.warmups w

@@ -503,7 +503,10 @@ export function PersonPage() {
                     className="w-1.5 h-1.5 rounded-full"
                     style={{ background: STAGE_COLOR[chat.stage] }}
                   />
-                  {STAGE_LABELS[chat.stage]}
+                  {/* a warm-up Orbit has finished reads as done, not as still going */}
+                  {chat.stage === 'warming' && chat.warmUp?.auto?.status === 'done'
+                    ? 'Warmed up'
+                    : STAGE_LABELS[chat.stage]}
                   <ChevronDown size={12} aria-hidden className="text-ink-3" />
                   <div className="absolute inset-0 opacity-0">
                     <Select

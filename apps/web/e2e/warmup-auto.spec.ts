@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { advanceWarmup, type FakeOrbitApi } from '../src/test/fakeOrbitApi';
 import { withFakeApi } from './fakeApi';
+import { loadDemo } from './helpers';
 
 /**
  * The automated LinkedIn warm-up. A student signed in to an Orbit account, with LinkedIn connected, starts a warm-up
@@ -259,5 +260,61 @@ test.describe('Orbit runs the LinkedIn warm-up', () => {
     await page.getByTestId('warmup-first').click();
     await expect(page).toHaveURL(/\/inbox\?person=/, { timeout: 20_000 });
     expect(api.calls.filter((c) => c.route.startsWith('/warmups/'))).toHaveLength(0);
+  });
+});
+
+test.describe('The demo simulates the run, so it can be tried', () => {
+  test('the sample student hands a manual warm-up to Orbit and watches it finish; nothing leaves the browser', async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await loadDemo(page);
+    // by default the demo's warm-up is the manual one: reminders with links
+    await page.goto('people?view=board');
+    const boardCard = page.getByTestId('chat-card-warming').first();
+    await expect(boardCard).toBeVisible({ timeout: 30_000 });
+    await boardCard.getByRole('link').first().press('Enter');
+    await expect(page).toHaveURL(/\/people\//);
+    const personUrl = page.url();
+    const card = page.getByTestId('warmup-card');
+    await expect(card).toContainText('LinkedIn warm-up');
+    await expect(card.getByTestId('warmup-hand-over')).toHaveCount(0);
+    await expect(card.locator('a[title="Open on LinkedIn"]').first()).toBeVisible();
+
+    // connect the sample LinkedIn: now Orbit can run it
+    await page.goto('settings/integrations');
+    const li = page.getByTestId('settings-linkedin-live');
+    await li.getByTestId('settings-linkedin-live-connect').click();
+    await expect(li.getByTestId('settings-linkedin-live-status')).toContainText(/Connected/, {
+      timeout: 30_000,
+    });
+    await page.goto(personUrl);
+    await card.getByTestId('warmup-hand-over').click();
+    const sheet = page.getByTestId('warmup-sheet');
+    await expect(sheet).toBeVisible({ timeout: 20_000 });
+    await expect(sheet.getByTestId('warmup-sheet-demo')).toHaveText(
+      'This is the sample student. Nothing is posted anywhere.',
+    );
+    const steps = await sheet.getByTestId('warmup-plan').locator('li').count();
+    expect(steps).toBeGreaterThanOrEqual(1);
+    await sheet.getByTestId('warmup-start').click();
+    await expect(sheet).toBeHidden({ timeout: 20_000 });
+    await expect(card.getByTestId('warmup-running')).toBeVisible({ timeout: 20_000 });
+    await expect(card.getByTestId('warmup-progress').locator('li')).toHaveCount(steps);
+
+    // each tap runs the next step; after the last one the person is warmed up and the student is told
+    for (let i = 0; i < steps; i++) {
+      await card.getByTestId('warmup-demo-next').click();
+      if (i < steps - 1)
+        await expect(card.getByTestId('warmup-progress').getByText(/^Done /)).toHaveCount(i + 1, {
+          timeout: 20_000,
+        });
+    }
+    await expect(card.getByTestId('warmup-warmed')).toHaveText('Warmed up', { timeout: 20_000 });
+    await expect(page.getByTestId('person-stage')).toContainText('Warmed up');
+    await expect(page.getByTestId('toasts')).toContainText('Orbit finished the warm-up for', {
+      timeout: 20_000,
+    });
+    await expect(card.getByTestId('warmup-stop')).toHaveCount(0);
   });
 });

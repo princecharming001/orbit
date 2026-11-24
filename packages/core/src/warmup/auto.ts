@@ -54,6 +54,11 @@ export const WARMUP_AUTO_CAPS = {
   postMaxAgeDays: 45,
   /** how many recent posts the comment writer is shown to choose from */
   postCandidates: 5,
+  /**
+   * plans a student can ask for in a day (each reads the person's posts on LinkedIn once, and their profile when
+   * Orbit does not know them yet); a plan shown again within six hours is not read again and does not count
+   */
+  previewsPerDay: 25,
 } as const;
 
 const DAY_MS = 86_400_000;
@@ -431,7 +436,8 @@ export interface WarmUpPreview {
 /**
  * Why a warm-up cannot be previewed or started right now. `off`: "Run warm-ups for me" is off; `not_connected` and
  * `sign_in`: LinkedIn is not connected, or needs a new sign-in; `unconfigured`: this server cannot reach LinkedIn;
- * `no_profile`: Orbit has no LinkedIn profile for the person; `blocked`: they are hidden or marked do not contact;
+ * `no_profile`: Orbit has no LinkedIn profile for the person; `unknown_person`: the server does not have the person
+ * yet (they were added a moment ago); `blocked`: they are hidden or marked do not contact;
  * `busy`: LinkedIn cannot be read right now, try later; `running`: a warm-up for them is already under way.
  */
 export type WarmUpRefusal =
@@ -440,6 +446,7 @@ export type WarmUpRefusal =
   | 'sign_in'
   | 'unconfigured'
   | 'no_profile'
+  | 'unknown_person'
   | 'blocked'
   | 'busy'
   | 'running';
@@ -458,6 +465,7 @@ export const WARMUP_REFUSAL_WORDS: Record<WarmUpRefusal, string> = {
   sign_in: 'LinkedIn needs you to sign in again. Reconnect it in Settings, then start the warm-up.',
   unconfigured: 'Orbit cannot reach LinkedIn right now. You can still do the steps yourself.',
   no_profile: 'Orbit has no LinkedIn profile for this person, so there is nothing to warm up on.',
+  unknown_person: 'Orbit is still saving this person. Try again in a moment.',
   blocked: 'This person is hidden or marked do not contact, so Orbit will not start a warm-up.',
   busy: 'LinkedIn cannot be read right now. Try again in a little while.',
   running: 'A warm-up for this person is already under way.',

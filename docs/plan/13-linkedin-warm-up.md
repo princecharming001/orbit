@@ -71,11 +71,11 @@ Each step is recorded with when it ran and what happened (`orbit.warmup_steps.re
 
 ### 8.3 Caps (`WARMUP_AUTO_CAPS`, the one place they are set)
 
-Per student, per day in their time zone: **15 profile views, 10 likes, 4 comments**; any two automated actions **at least 90 seconds apart** plus up to 90 seconds at random; **one action per person per day**. Over a cap the step waits for the next working day. `orbit.warmup_take` counts under a lock, so two jobs at once cannot both pass. A warm-up view also counts toward the day's 40 profile views across Orbit (`budget.ts`), every read aimed at a person asks the swarm limit first (plan 41, `linkedinTargets.ts`), and the owner's `unipile_reads` switch stops all of it. Every call is counted in `orbit.linkedin_calls_daily` under caller `warmup`.
+Per student, per day in their time zone: **15 profile views, 10 likes, 4 comments**; any two automated actions **at least 90 seconds apart** plus up to 90 seconds at random; **one action per person per day**. Over a cap the step waits for the next working day. `orbit.warmup_take` counts under a lock, so two jobs at once cannot both pass. A warm-up view also counts toward the day's 40 profile views across Orbit (`budget.ts`), every read aimed at a person asks the swarm limit first (plan 41, `linkedinTargets.ts`), and the owner's `unipile_reads` switch stops all of it. Every call is counted in `orbit.linkedin_calls_daily` under caller `warmup`. A student can ask for at most 25 new plans a day (each reads their posts once); a plan shown again within six hours is not read again.
 
 ### 8.4 What stops it
 
-- The student: **Stop** on the person's page and on Drafts (Coming up). The chat goes back to To contact.
+- The student: **Stop** on the person's page and on Drafts (Coming up). The chat goes back to To contact. Moving the card out of Warming up by hand (back to To contact, archived, or on to a later stage) stops the run as well.
 - By itself (`orbit.warmup_stop_reason`, checked before every step and by the five-minute tick): the person wrote; the student wrote to them or queued a message; they became a connection; do not contact, hidden, merged or deleted; LinkedIn disconnected, parked, needing a new sign-in, or a different account than the one the run started with; the setting turned off (at once).
 - The post was deleted: the like and the comment are skipped, the run goes on.
 - When Orbit stops a run for a LinkedIn or settings reason, the steps it never reached go back to the student as the manual steps of §4.

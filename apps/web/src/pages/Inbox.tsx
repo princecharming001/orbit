@@ -678,7 +678,12 @@ function ComingUp({
                   {p.displayName}
                 </Link>
                 <div className="text-[12px] text-ink-3 truncate">
-                  {chat.warmUp!.auto?.status === 'running' ? 'Orbit is warming up' : 'Warm-up'} ·{' '}
+                  {chat.warmUp!.auto?.status === 'running'
+                    ? 'Orbit is warming up'
+                    : chat.warmUp!.auto?.status === 'done'
+                      ? 'Warmed up'
+                      : 'Warm-up'}{' '}
+                  ·{' '}
                   {next
                     ? `next step ${new Date(next.dueAt) <= now ? 'today' : relDate(next.dueAt, now)}`
                     : new Date(chat.warmUp!.readyAt) <= now || chat.warmUp!.auto?.status === 'done'

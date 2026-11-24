@@ -187,7 +187,13 @@ export async function previewWarmup(
   const noAccount = accountRefusal(acct);
   if (noAccount) return { ok: false, reason: noAccount };
   const accountId = acct!.accountId!;
-  const person = await loadPerson(db, userId, personId);
+  // someone the browser added a moment ago may not have reached the server yet (and someone else's person is
+  // simply not there): the sheet says to try again, and nothing is read
+  const person = await loadPerson(db, userId, personId).catch((e) => {
+    if (e instanceof HttpError && e.status === 404) return undefined;
+    throw e;
+  });
+  if (!person) return { ok: false, reason: 'unknown_person' };
   if (person.is_self || person.do_not_contact || person.hidden_at) return { ok: false, reason: 'blocked' };
   const slug = person.linkedin_slug ?? undefined;
   const identifier = person.linkedin_member_id ?? slug;
@@ -216,6 +222,13 @@ export async function previewWarmup(
 
   const engage = warmupClient(s);
   if (!engage.configured) return { ok: false, reason: 'unconfigured' };
+  // a plan reads LinkedIn: a student gets so many new ones a day (the day LinkedIn calls are counted by: the
+  // database's own, in UTC, as public.orbit_linkedin_calls_add writes it)
+  const [reads] = await db.sql<{ n: number }>`
+    select coalesce(sum(made), 0)::int as n from orbit.linkedin_calls_daily
+     where day = (now() at time zone 'utc')::date and linkedin_account = ${accountId}
+       and caller = 'warmup' and kind = 'posts'`;
+  if (Number(reads?.n ?? 0) >= WARMUP_AUTO_CAPS.previewsPerDay) return { ok: false, reason: 'busy' };
   let memberId = person.linkedin_member_id ?? undefined;
   if (!memberId) {
     // the posts route needs LinkedIn's own id: one quiet profile read (no visit is shown) finds it

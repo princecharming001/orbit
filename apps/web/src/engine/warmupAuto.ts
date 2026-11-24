@@ -163,10 +163,10 @@ export async function previewAutoWarmUp(
     return {
       ok: false,
       reason: 'error',
-      // someone added a moment ago has not reached the server yet
+      // a server from before warm-ups could be run for the student has no such route
       message:
         r.status === 404
-          ? `Orbit is still saving ${person.firstName}. Try again in a moment.`
+          ? 'Orbit cannot run warm-ups for you yet. You can still do the steps yourself.'
           : r.message || 'Orbit could not make the plan. Try again in a moment.',
     };
   if (!r.value.ok) {
@@ -351,6 +351,40 @@ export async function stopWarmUp(
   return { ok: true };
 }
 
+/**
+ * A card the student moved out of Warming up by hand (back to To contact, archived, or on to a later stage) while
+ * Orbit was still running its warm-up: the run is stopped on the server too, so nothing more is done on LinkedIn for
+ * someone the student has moved on from. Returns how many runs were stopped. The server reaches the same verdict on
+ * its own once the card's new stage has synced; this does it at once.
+ */
+export async function stopMovedWarmUps(user: Pick<User, 'id'>, now = new Date()): Promise<number> {
+  if (usesMockConnectors(user.id)) return 0;
+  const moved = await db.chats
+    .where('userId')
+    .equals(user.id)
+    .filter((c) => c.warmUp?.auto?.status === 'running' && (c.stage !== 'warming' || !!c.archivedAt))
+    .toArray();
+  let stopped = 0;
+  for (const chat of moved) {
+    const auto = chat.warmUp!.auto!;
+    const r = await callApi('/warmups/stop', { warmupId: serverIdOf(auto.runId) ?? auto.runId });
+    if (!r.ok) continue;
+    const at = now.toISOString();
+    const base = r.value.run ?? (await db.warmups.get(auto.runId));
+    if (base) await db.warmups.put({ ...base, id: auto.runId, userId: user.id, personId: chat.personId });
+    // the card stays where the student put it; its plan says the warm-up is over
+    await db.chats.update(chat.id, {
+      warmUp: {
+        ...chat.warmUp!,
+        auto: { ...auto, status: 'stopped', stopReason: base?.stopReason ?? 'cancelled', finishedAt: at },
+      },
+      updatedAt: at,
+    });
+    stopped++;
+  }
+  return stopped;
+}
+
 // ---- done: told once --------------------------------------------------------------------------------------------------
 
 /** The warm-ups that finished and the student has not been told about yet. */
@@ -440,7 +474,13 @@ export async function tickDemoWarmUps(
     else if (!person || person.hiddenAt) next = stop('hidden');
     else if (person.doNotContact) next = stop('do_not_contact');
     else if (chat && chat.stage !== 'warming')
-      next = stop(['outreach_sent', 'no_response', 'declined'].includes(chat.stage) ? 'messaged' : 'replied');
+      next = stop(
+        ['identified', 'archived'].includes(chat.stage) || chat.archivedAt
+          ? 'cancelled'
+          : ['outreach_sent', 'no_response', 'declined'].includes(chat.stage)
+            ? 'messaged'
+            : 'replied',
+      );
     else {
       const steps = run.steps.map((s) => ({ ...s }));
       let moved = false;

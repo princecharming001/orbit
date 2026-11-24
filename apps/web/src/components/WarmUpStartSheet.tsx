@@ -55,7 +55,11 @@ function Sheet({ req }: { req: WarmUpSheetRequest }) {
     const r = await previewAutoWarmUp(user, req.personId);
     if (!alive.current) return;
     if (!r.ok) {
-      setView({ step: 'refused', message: r.message, retry: r.reason === 'busy' || r.reason === 'error' });
+      setView({
+        step: 'refused',
+        message: r.message,
+        retry: r.reason === 'busy' || r.reason === 'error' || r.reason === 'unknown_person',
+      });
       return;
     }
     now.current = new Date();
