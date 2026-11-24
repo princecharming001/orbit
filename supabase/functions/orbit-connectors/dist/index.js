@@ -3504,6 +3504,7 @@ function mapRecommendations(p) {
   }
   return out;
 }
+var POSITION_DESCRIPTION_MAX = 2e3;
 function mapProfile(p, opts = {}) {
   const num2 = (v) => {
     const n = typeof v === "string" ? Number(v.replace(/[,+\s]/g, "")) : Number(v);
@@ -3540,7 +3541,10 @@ function mapProfile(p, opts = {}) {
       location: str2(x.location, 120),
       current: x.current === true || x.current !== false && !dateText(x.end),
       start: dateText(x.start),
-      end: dateText(x.end)
+      end: dateText(x.end),
+      // what they did there, in their own words, when LinkedIn gives it (the full experience section does): the
+      // lines the Roles profile quotes for "shown in work" (plan 44 §3)
+      description: str2(x.description, POSITION_DESCRIPTION_MAX)
     })).filter((x) => x.company || x.title),
     education: list(p.education).slice(0, 10).map((x) => ({
       school: str2(x.school, 160),

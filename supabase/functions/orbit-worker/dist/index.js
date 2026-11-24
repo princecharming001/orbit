@@ -11836,7 +11836,8 @@ async function sha256(text4) {
 var metaStr = (m, k) => typeof m?.[k] === "string" ? m[k] : void 0;
 async function intake(l, o) {
   const title = l.title?.trim().replace(/\s+/g, " ");
-  if (!title || !l.url || !l.externalId || !l.companyName?.trim()) return void 0;
+  if (!title || !l.url && l.source !== "posting" || !l.externalId || !l.companyName?.trim())
+    return void 0;
   const text4 = cleanText(l.text);
   const lang = (l.language ?? "").toLowerCase().slice(0, 2);
   if (lang && lang !== "en") return void 0;
@@ -12008,7 +12009,7 @@ async function keepListings(db2, listings, o = {}) {
     const byExt = new Map(existing.map((e) => [`${e.source}:${e.external_id}`, e]));
     const groups = /* @__PURE__ */ new Map();
     for (const r of boardRows) {
-      const k = `${r.board_id ?? r.source}|${keyOf3(r)}`;
+      const k = `${r.board_id ?? `${r.source}:${r.company_key}`}|${keyOf3(r)}`;
       const g = groups.get(k);
       if (g) g.push(r);
       else groups.set(k, [r]);
@@ -12200,7 +12201,8 @@ async function readCapped(res, maxBytes) {
     const bytes = new TextEncoder().encode(text4).length;
     return bytes > maxBytes ? bytes : { text: text4, bytes };
   }
-  const chunks3 = [];
+  const decoder = new TextDecoder();
+  const parts = [];
   let size = 0;
   for (; ; ) {
     const { done: done2, value } = await reader.read();
@@ -12210,15 +12212,10 @@ async function readCapped(res, maxBytes) {
       await reader.cancel().catch(() => void 0);
       return size;
     }
-    chunks3.push(value);
+    parts.push(decoder.decode(value, { stream: true }));
   }
-  const all = new Uint8Array(size);
-  let at = 0;
-  for (const c of chunks3) {
-    all.set(c, at);
-    at += c.length;
-  }
-  return { text: new TextDecoder().decode(all), bytes: size };
+  parts.push(decoder.decode());
+  return { text: parts.join(""), bytes: size };
 }
 async function askText(net, url, o = {}) {
   const retries = o.retries ?? 2;
@@ -12298,7 +12295,7 @@ var isoOf = (v) => {
 };
 
 // supabase/functions/_shared/roles/readers/ashby.ts
-var ASHBY_MAX_BYTES = 2e6;
+var ASHBY_MAX_BYTES = 12e6;
 var REMOTE = { remote: "remote", hybrid: "hybrid", onsite: "on_site" };
 function ashbyPay(comp) {
   const c = obj(comp);
@@ -13027,11 +13024,12 @@ async function readWorkday(net, token2, companyName, maxPages = WORKDAY_MAX_PAGE
   }
   return { ok: true, listings, bytes, complete: false, requests };
 }
-async function readWorkdayJob(net, token2, path) {
+async function readWorkdayJob(net, token2, path, o = {}) {
   const w = workdayParts(token2);
   if (!w) return fail("bad_shape", "not a Workday token");
   const got = await askJson(net, `https://${w.host}/wday/cxs/${w.tenant}/${w.site}${path}`, {
-    maxBytes: 2e6
+    maxBytes: 2e6,
+    ...o.retries !== void 0 ? { retries: o.retries } : {}
   });
   if (!got.ok) return got;
   const info = obj(obj(got.value)?.jobPostingInfo);
@@ -13084,8 +13082,14 @@ async function setMark(db2, now, kind, n) {
 }
 
 // supabase/functions/_shared/roles/boards.ts
+var BOARD_COLUMNS = "id, service, token, company_key, company_name, company_domain, status, failures, last_size_bytes, rate_limited_at, rate_limited_days";
 var DAY = 864e5;
 var FAILURES_TO_STOP = 3;
+var RATE_LIMIT_RETRY_MS = 3 * 36e5;
+var RATE_LIMIT_DAYS_TO_STOP = 5;
+var WORKDAY_PAUSE_MIN = 60;
+var LARGE_BOARD_BYTES = 2e6;
+var BOARD_BYTES_PER_TICK = ASHBY_MAX_BYTES;
 var UNSEEN_CLOSE_MS = 7 * DAY;
 var WORKDAY_PER_TICK = 2;
 var READ_MS = {
@@ -13097,6 +13101,9 @@ var READ_MS = {
   workable: 6e3,
   recruitee: 4e3
 };
+function readMsOf(b) {
+  return READ_MS[b.service] + Math.floor(Number(b.last_size_bytes ?? 0) / 1e6) * 1e3;
+}
 function minuteOf(id) {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = h * 31 + id.charCodeAt(i) >>> 0;
@@ -13130,11 +13137,19 @@ function readBoardListings(net, b) {
   }
 }
 async function claimBoard(db2, id, now) {
+  const today = startOfDay(now);
   const rows = await db2.sql`
     update orbit_private.job_boards set last_read_at = ${now}::timestamptz
-     where id = ${id}::uuid and (last_read_at is null or last_read_at < ${startOfDay(now)}::timestamptz)
+     where id = ${id}::uuid
+       and (last_read_at is null or last_read_at < ${today}::timestamptz
+            or (rate_limited_at >= ${today}::timestamptz and rate_limited_at >= last_read_at
+                and last_read_at < ${now}::timestamptz))
      returning id`;
   return rows.length > 0;
+}
+var minuteOfDay = (now) => now.getUTCHours() * 60 + now.getUTCMinutes();
+async function workdayPaused(db2, now) {
+  return minuteOfDay(now) < await counted(db2, now, "workday_pause_until");
 }
 async function closeUnseen(db2, boardId, now, complete) {
   const before = complete ? now : new Date(now.getTime() - UNSEEN_CLOSE_MS);
@@ -13181,8 +13196,34 @@ async function readBoard(db2, net, b, now) {
       await count(db2, now, "boards_too_large");
       return out;
     }
+    if (read.reason === "rate_limited") {
+      const today = startOfDay(now);
+      const firstToday = !b.rate_limited_at || new Date(b.rate_limited_at).getTime() < today.getTime();
+      const retryAt = new Date(now.getTime() + RATE_LIMIT_RETRY_MS);
+      const error = `${read.reason}: ${read.message}`.slice(0, 300);
+      if (b.service === "workday")
+        await setMark(db2, now, "workday_pause_until", minuteOfDay(now) + WORKDAY_PAUSE_MIN);
+      await count(db2, now, "boards_rate_limited");
+      if (firstToday && retryAt.getTime() < today.getTime() + DAY) {
+        await db2.sql`
+          update orbit_private.job_boards
+             set rate_limited_at = ${now}::timestamptz, last_error = ${error}, next_read_at = ${retryAt}::timestamptz
+           where id = ${b.id}::uuid`;
+        return out;
+      }
+      const days = (b.rate_limited_days ?? 0) + 1;
+      const status2 = days >= RATE_LIMIT_DAYS_TO_STOP ? "refused" : b.status;
+      await db2.sql`
+        update orbit_private.job_boards
+           set rate_limited_at = case when ${firstToday}::boolean then ${now}::timestamptz else rate_limited_at end,
+               rate_limited_days = ${days}::int, last_error = ${error}, status = ${status2},
+               next_read_at = ${nextReadAt(b.id, now, status2 === "refused" ? 30 : 1)}::timestamptz
+         where id = ${b.id}::uuid`;
+      await count(db2, now, "boards_failed");
+      return out;
+    }
     const failures = b.failures + 1;
-    const status = failures >= FAILURES_TO_STOP && read.reason === "not_found" ? "gone" : failures >= FAILURES_TO_STOP && (read.reason === "refused" || read.reason === "rate_limited") ? "refused" : b.status;
+    const status = failures >= FAILURES_TO_STOP && read.reason === "not_found" ? "gone" : failures >= FAILURES_TO_STOP && read.reason === "refused" ? "refused" : b.status;
     await db2.sql`
       update orbit_private.job_boards
          set failures = ${failures}::int, last_error = ${`${read.reason}: ${read.message}`.slice(0, 300)},
@@ -13201,6 +13242,7 @@ async function readBoard(db2, net, b, now) {
     update orbit_private.job_boards
        set status = ${roles ? "active" : "empty"}, roles_open = ${roles}::int, last_size_bytes = ${read.bytes}::int,
            failures = 0, last_error = null, next_read_at = ${nextReadAt(b.id, now)}::timestamptz,
+           rate_limited_at = null, rate_limited_days = 0,
            company_name = coalesce(company_name, ${read.companyName ?? null})
      where id = ${b.id}::uuid`;
   await count(db2, now, "boards_read");
@@ -13221,19 +13263,24 @@ async function readBoard(db2, net, b, now) {
 async function readDueBoards(db2, net, now, run) {
   const s = { read: 0, failed: 0, tooLarge: 0, added: 0, closed: 0, bytes: 0, outcomes: [] };
   await db2.sql`
-    update orbit_private.job_boards set status = 'active', failures = ${FAILURES_TO_STOP - 1}::int
+    update orbit_private.job_boards
+       set status = 'active',
+           failures = case when rate_limited_days >= ${RATE_LIMIT_DAYS_TO_STOP}::int then failures
+                           else ${FAILURES_TO_STOP - 1}::int end,
+           rate_limited_days = least(rate_limited_days, ${RATE_LIMIT_DAYS_TO_STOP - 1}::int)
      where status = 'refused' and next_read_at <= ${now}::timestamptz`;
-  const due = await db2.sql`
-    select id, service, token, company_key, company_name, company_domain, status, failures
-      from orbit_private.job_boards
-     where status in ('active', 'empty') and next_read_at <= ${now}::timestamptz
-     order by next_read_at
-     limit ${run.maxBoards ?? 50}::int`;
+  const due = await db2.query(
+    `select ${BOARD_COLUMNS} from orbit_private.job_boards
+      where status in ('active', 'empty') and next_read_at <= $1::timestamptz
+      order by next_read_at
+      limit $2::int`,
+    [now, run.maxBoards ?? 50]
+  );
   let workday = 0;
-  let workdaySlow = false;
+  let workdaySlow = due.some((b) => b.service === "workday") && await workdayPaused(db2, now);
   for (const b of due) {
     const left = run.deadline - run.clock();
-    if (left <= READ_MS[b.service]) {
+    if (left <= readMsOf(b)) {
       s.stoppedBy = "time";
       if (left <= READ_MS.greenhouse) break;
       continue;
@@ -13241,6 +13288,11 @@ async function readDueBoards(db2, net, now, run) {
     if (s.bytes >= run.maxBytes) {
       s.stoppedBy = "bytes";
       break;
+    }
+    const size = Number(b.last_size_bytes ?? 0);
+    if (size > LARGE_BOARD_BYTES && (s.bytes > 0 || size > run.maxBytes)) {
+      s.waiting = (s.waiting ?? 0) + 1;
+      continue;
     }
     if (b.service === "workday" && (workday >= WORKDAY_PER_TICK || workdaySlow)) continue;
     if (!await claimBoard(db2, b.id, now)) continue;
@@ -13255,6 +13307,10 @@ async function readDueBoards(db2, net, now, run) {
       s.closed += o.closed;
     } else if (o.error === "too_large") s.tooLarge++;
     else s.failed++;
+    if (o.ok && o.bytes > LARGE_BOARD_BYTES) {
+      s.stoppedBy = "bytes";
+      break;
+    }
   }
   if (!s.stoppedBy && due.length >= (run.maxBoards ?? 50)) s.stoppedBy = "boards";
   return s;
@@ -13295,6 +13351,7 @@ async function rolesDigest(db2, day2) {
   return {
     boardsRead: n("boards_read"),
     boardsFailed: n("boards_failed"),
+    boardsRateLimited: n("boards_rate_limited"),
     boardsTooLarge: n("boards_too_large"),
     boardsHarvested: n("boards_harvested"),
     rolesAdded: n("roles_added"),
@@ -13332,7 +13389,7 @@ function rolesDigestLines(r) {
   const lines = [
     "",
     "Roles:",
-    `- Boards read: ${r.boardsRead}, failed: ${r.boardsFailed}, too large for the worker: ${r.boardsTooLarge}. New boards from SimplifyJobs links: ${r.boardsHarvested}.`,
+    `- Boards read: ${r.boardsRead}, failed: ${r.boardsFailed}, asked to slow down: ${r.boardsRateLimited}, too large for the worker: ${r.boardsTooLarge}. New boards from SimplifyJobs links: ${r.boardsHarvested}.`,
     `- Roles added: ${r.rolesAdded}, closed: ${r.rolesClosed}, deleted after 60 days: ${r.rolesDeleted}. Texts read: ${r.textsRead}. Open roles now: ${r.openRoles}.`,
     `- Discovery: ${r.discovery.companies} companies, ${r.discovery.requests} requests, ${r.discovery.refused} refused, ${r.discovery.found} boards found.`,
     `- SimplifyJobs: internships ${r.simplify.intern ? "read" : "not read"}, new grad ${r.simplify.newgrad ? "read" : "not read"} (${r.simplify.listings} listings).`,
@@ -21558,10 +21615,10 @@ function foldName(name) {
   const key2 = typeof name === "string" || !name ? `w\0${name ?? ""}` : `p\0${name.first}\0${name.last}\0${name.full}`;
   const hit = cache3.get(key2);
   if (hit) return hit;
-  const folded = fold(typeof name === "string" || !name ? parseName(name) : name);
+  const folded2 = fold(typeof name === "string" || !name ? parseName(name) : name);
   if (cache3.size > 5e4) cache3.clear();
-  cache3.set(key2, folded);
-  return folded;
+  cache3.set(key2, folded2);
+  return folded2;
 }
 function fold(parts) {
   if (writtenSurnameFirst(parts.full)) {
@@ -22291,11 +22348,11 @@ function emailEvidence(rawEmail, name, org, orgDomains, fuzzy = true) {
     const first = fold2(name.first).replace(/[^a-z]/g, "");
     const canon = canonicalFirstName(name.first).replace(/[^a-z]/g, "");
     const last = fold2(name.last).replace(/[^a-z]/g, "");
-    const folded = foldName(name);
+    const folded2 = foldName(name);
     const lasts = [
-      ...new Set([last, folded.surnames.join(""), ...folded.surnames].filter((l) => l.length >= 2))
+      ...new Set([last, folded2.surnames.join(""), ...folded2.surnames].filter((l) => l.length >= 2))
     ];
-    const middles = folded.middles.filter((m) => m.length >= 2);
+    const middles = folded2.middles.filter((m) => m.length >= 2);
     const forms = /* @__PURE__ */ new Set();
     const variants = [...nameVariants(first)].map((v) => v.replace(/[^a-z]/g, "")).filter((v) => v.length >= 2);
     for (const l of lasts) {
@@ -31466,7 +31523,7 @@ async function attachAccount(db2, userId, a) {
         return { status: "conflict", accountPersonId: o.id, personId: a.personId };
   }
   return db2.begin(async (tx) => {
-    let folded;
+    let folded2;
     for (const o of own) {
       await moveStamped(tx, userId, a.platform, a.accountId, o.id, a.personId, {
         facts: "move",
@@ -31480,7 +31537,7 @@ async function attachAccount(db2, userId, a) {
                              and x.account_id = orbit.social_match_asks.account_id and x.person_id = ${a.personId}::uuid)`;
       if (leave) continue;
       await tx.sql`delete from orbit.people where id = ${o.id}::uuid and user_id = ${userId}::uuid`;
-      folded = o.id;
+      folded2 = o.id;
     }
     const [row] = await tx.sql`
       insert into orbit.social_links (user_id, platform, account_id, person_id, via, proof, score)
@@ -31546,10 +31603,10 @@ async function attachAccount(db2, userId, a) {
       personId: a.personId,
       via: a.via,
       ...a.proof ? { proof: a.proof } : {},
-      ...folded ? { folded } : {}
+      ...folded2 ? { folded: folded2 } : {}
     });
     await rescore(tx, userId, [a.personId], `attach:${row.id}`);
-    return { status: "attached", linkId: row.id, ...folded ? { folded } : {} };
+    return { status: "attached", linkId: row.id, ...folded2 ? { folded: folded2 } : {} };
   });
 }
 
@@ -44174,6 +44231,14 @@ async function readSimplify(net, list3) {
   return { ok: true, value: { listings, entries: got.value.length }, bytes: got.bytes };
 }
 
+// supabase/functions/_shared/roles/contracts.ts
+var TextLater = class extends Error {
+  constructor(reason2 = "later") {
+    super(reason2);
+    this.name = "TextLater";
+  }
+};
+
 // supabase/functions/_shared/roles/readers/linkedin.ts
 var base = (a) => a.base.replace(/\/+$/, "");
 function linkedinPlace(raw) {
@@ -44260,6 +44325,24 @@ async function linkedinJob(net, access, id) {
 // supabase/functions/_shared/roles/sources.ts
 var TEXT_FRESH_MS = 7 * 864e5;
 var PAGE_MAX_BYTES2 = 15e5;
+var WORKDAY_TEXT_GAP_MS = 800;
+var WORKDAY_TEXT_PAUSE_MS = 12e4;
+var workdayLine = Promise.resolve();
+var workdayPausedUntil = 0;
+var WORKDAY_BUSY = () => fail("rate_limited", "Workday asked to slow down", 429);
+function workdayDetail(net, token2, path) {
+  if (net.now().getTime() < workdayPausedUntil) return Promise.resolve(WORKDAY_BUSY());
+  const mine = workdayLine.then(async () => {
+    if (net.now().getTime() < workdayPausedUntil) return WORKDAY_BUSY();
+    const got = await readWorkdayJob(net, token2, path, { retries: 0 });
+    if (!got.ok && got.reason === "rate_limited")
+      workdayPausedUntil = net.now().getTime() + WORKDAY_TEXT_PAUSE_MS;
+    else await sleepFor(net)(WORKDAY_TEXT_GAP_MS);
+    return got;
+  });
+  workdayLine = mine.catch(() => void 0);
+  return mine;
+}
 function jobLdOf(html) {
   for (const b of html.matchAll(
     /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
@@ -44393,7 +44476,7 @@ async function readUrlWith(net, url, linkedin, depth) {
       }
       case "workday": {
         if (!board.path) break;
-        const got = await readWorkdayJob(net, board.token, board.path);
+        const got = await workdayDetail(net, board.token, board.path);
         if (got.ok)
           return {
             source: "workday",
@@ -44408,6 +44491,10 @@ async function readUrlWith(net, url, linkedin, depth) {
             meta: { path: board.path, timeType: got.value.timeType }
           };
         if (got.reason === "not_found") return { problem: "That posting is no longer listed." };
+        if (got.reason === "rate_limited")
+          return {
+            problem: "Workday is busy just now. Try again in a few minutes, or paste the posting's text."
+          };
         break;
       }
       case "smartrecruiters": {
@@ -44475,7 +44562,7 @@ async function readText(net, j, linkedin) {
     case "workday": {
       const path = typeof j.meta?.path === "string" ? j.meta.path : fromUrl?.path;
       if (!token2 || !path) break;
-      const got = await readWorkdayJob(net, token2, path);
+      const got = await workdayDetail(net, token2, path);
       return got.ok ? { ...got, value: { text: got.value.text, places: got.value.places, remote: got.value.remote } } : got;
     }
     case "smartrecruiters": {
@@ -44534,6 +44621,8 @@ async function text2(db2, net, jobId, linkedin) {
   if (!got.ok) {
     if (got.reason === "not_found")
       await db2.sql`update orbit_private.jobs set closed_at = coalesce(closed_at, ${now}::timestamptz) where id = ${j.id}::uuid`;
+    if (!j.text && (got.reason === "rate_limited" || got.reason === "network" || got.reason === "server"))
+      throw new TextLater(got.reason);
     return j.text ?? void 0;
   }
   const cleaned = cleanText(got.value.text);
@@ -44563,7 +44652,7 @@ var roleSources = { keep, text: text2, linkedinSearch, readUrl };
 // supabase/functions/_shared/roles/tick.ts
 var DAY22 = 864e5;
 var TICK_MS = 4e4;
-var TICK_MAX_BYTES = 16e6;
+var TICK_MAX_BYTES = BOARD_BYTES_PER_TICK;
 var LIST_UNSEEN_MS = 3 * DAY22;
 var CLOSED_KEEP_MS = 60 * DAY22;
 var TOPUP_HOUR = 6;
@@ -44652,7 +44741,7 @@ async function fillTexts(db2, net, run) {
   let n = 0;
   for (const r of rows) {
     if (run.deadline - run.clock() < 3e3) break;
-    if (await text2(db2, net, r.id)) n++;
+    if (await text2(db2, net, r.id).catch(() => void 0)) n++;
   }
   return n;
 }
@@ -44806,6 +44895,8 @@ var TABLE = {
   tableau: ["Tableau"],
   "power bi": ["Power BI", "PowerBI"],
   excel: ["Excel", "Microsoft Excel", "MS Excel"],
+  "google sheets": ["Google Sheets", "Sheets"],
+  powerpoint: ["PowerPoint", "Microsoft PowerPoint", "MS PowerPoint"],
   kubernetes: ["Kubernetes", "k8s"],
   docker: ["Docker"],
   terraform: ["Terraform"],
@@ -44858,6 +44949,18 @@ function canonicalSkill(name) {
   const f = fold5(name).replace(/[.,;:]+$/, "");
   return ALIAS.get(f) ?? ALIAS.get(f.replace(/\.js$/, "")) ?? f;
 }
+function knownSkill(name) {
+  return Object.hasOwn(TABLE, canonicalSkill(name));
+}
+function splitSkillList(text4) {
+  const kept = [];
+  const held = text4.replace(WHOLE_TERMS, (m) => {
+    kept.push(m);
+    return `orbitwholeterm${kept.length - 1}x`;
+  });
+  return held.split(/[,;|•·/]|\s+and\s+|\s+or\s+/i).map((p) => p.replace(/orbitwholeterm(\d+)x/g, (_m, i) => kept[Number(i)]).trim()).filter(Boolean);
+}
+var WHOLE_TERMS = /\b(?:A\/B|CI\/CD|UI\/UX|UX\/UI|TCP\/IP|I\/O|R&D|P&L|PL\/SQL|AR\/VR|AI\/ML|ML\/AI)\b/gi;
 function sameSkill(a, b) {
   const x = canonicalSkill(a);
   return !!x && x === canonicalSkill(b);
@@ -44920,7 +45023,10 @@ var IMPLIES = [
   [["Tableau", "Power BI", "Looker"], ["Data visualization"]],
   [["AWS", "GCP", "Azure"], ["Cloud"]],
   [["Kubernetes", "Docker"], ["Containers"]],
-  [["Figma", "Sketch", "Adobe XD"], ["Prototyping"]]
+  [["Figma", "Sketch", "Adobe XD"], ["Prototyping"]],
+  [["Excel", "Google Sheets"], ["Spreadsheets"]],
+  [["PowerPoint", "Google Slides", "Keynote"], ["Presentations"]],
+  [["Stata", "SAS", "SPSS", "MATLAB"], ["Statistical software"]]
 ];
 var IMPLIED = /* @__PURE__ */ new Map();
 for (const [from, to] of IMPLIES)
@@ -45246,7 +45352,7 @@ var profileSchema2 = z9.object({
 });
 async function loadProfile(db2, userId) {
   const [r] = await db2.sql`
-    select profile, proposed, evidence_hash, wants_hash, updated_at from orbit.role_profiles
+    select profile, proposed, evidence_hash, wants_hash, updated_at, confirmed_at from orbit.role_profiles
      where user_id = ${userId}::uuid`;
   if (!r) return void 0;
   return {
@@ -45254,8 +45360,13 @@ async function loadProfile(db2, userId) {
     ...r.proposed ? { proposed: r.proposed } : {},
     evidenceHash: r.evidence_hash,
     wantsHash: r.wants_hash,
-    updatedAt: new Date(r.updated_at).toISOString()
+    updatedAt: new Date(r.updated_at).toISOString(),
+    confirmed: r.confirmed_at !== null
   };
+}
+async function confirmedProfile(db2, userId) {
+  const p = await loadProfile(db2, userId);
+  return p?.confirmed ? p : void 0;
 }
 
 // supabase/functions/_shared/roles/score.ts
@@ -45281,7 +45392,9 @@ var FIT_WEIGHTS = {
     citizenship_no: 2,
     citizenship_ask: 5,
     place: 5,
-    thin: 7
+    // §6.4 drafted this at 7. A posting that says little cannot be called a good fit on paper, because there is
+    // little paper: at 7 it was the one cap under which a role still showed as a good fit (§6.7: none may)
+    thin: 6
   },
   /** fewer requirements than this and the posting "says little" */
   thinBelow: 3
@@ -45399,6 +45512,8 @@ function capsFor(reqs, profile, job) {
       }
     }
   }
+  if (job?.level === "intern" && !studying)
+    add2({ kind: "graduation", label: "An internship, for current students" });
   if (job?.sponsorship === "none" && profile.eligibility.needsSponsorship === true)
     add2({ kind: "sponsorship", label: "Does not sponsor visas" });
   if (job && job.remote !== "remote" && placeHits(job.places, profile.wants.notPlaces))
@@ -45412,15 +45527,20 @@ var READ_BATCH2 = 2;
 var REQUIREMENTS_PER_DAY = 2e3;
 var READS_PER_DAY = 200;
 var MAX_REQUIREMENTS = 12;
+var THIN_BELOW = 3;
+var FULL_POSTING_CHARS = 1500;
 var POSTING_CHARS = 8e3;
-var NOT_READ_NOTE = "Not read closely yet";
-var LIMIT_NOTE = "Not read closely yet. Today's limit is reached, so these are ranked by what Orbit can read without the model.";
+var NOT_READ_NOTE = "Orbit could not read some of these roles closely just now. They are ranked by what it can read without that.";
+var LIMIT_NOTE = "Today's limit for close reads is reached, so the rest are ranked by what Orbit can read without one. More are read tomorrow.";
 var ROLE_TIMEOUTS = { text: 6e3, requirements: 9e3, score: 12e3 };
-var REQUIREMENTS_SYSTEM = `You read job postings for Orbit and list what each one asks of a candidate. For each posting (J1, J2, ...) list at most twelve requirements, the most important first:
+var REQUIREMENTS_SYSTEM = `You read job postings for Orbit and list what each one asks of a candidate. For each posting (J1, J2, ...) list at most twelve requirements, the most important first. Take them from the part of the posting that says what it asks for (requirements, qualifications, minimum, preferred, what you bring, who you are, what we look for). What the person will do in the role is not a requirement: use it only when the posting has no such part. One line of the posting is one requirement: a line that gives examples of one thing ("experimentation: A/B testing, concept sprints, iterating on data") is that one thing, not three. List every line that asks for something a resume can show, the work done before as well as the tools: "proven experience designing consumer mobile apps" is an experience requirement, and a full posting usually has five to ten.
 - kind: skill (a tool, language, framework, method or body of knowledge a resume can show: Python, SQL, Figma, user research, financial modeling, A/B testing), experience (work done before, years in a field), education (a degree or field of study), eligibility (citizenship, a security clearance, work authorization, no visa sponsorship, a graduation window).
-- Leave out traits and soft skills entirely (communication, collaboration, teamwork, learning quickly, curiosity, ownership, attention to detail, working with a mentor, interpersonal skills, passion). Leave out general use of AI tools unless the posting names a specific tool as a requirement.
+- Leave out traits and soft skills entirely (communication, collaboration, teamwork, learning quickly, curiosity, ownership, attention to detail, working with a mentor, interpersonal skills, passion). Leave out general use of AI tools ("proficiency with AI tools", "uses AI coding agents") unless the posting names a specific tool as a requirement. What a candidate sends with an application (a cover letter, a transcript) is not a requirement; a portfolio is how a skill is shown, so name the skill it must show ("a portfolio that shows visual craft" is "visual design").
+- An internship or a programme for students or new graduates asks for people who are studying: when it gives graduation dates ("graduating December 2027 or spring 2028", "2027 graduates", in the title too), that is an eligibility requirement, graduation_window, with gradFrom and gradTo.
 - need: must when the posting says required, minimum, must, or lists it as a qualification; nice when it says preferred, bonus, plus, nice to have.
 - name: a short name, the thing itself ("Python", "Figma", "2+ years in data analysis", "BS in Computer Science", "US citizenship"). When the posting accepts alternatives, join them with " or " ("Python or R", "Figma or Sketch"). Never a sentence ("Experience using design programs (Figma)" is "Figma").
+  When the posting gives examples of tools or languages ("a programming language such as Python, Java or C++", "tools like Cursor or Claude Code"), the requirement is those names joined with " or " ("Python or Java or C++"), never the category ("programming languages").
+- named: for a skill, true when it is one specific tool, language, framework or product by name (Python, SQL, Figma, Kafka, Excel, Kubernetes), false when it is a kind of work, a method or a category (spreadsheets, user research, financial modeling, distributed systems, data pipelines, statistical programs). False for every other kind.
 - quote: the posting's exact words for it, at most 20, copied character for character.
 - years: for experience, the years asked for; otherwise 0.
 - degree: for education, the lowest degree asked (high_school, associate, bachelor, master, phd, mba, jd, md); otherwise none.
@@ -45437,6 +45557,7 @@ var reqSchema = z10.object({
           need: z10.enum(["must", "nice"]),
           name: z10.string(),
           quote: z10.string(),
+          named: z10.boolean(),
           years: z10.number(),
           degree: z10.enum([
             "high_school",
@@ -45467,14 +45588,19 @@ var reqSchema = z10.object({
 var YM = /^\d{4}-\d{2}$/;
 var SOFT = /\b(communicat\w*|collaborat\w*|teamwork|team player|interpersonal|curious|curiosity|ownership|self[- ]starter|detail[- ]oriented|attention to detail|fast learner|learn(ing)? (quickly|new)|ability to learn|passion\w*|growth mindset|work(ing)? with (a )?mentor|problem[- ]solving|critical thinking|adaptab\w*|proactive|motivated|work ethic)\b/i;
 var isSoftSkill = (name) => SOFT.test(name);
+var AI_PRODUCT = /\b(cursor|copilot|claude|chatgpt|gpt|gemini|openai|v0|lovable|midjourney|langchain|hugging ?face|llama|bedrock|vertex)\b/i;
+var GENERAL_AI = /\bAI[- ]?(?:powered |assisted |coding |productivity )?(?:tools?|tooling|assistants?|agents?|workflows?)\b|\bleverag\w+ AI\b|\buse of AI\b/i;
+var SENT_WITH = /\b(cover letter|transcript|writing sample|references)\b/i;
+var isNotASkill = (name) => GENERAL_AI.test(name) && !AI_PRODUCT.test(name) || SENT_WITH.test(name);
 function settleRequirements(text4, raw) {
   const out = [];
   for (const r of raw) {
     const quote2 = verifyQuote(text4, r.quote);
     const name = plain3(r.name, 80);
     if (!quote2 || !name) continue;
-    if (r.kind === "skill" && isSoftSkill(name)) continue;
+    if (r.kind === "skill" && (isSoftSkill(name) || isNotASkill(name))) continue;
     const req = { kind: r.kind, need: r.need, name, quote: quote2 };
+    if (r.kind === "skill") req.named = r.named === true;
     if (r.kind === "experience" && r.years > 0 && r.years < 40) req.years = Math.round(r.years);
     if (r.kind === "education" && r.degree !== "none") req.degree = r.degree;
     if (r.kind === "eligibility" && r.eligibility !== "none") req.eligibility = r.eligibility;
@@ -45494,10 +45620,12 @@ skills: for every requirement listed under the posting (R1, R2, ...), how the st
 - project: a project or course line uses it
 - listed: it is only named in their skills list or education
 - none: nothing in the student's lines shows it
-When a requirement accepts alternatives ("Figma or Sketch"), any one of them counts. Quote the student's words that name the skill itself.
+When a requirement accepts alternatives ("Figma or Sketch"), any one of them counts. For a tool or language by name (Python, Figma, Kafka), quote the student's words that name it: a line that does not name it does not show it. For a kind of work or a method (spreadsheets, user research, data pipelines), quote the line where they did it, whatever words it uses: a model built in Excel shows spreadsheets.
 experience: has the student done this kind of work? same (the same kind of role), related (a related kind), projects (only in projects or courses), none.
 education: does their degree, field and year fit what the posting asks? fits, close (a related field, or a year off), no, unsaid (the posting does not say).
-level: is the role at the student's level? at, below (below them), stretch (one step up), far (well above). The listing's own level, when it gives one, is shown as a hint.
+level: is the role at the student's level? at, below (below them), stretch (one step up), far (well above). The listing's own level, when it gives one, is shown as a hint. A minimum the person passes is at their level: a role that asks for "2+ years" is at the level of someone with five. Below is for a role plainly meant for people earlier on than they are (an internship or a new graduate programme for someone with years of full-time work, a junior role for a senior person).
+
+Quote the strongest line: when a job line shows the skill, quote the job line, not the skills list.
 
 Every answer other than none and unsaid needs two quotes: you, the exact words (at most 15) copied character for character from the student's lines, and posting, the exact words (at most 15) copied from that posting. An answer whose quote is not really in the text counts as the weakest answer, so leave a quote empty rather than invent one.
 
@@ -45531,8 +45659,13 @@ var lower = (a, b) => SKILL_ORDER.indexOf(a) < SKILL_ORDER.indexOf(b) ? a : b;
 function skillAlternatives(name) {
   const inner = /\(([^)]*)\)/.exec(name)?.[1];
   const outer = name.replace(/\([^)]*\)/g, " ");
-  const parts = [outer, ...inner ? [inner] : []].flatMap((p) => p.split(/\s+or\s+|\/|,|;|\s+and\s+/i));
-  return [...new Set(parts.map((p) => p.trim()).filter((p) => p.length > 0))];
+  const parts = [outer, ...inner ? [inner] : []].flatMap(splitSkillList);
+  return [...new Set(parts)];
+}
+function mustBeNamed(r) {
+  const alts = skillAlternatives(r.name);
+  if (alts.some(knownSkill)) return true;
+  return r.named === true;
 }
 function quoteNames(quote2, name) {
   const q = quote2.toLowerCase();
@@ -45550,6 +45683,16 @@ function wholeSentences(text4, max) {
   if (end > max * 0.25) return cut.slice(0, end + 1).replace(/;$/, ".");
   return "";
 }
+function namedEvidence(ev, name) {
+  const alts = skillAlternatives(name);
+  const find = (text4) => text4.split("\n").find((l) => !l.startsWith("Job: ") && alts.some((a) => skillShownIn(l, a)));
+  const clip3 = (l) => (l.length > 240 ? `${l.slice(0, 237).trimEnd()}...` : l).trim();
+  const work = find(ev.work);
+  if (work) return { answer: "work", line: clip3(work) };
+  const project = find(ev.project);
+  if (project) return { answer: "project", line: clip3(project) };
+  return find(ev.listed) ? { answer: "listed" } : { answer: "none" };
+}
 function whereSkill(ev, you) {
   if (verifyQuote(ev.work, you)) return "work";
   if (verifyQuote(ev.project, you)) return "project";
@@ -45560,6 +45703,31 @@ var label = (s, prefix) => {
   const m = new RegExp(`^\\s*${prefix}\\s*(\\d+)`, "i").exec(s);
   return m ? Number(m[1]) : void 0;
 };
+var folded = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function answersFor(roles, titles) {
+  const out = titles.map(() => void 0);
+  const used = /* @__PURE__ */ new Set();
+  for (const role of roles) {
+    const n = label(role.posting, "J");
+    if (n !== void 0 && n >= 1 && n <= titles.length && !out[n - 1]) {
+      out[n - 1] = role;
+      used.add(role);
+    }
+  }
+  for (const [i, title] of titles.entries()) {
+    if (out[i]) continue;
+    const want = folded(title);
+    const hit = want ? roles.find((r) => !used.has(r) && folded(r.posting).includes(want)) : void 0;
+    if (hit) {
+      out[i] = hit;
+      used.add(hit);
+    }
+  }
+  const left = roles.filter((r) => !used.has(r));
+  const open = out.flatMap((x, i) => x ? [] : [i]);
+  if (left.length === 1 && open.length === 1) out[open[0]] = left[0];
+  return out;
+}
 function settleAnswers(m, reqs, profile, ev, posting, job) {
   const skillReqs = reqs.filter((r) => r.kind === "skill");
   const byLabel = /* @__PURE__ */ new Map();
@@ -45574,9 +45742,16 @@ function settleAnswers(m, reqs, profile, ev, posting, job) {
     let you;
     if (a && a.answer !== "none") {
       const q = verifyQuote(ev.all, a.you);
-      if (q && quoteNames(q, r.name)) {
+      if (q && (!mustBeNamed(r) || quoteNames(q, r.name))) {
         answer = lower(a.answer, whereSkill(ev, q));
         if (answer !== "none") you = q;
+      }
+    }
+    if (mustBeNamed(r)) {
+      const best = namedEvidence(ev, r.name);
+      if (SKILL_ORDER.indexOf(best.answer) > SKILL_ORDER.indexOf(answer)) {
+        answer = best.answer;
+        you = best.line;
       }
     }
     if (answer === "none" && profile.skills.some((s) => skillAlternatives(r.name).some((alt) => showsSkill(s.name, alt))))
@@ -45656,7 +45831,11 @@ function matchOf(r, job, current) {
   } else if (current?.profile) match.roughFit = roughFitOf(job, current.profile);
   return match;
 }
-var withTimeout = (p, ms2) => Promise.race([p.catch(() => void 0), new Promise((r) => setTimeout(() => r(void 0), ms2))]);
+var LATER2 = Symbol("read later");
+var textNow = (p, ms2) => Promise.race([
+  p.catch((e) => e instanceof TextLater ? LATER2 : void 0),
+  new Promise((r) => setTimeout(() => r(LATER2), ms2))
+]);
 function listingText(j) {
   return [
     j.title,
@@ -45680,12 +45859,18 @@ async function readRows(s, deps, userId, stored2, rows, timeouts = ROLE_TIMEOUTS
   const access = await linkedinAccess(s, userId).catch(() => void 0);
   const net = netOf(s);
   const items = [];
+  const notes = /* @__PURE__ */ new Set();
   await Promise.all(
     rows.map(async (row) => {
       const jr = jobs.get(row.job_id);
       if (!jr) return;
       const job = jobOf2(jr);
-      const text4 = await withTimeout(deps.sources.text(s.db, net, job.id, access), timeouts.text);
+      const text4 = await textNow(deps.sources.text(s.db, net, job.id, access), timeouts.text);
+      if (text4 === LATER2) {
+        notes.add(NOT_READ_NOTE);
+        out.unread.push(await release(s.db, { row, job, posting: "", thin: true }, stored2));
+        return;
+      }
       const body = text4?.trim();
       const posting = body ? `${job.title}${job.team ? `
 Team: ${job.team}` : ""}
@@ -45697,7 +45882,6 @@ ${body}`.slice(0, POSTING_CHARS) : listingText(job);
   const ev = evidenceOf(profile);
   const batches = [];
   for (let i = 0; i < items.length; i += READ_BATCH2) batches.push(items.slice(i, i + READ_BATCH2));
-  const notes = /* @__PURE__ */ new Set();
   await Promise.all(
     batches.map(async (b) => {
       const reqNote = await requirementsFor(s, b, timeouts);
@@ -45720,14 +45904,13 @@ ${body}`.slice(0, POSTING_CHARS) : listingText(job);
         for (const it of ready) out.unread.push(await release(s.db, it, stored2));
         return;
       }
-      const byLabel = /* @__PURE__ */ new Map();
-      for (const role of r.data.roles) {
-        const n = label(role.posting, "J");
-        if (n !== void 0 && !byLabel.has(n)) byLabel.set(n, role);
-      }
+      const matched = answersFor(
+        r.data.roles,
+        ready.map((it) => it.job.title)
+      );
       for (const [i, it] of ready.entries()) {
-        let answered = byLabel.get(i + 1);
-        if (!answered && ready.length > 1) {
+        let answered = matched[i];
+        if (!answered) {
           const again = await s.claude.structured({
             task: "role_score",
             system: SCORE_SYSTEM,
@@ -45736,7 +45919,7 @@ ${body}`.slice(0, POSTING_CHARS) : listingText(job);
             userId,
             timeoutMs: timeouts.score
           });
-          if (again.ok) answered = again.data.roles[0];
+          if (again.ok) answered = answersFor(again.data.roles, [it.job.title])[0];
         }
         if (!answered) {
           out.failed++;
@@ -45835,7 +46018,24 @@ ${fence.wrap("posting", it.posting)}`,
       if (!r.ok) return "budgetExceeded" in r || "unconfigured" in r ? LIMIT_NOTE : NOT_READ_NOTE;
       const got = r.data.postings.find((p) => label(p.posting, "J") === 1) ?? r.data.postings[0];
       if (!got) return NOT_READ_NOTE;
-      const reqs = settleRequirements(it.posting, got.requirements);
+      let reqs = settleRequirements(it.posting, got.requirements);
+      if (reqs.length < THIN_BELOW && it.posting.length >= FULL_POSTING_CHARS) {
+        const second = makeFence();
+        const again = await s.claude.structured({
+          task: "role_requirements",
+          system: REQUIREMENTS_SYSTEM,
+          user: `${second.rule}
+
+J1: ${it.job.title} at ${it.job.companyName}
+${second.wrap("posting", it.posting)}`,
+          schema: reqSchema,
+          userId: null,
+          timeoutMs: timeouts.requirements
+        });
+        const more = again.ok ? again.data.postings.find((p) => label(p.posting, "J") === 1) ?? again.data.postings[0] : void 0;
+        const fuller = more ? settleRequirements(it.posting, more.requirements) : [];
+        if (fuller.length > reqs.length) reqs = fuller;
+      }
       await s.db.sql`
         update orbit_private.jobs set requirements = ${JSON.stringify(reqs)}::jsonb, requirements_hash = ${it.hash}
          where id = ${it.job.id}::uuid`;
@@ -45861,6 +46061,8 @@ async function claimRows(db2, userId, o) {
      where m.id in (
        select x.id from orbit.role_matches x
         where x.user_id = ${userId}::uuid and x.state = 'to_read' and x.status <> 'dismissed'
+          -- a role taken down since it was listed is not read: it has left the table
+          and not exists (select 1 from orbit_private.jobs j where j.id = x.job_id and j.closed_at is not null)
           and (${o.searchId ?? null}::uuid is null or x.search_id = ${o.searchId ?? null}::uuid)
           and (${o.ids ? 1 : 0}::int = 0 or x.id = any(${o.ids ?? []}::uuid[]))
           and (x.read_at is null or x.read_at < ${stale}::timestamptz)
@@ -45880,7 +46082,7 @@ async function latestSearch(db2, userId) {
   return r;
 }
 async function topup(s, deps, userId) {
-  const stored2 = await loadProfile(s.db, userId);
+  const stored2 = await confirmedProfile(s.db, userId);
   if (!stored2) return { listed: 0, read: 0 };
   const now = s.now();
   const left = READS_PER_DAY - await readsToday(s.db, userId, now);
