@@ -95,3 +95,15 @@ describe('verifyQuote', () => {
     expect(verifyQuote(text, 'hurn model', { wholeWord: true })).toBeUndefined();
   });
 });
+
+describe('a skill that plainly includes another', () => {
+  it('PostgreSQL shows SQL, pandas shows Python, never the other way', async () => {
+    const { showsSkill, skillShownIn } = await import('./skills');
+    expect(showsSkill('PostgreSQL', 'SQL')).toBe(true);
+    expect(showsSkill('pandas', 'Python')).toBe(true);
+    expect(showsSkill('SQL', 'PostgreSQL')).toBe(false);
+    expect(skillShownIn('Built reconciliation services in Go and PostgreSQL', 'SQL')).toBe(true);
+    expect(skillShownIn('Cleaned claims data with pandas', 'Python')).toBe(true);
+    expect(skillShownIn('Wrote the site in JavaScript', 'Java')).toBe(false);
+  });
+});

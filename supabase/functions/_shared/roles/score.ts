@@ -21,7 +21,7 @@ import { z } from 'zod/v4';
 import { capsFor, fitOf } from '../../../../packages/core/src/roles/fit.ts';
 import { levelAnswerOf } from '../../../../packages/core/src/roles/profileLevel.ts';
 import { verifyQuote } from '../../../../packages/core/src/roles/quote.ts';
-import { sameSkill, skillIn } from '../../../../packages/core/src/roles/skills.ts';
+import { showsSkill, skillShownIn } from '../../../../packages/core/src/roles/skills.ts';
 import type {
   EducationAnswer,
   ExperienceAnswer,
@@ -222,7 +222,7 @@ export function skillAlternatives(name: string): string[] {
 export function quoteNames(quote: string, name: string): boolean {
   const q = quote.toLowerCase();
   return skillAlternatives(name).some((alt) => {
-    if (skillIn(quote, alt)) return true;
+    if (skillShownIn(quote, alt)) return true;
     const words = alt
       .toLowerCase()
       .split(/[^a-z0-9+#]+/)
@@ -285,7 +285,11 @@ export function settleAnswers(
       }
     }
     // a skill on the student's chips that the lines do not show counts as listed, never as shown in work
-    if (answer === 'none' && profile.skills.some((s) => sameSkill(s.name, r.name))) answer = 'listed';
+    if (
+      answer === 'none' &&
+      profile.skills.some((s) => skillAlternatives(r.name).some((alt) => showsSkill(s.name, alt)))
+    )
+      answer = 'listed';
     return { name: r.name, need: r.need, answer, ...(you ? { you } : {}), posting: r.quote };
   });
 
@@ -347,9 +351,12 @@ export function reapply(
   return {
     ...answers,
     skills: answers.skills.map((s) =>
-      s.answer === 'none' && profile.skills.some((x) => sameSkill(x.name, s.name))
+      s.answer === 'none' &&
+      profile.skills.some((x) => skillAlternatives(s.name).some((alt) => showsSkill(x.name, alt)))
         ? { ...s, answer: 'listed' as SkillAnswer }
-        : s.answer === 'listed' && !s.you && !profile.skills.some((x) => sameSkill(x.name, s.name))
+        : s.answer === 'listed' &&
+            !s.you &&
+            !profile.skills.some((x) => skillAlternatives(s.name).some((alt) => showsSkill(x.name, alt)))
           ? { ...s, answer: 'none' as SkillAnswer }
           : s,
     ),
@@ -392,7 +399,7 @@ const placeMatch = (places: string[], wanted: string[]) =>
 export function roughFitOf(job: Job, profile: RoleProfile, text?: string): RoleMatch['roughFit'] {
   const where = `${job.title}\n${job.team ?? ''}\n${text ?? ''}`;
   const skills = profile.skills.map((s) => s.name);
-  const hits = skills.filter((s) => skillIn(where, s)).length;
+  const hits = skills.filter((s) => skillShownIn(where, s)).length;
   const share = skills.length ? Math.min(1, hits / Math.min(5, skills.length)) : 0;
   return {
     skills: Math.round(share * 100) / 100,

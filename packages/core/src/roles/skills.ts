@@ -193,3 +193,58 @@ export function uniqueSkills<T extends { name: string }>(skills: T[]): T[] {
   }
   return out;
 }
+
+/**
+ * Skills that plainly include another: a resume that names PostgreSQL shows SQL, pandas shows Python, React shows
+ * JavaScript. One direction only (SQL does not show PostgreSQL).
+ */
+const IMPLIES: [string[], string[]][] = [
+  [
+    [
+      'PostgreSQL',
+      'MySQL',
+      'SQLite',
+      'SQL Server',
+      'BigQuery',
+      'Snowflake',
+      'Redshift',
+      'Oracle SQL',
+      'T-SQL',
+    ],
+    ['SQL'],
+  ],
+  [
+    ['pandas', 'NumPy', 'Django', 'Flask', 'FastAPI', 'PyTorch', 'TensorFlow', 'scikit-learn', 'Jupyter'],
+    ['Python'],
+  ],
+  [['React', 'Vue', 'Angular', 'Node.js', 'Next.js', 'TypeScript', 'Svelte', 'Express'], ['JavaScript']],
+  [['Next.js', 'React Native'], ['React']],
+  [['Spring', 'Spring Boot'], ['Java']],
+  [['PyTorch', 'TensorFlow', 'scikit-learn', 'XGBoost', 'Keras'], ['Machine learning']],
+  [['Tableau', 'Power BI', 'Looker'], ['Data visualization']],
+  [['AWS', 'GCP', 'Azure'], ['Cloud']],
+  [['Kubernetes', 'Docker'], ['Containers']],
+  [['Figma', 'Sketch', 'Adobe XD'], ['Prototyping']],
+];
+const IMPLIED = new Map<string, Set<string>>();
+for (const [from, to] of IMPLIES)
+  for (const f of from) {
+    const k = canonicalSkill(f);
+    const set = IMPLIED.get(k) ?? new Set<string>();
+    for (const t of to) set.add(canonicalSkill(t));
+    IMPLIED.set(k, set);
+  }
+
+/** Whether having `have` shows `want`: the same skill, or one that plainly includes it. */
+export function showsSkill(have: string, want: string): boolean {
+  if (sameSkill(have, want)) return true;
+  return IMPLIED.get(canonicalSkill(have))?.has(canonicalSkill(want)) ?? false;
+}
+
+/** Whether `text` names the skill, or a skill that plainly includes it ("PostgreSQL" for SQL). */
+export function skillShownIn(text: string | undefined | null, skill: string): boolean {
+  if (skillIn(text, skill)) return true;
+  const want = canonicalSkill(skill);
+  for (const [k, set] of IMPLIED) if (set.has(want) && skillIn(text, TABLE[k]?.[0] ?? k)) return true;
+  return false;
+}
