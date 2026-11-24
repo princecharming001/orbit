@@ -46,9 +46,7 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     await expect(requested.getByTestId('friends-requested-count')).toHaveText('1');
     const row = requested.getByTestId('friends-requested-row');
     await expect(row.getByTestId('friends-requested-row-name')).toHaveText('noah.patel@cornell.edu');
-    await expect(row.getByTestId('friends-requested-row-line')).toHaveText(
-      'Invite emailed, not on Orbit yet',
-    );
+    await expect(row.getByTestId('friends-requested-row-line')).toHaveText('Emailed, not on Orbit yet');
     await expect(page.getByTestId('toasts')).toContainText(
       'Invite sent to noah.patel@cornell.edu from your Gmail.',
     );
