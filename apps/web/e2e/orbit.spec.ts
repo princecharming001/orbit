@@ -186,8 +186,10 @@ test.describe('Orbit demo flow', () => {
     await expect(card).toHaveCount(0);
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Drafts', level: 1 })).toBeVisible();
-    await page.getByRole('button', { name: /refresh/i }).click();
-    await expect(page.getByRole('button', { name: /refresh/i })).toBeEnabled();
+    // "Check now" reads for replies and rebuilds the day's cards; it is offered again once both are done
+    await page.getByTestId('replies-check-now').click();
+    await expect(page.getByTestId('toasts')).toContainText(/updated/i, { timeout: 20_000 });
+    await expect(page.getByTestId('replies-check-now')).toBeVisible();
     await expect(page.getByTestId('suggestion-confirm_intro')).toHaveCount(0);
   });
 
