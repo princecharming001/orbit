@@ -24,7 +24,7 @@ import { claudeReachable } from '../../integrations/anthropic';
 import { callApi, isServerUser } from '../../integrations/orbitApi';
 import { companyFacts, refreshFacets, refreshProfiles } from './data';
 import { loadWorld, type SearchWorld } from './docs';
-import { JUDGE_FIRST, judge, openQuestions } from './judge';
+import { JUDGE_FIRST, judge, openQuestions, SCREEN_MAX, screen } from './judge';
 import { lookupsFor, runLookups } from './lookup';
 
 export interface SearchRowView {
@@ -56,6 +56,10 @@ export interface SearchSet {
   judgedIds: Set<string>;
   judgeFailed: number;
   judgeUnavailable: boolean;
+  /** the first pass over a long list (judge.ts `screen`): how many people it looked at and how many it kept */
+  screened?: { of: number; kept: number };
+  /** more people passed the filters than could be read against the criteria, and the first pass could not be made */
+  screenFailed?: boolean;
   /** LinkedIn profiles read while the student waited (plan 33) */
   profilesRead: number;
   at: number;
@@ -157,12 +161,13 @@ function needsTouches(spec: QuerySpec): boolean {
 }
 
 /** The rows the judge should read next: likely first, then unchecked with a clue, in the order shown. */
-function toJudge(set: SearchSet, docs: Map<string, PersonDoc>, limit: number) {
+function toJudge(set: SearchSet, docs: Map<string, PersonDoc>, limit: number, only?: Set<string>) {
   const items: { doc: PersonDoc; questions: ReturnType<typeof openQuestions> }[] = [];
   for (const band of ['strong', 'likely', 'unchecked'] as const)
     for (const r of set.result.rows) {
       if (items.length >= limit) break;
       if (r.band !== band || set.judgedIds.has(r.id)) continue;
+      if (only && !only.has(r.id)) continue;
       const qs = openQuestions(r);
       const doc = docs.get(r.id);
       if (qs.length && doc) items.push({ doc, questions: qs });
@@ -179,9 +184,10 @@ async function judgeMore(
   world: SearchWorld,
   limit: number,
   signal?: AbortSignal,
+  only?: Set<string>,
 ): Promise<void> {
   const docs = new Map(world.docs.map((d) => [d.id, d]));
-  const items = toJudge(set, docs, limit);
+  const items = toJudge(set, docs, limit, only);
   if (!items.length) return;
   const out = await judge(set.userId, set.ask, items, signal, world.ctx.facts);
   for (const [id, m] of out.answers) {
@@ -192,6 +198,58 @@ async function judgeMore(
   for (const it of items) if (out.answers.has(it.doc.id)) set.judgedIds.add(it.doc.id);
   set.judgeFailed += out.failed;
   set.judgeUnavailable ||= !!out.unavailable;
+}
+
+/**
+ * The first pass, when the student's own criteria are must-haves and more people pass the filters than the reader
+ * reads closely: everyone is looked at in a line, and the close read goes to the ones with a reason to think they
+ * fit. The others are answered "not known" for those criteria, so nobody is listed on a check nobody made. Returns
+ * the people to read closely, or undefined when there was no pass to make (or it could not be made).
+ */
+async function firstPass(
+  set: SearchSet,
+  world: SearchWorld,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<Set<string> | undefined> {
+  const musts = (set.spec.criteria ?? [])
+    .map((c, i) => ({ text: c.text, key: `criterion:${i}`, must: (c.need ?? 'must') === 'must' }))
+    .filter((c) => c.must);
+  if (!musts.length) return undefined;
+  const open = set.result.rows.filter(
+    (r) =>
+      (r.band === 'strong' || r.band === 'likely') &&
+      !set.judgedIds.has(r.id) &&
+      r.checks.some((c) => c.unread && c.need === 'must'),
+  );
+  if (open.length <= limit) return undefined;
+  const docs = new Map(world.docs.map((d) => [d.id, d]));
+  const looked = open
+    .slice(0, SCREEN_MAX)
+    .map((r) => docs.get(r.id))
+    .filter((d): d is PersonDoc => !!d);
+  const pass = await screen(
+    set.userId,
+    set.ask,
+    musts.map((c) => c.text),
+    looked,
+    signal,
+  ).catch(() => undefined);
+  if (!pass) {
+    set.screenFailed = true;
+    return undefined;
+  }
+  const kept = pass.keep;
+  set.screened = { of: pass.looked.size, kept: kept.size };
+  for (const d of looked) {
+    // someone the pass never reached (a call failed) is not answered for: they stay unread
+    if (kept.has(d.id) || !pass.looked.has(d.id)) continue;
+    const m = set.judged.get(d.id) ?? new Map<string, JudgedAnswer>();
+    for (const c of musts) if (!m.has(c.key)) m.set(c.key, { answer: 'unknown' });
+    set.judged.set(d.id, m);
+    set.judgedIds.add(d.id);
+  }
+  return kept;
 }
 
 function rerun(
@@ -323,6 +381,8 @@ export async function runNetworkSearch(
     shown?: number;
     /** how many people the judge reads before the answer is shown (the table reads everyone it lists) */
     judgeFirst?: number;
+    /** look at a long list in a first pass, so the close read goes to the people who could fit (the table) */
+    screen?: boolean;
   } = {},
 ): Promise<SearchOutcome | SearchFailure> {
   const linted = lintSpec(input, { router: opts.caller === 'router' });
@@ -400,7 +460,9 @@ export async function runNetworkSearch(
     }
   }
   if (!world.ctx.noJudge) {
-    await judgeMore(set, world, opts.judgeFirst ?? JUDGE_FIRST, opts.signal);
+    const first = opts.judgeFirst ?? JUDGE_FIRST;
+    const only = opts.screen ? await firstPass(set, world, first, opts.signal) : undefined;
+    await judgeMore(set, world, first, opts.signal, only);
     rerun(set, world, lexical, onlyIds);
   }
   keep(set);

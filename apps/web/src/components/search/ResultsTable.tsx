@@ -1,4 +1,4 @@
-import { Check, Users } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { CriterionForm, ResultRow } from '../../engine/peopleSearch';
 import { Avatar, Button, cx, GmailLogo, LinkedInMark, PickCircle, Spinner } from '../../ui';
@@ -66,7 +66,8 @@ export function ResultsTable({
   /** the criteria could not be read against people: their header says so */
   unchecked?: boolean;
   picked: Set<string>;
-  onPick: (key: string, on: boolean) => void;
+  /** `range`: Shift was held, so everyone between the last row picked and this one goes the same way */
+  onPick: (key: string, on: boolean, range: boolean) => void;
   onPickAll: (on: boolean) => void;
   /** row key → the person they became */
   added: Record<string, string>;
@@ -75,9 +76,9 @@ export function ResultsTable({
   finding?: string;
   onFindEmail: (row: ResultRow) => void;
 }) {
-  const canPick = rows.filter((r) => r.recommendationId && !added[r.key]);
-  const allOn = canPick.length > 0 && canPick.every((r) => picked.has(r.key));
-  const someOn = canPick.some((r) => picked.has(r.key));
+  // every row can be picked, and none is picked until the student picks it
+  const allOn = rows.length > 0 && rows.every((r) => picked.has(r.key));
+  const someOn = rows.some((r) => picked.has(r.key));
   return (
     <TableBox data-testid="find-results">
       <Table>
@@ -89,7 +90,7 @@ export function ResultsTable({
                   checked={allOn}
                   mixed={someOn && !allOn}
                   onChange={onPickAll}
-                  label="Pick everyone new on this list"
+                  label="Pick everyone on this list"
                   size={18}
                   testId="find-pick-all"
                 />
@@ -105,12 +106,15 @@ export function ResultsTable({
               <Th
                 key={c.id}
                 wrap
-                className="min-w-[150px] max-w-[220px]"
+                className="w-[260px] min-w-[220px] max-w-[280px]"
                 title={unchecked ? 'Not checked yet: Orbit could not read each person against this.' : c.text}
                 data-testid="find-criterion-head"
               >
-                {c.text}
-                {c.need === 'nice' && <span className="ml-1 font-normal text-ink-3">(nice to have)</span>}
+                {/* two lines at most, the whole of it on hover: a long criterion does not make the header tall */}
+                <span className="line-clamp-2">{c.text}</span>
+                {c.need === 'nice' && (
+                  <span className="block text-[12px] font-normal text-ink-3">Nice to have</span>
+                )}
               </Th>
             ))}
             <Th className="w-px">
@@ -126,22 +130,19 @@ export function ResultsTable({
               <Tr key={r.key} data-testid="find-result" data-own={r.personId ? 'true' : 'false'}>
                 <Td>
                   <span className="flex items-center gap-3 min-w-0">
-                    {isNew ? (
-                      <PickCircle
-                        checked={picked.has(r.key)}
-                        onChange={(on) => onPick(r.key, on)}
-                        label={`Pick ${r.name}`}
-                        size={18}
-                        testId="find-pick"
-                      />
-                    ) : (
-                      <span
-                        className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center text-ink-3"
-                        title={r.personId ? 'Already in your Orbit' : 'Added'}
-                      >
-                        <Check size={13} />
-                      </span>
-                    )}
+                    <PickCircle
+                      checked={picked.has(r.key)}
+                      // the whole pick is read from the click, where Shift is known (a range pick)
+                      onChange={() => {}}
+                      onClick={(e) => {
+                        onPick(r.key, !picked.has(r.key), e.shiftKey);
+                        // Shift-click also extends the page's text selection: not wanted here
+                        if (e.shiftKey) window.getSelection()?.removeAllRanges();
+                      }}
+                      label={`Pick ${r.name}`}
+                      size={18}
+                      testId="find-pick"
+                    />
                     <Avatar name={r.name} src={r.photoUrl} id={personId} size={24} />
                     <span className="flex min-w-0 flex-col py-0.5 leading-tight">
                       {personId ? (
@@ -241,12 +242,21 @@ export function ResultsTable({
                 </Td>
                 <Td>
                   {r.company ? (
-                    <span className="flex items-center gap-2 min-w-0">
+                    // the company's page when the student has it; else who they know there, on the map
+                    <Link
+                      to={
+                        r.companyId
+                          ? `/companies/${r.companyId}`
+                          : `/map?reach=1&company=${encodeURIComponent(r.company)}`
+                      }
+                      className="group/co flex items-center gap-2 min-w-0"
+                      data-testid="find-company"
+                    >
                       <CompanyLogo name={r.company} size={16} decorative />
-                      <Clip title={r.company} max={170}>
+                      <Clip title={r.company} max={170} className="group-hover/co:underline">
                         {r.company}
                       </Clip>
-                    </span>
+                    </Link>
                   ) : null}
                 </Td>
                 <Td className="tabular-nums" data-testid="find-match">
@@ -254,7 +264,15 @@ export function ResultsTable({
                 </Td>
                 {r.checks.map((k) => (
                   <Td key={k.id} data-testid="find-check">
-                    <Thumb answer={k.answer} detail={k.evidence} testId="find-thumb" />
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Thumb answer={k.answer} detail={k.evidence} testId="find-thumb" />
+                      {/* the words the answer rests on, so a thumb is never taken on trust */}
+                      {k.evidence && (k.answer === 'yes' || k.answer === 'likely') ? (
+                        <Clip title={k.evidence} max={200} className="text-[12.5px] text-ink-3">
+                          {k.evidence.replace(/^"|"$/g, '')}
+                        </Clip>
+                      ) : null}
+                    </span>
                   </Td>
                 ))}
                 <Td className={cx('w-px', !isNew && !added[r.key] && 'text-right')}>

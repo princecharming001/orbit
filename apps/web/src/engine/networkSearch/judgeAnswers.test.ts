@@ -15,7 +15,7 @@ vi.mock('../../integrations/anthropic', async (orig) => ({
   llmSearchJudge: llm.judge,
 }));
 
-import { itemSaid, type JudgeItem, judge, questionSaid } from './judge';
+import { itemSaid, type JudgeItem, judge, questionSaid, SCREEN_BATCH, screen, screenLine } from './judge';
 
 const doc = (id: string, name: string, headline: string): PersonDoc =>
   ({
@@ -138,6 +138,127 @@ describe('the judge keeps the answers it is given', () => {
     const out = await judge('u1', 'investors', items.slice(0, 2));
     expect(out.failed).toBe(1);
     expect(out.answers.has('b')).toBe(false);
-    expect(out.answers.get('a')!.get('criterion:0')).toEqual({ answer: 'likely' });
+    // a likely to one of the student's own criteria with no words behind it is not an answer
+    expect(out.answers.get('a')!.get('criterion:0')).toEqual({ answer: 'unknown' });
+  });
+
+  it('a likely to a criterion stands only on words from the person’s own text', async () => {
+    llm.judge.mockResolvedValue({
+      people: [
+        {
+          person: 'P1',
+          answers: [
+            { question: 'Q1', answer: 'likely', quote: 'Greywater Capital' },
+            { question: 'Q2', answer: 'likely', quote: 'a seed fund everyone knows' },
+          ],
+        },
+      ],
+    });
+    const out = await judge('u1', 'investors', items.slice(0, 1));
+    expect(out.answers.get('a')!.get('criterion:0')).toEqual({
+      answer: 'likely',
+      quote: 'Greywater Capital',
+    });
+    // words that are not in their text: no thumb
+    expect(out.answers.get('a')!.get('criterion:1')).toEqual({ answer: 'unknown' });
+  });
+
+  it('a filter the reader is asked about keeps its likely without words (the rules already pointed that way)', async () => {
+    llm.judge.mockResolvedValue({
+      people: [{ person: 'P1', answers: [{ question: 'Q1', answer: 'likely', quote: null }] }],
+    });
+    const out = await judge('u1', 'investors', [
+      { doc: items[0]!.doc, questions: [{ key: 'position:0', text: 'investor or investing' }] },
+    ]);
+    expect(out.answers.get('a')!.get('position:0')).toEqual({ answer: 'likely' });
+  });
+
+  it('the reader is told a founder says nothing of what the company is worth, and how a known company may count', async () => {
+    llm.judge.mockResolvedValue({ people: [] });
+    await judge('u1', 'unicorn founders', items.slice(0, 1));
+    const system = llm.judge.mock.calls[0]![0] as string;
+    expect(system).toMatch(/only when every part holds/);
+    expect(system).toMatch(/Being a founder says nothing about what the company is worth/);
+    expect(system).toMatch(/answer likely, never yes, and quote the company's name/);
+    expect(system).toMatch(/A company you do not recognise is unknown/);
+  });
+});
+
+describe('the first pass over a long list', () => {
+  const many = Array.from({ length: SCREEN_BATCH + 5 }, (_, i) =>
+    doc(`p${i}`, `Person ${i}`, i === 3 ? 'Co-founder at PostHog' : `Founder at Tiny Co ${i}`),
+  );
+  const said = (call: unknown[]) =>
+    (call[1] as (w: (tag: string, t: string) => string) => string)((_t, t) => t);
+
+  it('one line a person, their work and never their name', () => {
+    const d = {
+      ...doc('a', 'Ada Quist', 'Building things'),
+      roles: [
+        { title: 'Co-founder', org: 'PostHog', current: true },
+        { title: 'Engineer', org: 'Arachnys', current: false },
+      ],
+    } as unknown as PersonDoc;
+    const line = screenLine(d);
+    expect(line).toBe('Co-founder at PostHog | before: Engineer at Arachnys | says: Building things');
+    expect(line).not.toMatch(/Ada|Quist/);
+  });
+
+  it('everyone is looked at, a batch a call; only the people picked go on', async () => {
+    llm.judge.mockImplementation(async (_s: string, build: unknown) => {
+      const text = (build as (w: (tag: string, t: string) => string) => string)((_t, t) => t);
+      return { keep: text.includes('P4: says: Co-founder at PostHog') ? ['P4'] : [] };
+    });
+    const kept = await screen(
+      'u1',
+      'unicorn founders',
+      ['Founded a company valued at over $1 billion'],
+      many,
+    );
+    expect(llm.judge).toHaveBeenCalledTimes(2);
+    expect([...kept!.keep]).toEqual(['p3']);
+    expect(kept!.looked.size).toBe(many.length);
+    const first = said(llm.judge.mock.calls[0]!);
+    expect(first).toContain('- Founded a company valued at over $1 billion');
+    expect(first).toContain(`P${SCREEN_BATCH}: `);
+    expect(first).not.toContain('Person 3');
+    expect(llm.judge.mock.calls[0]![0]).toMatch(
+      /A company you do not recognise is not a reason to pick someone/,
+    );
+  });
+
+  it('the same people and the same criteria are not looked at twice; new criteria are', async () => {
+    llm.judge.mockResolvedValue({ keep: ['P4'] });
+    const few = many.slice(0, 10);
+    expect([...(await screen('u1', 'x', ['Runs a robotics company'], few))!.keep]).toEqual(['p3']);
+    expect([...(await screen('u1', 'x', ['Runs a robotics company'], few))!.keep]).toEqual(['p3']);
+    expect(llm.judge).toHaveBeenCalledTimes(1);
+    await screen('u1', 'x', ['Works on batteries'], few);
+    expect(llm.judge).toHaveBeenCalledTimes(2);
+  });
+
+  it('a pass that could not be made says so, so nobody is left out on it', async () => {
+    llm.judge.mockResolvedValue(undefined);
+    expect(await screen('u1', 'x', ['Runs a robotics company'], many.slice(0, 5))).toBeUndefined();
+    llm.judge.mockRejectedValue(new Error('down'));
+    expect(await screen('u1', 'x', ['Works on batteries'], many.slice(0, 5))).toBeUndefined();
+  });
+
+  it('a call that failed looked at nobody: those people are not answered for, the others are', async () => {
+    llm.judge.mockResolvedValueOnce({ keep: [] }).mockResolvedValueOnce(undefined);
+    const pass = await screen('u1', 'x', ['Runs a robotics company'], many);
+    expect(pass!.looked.size).toBe(SCREEN_BATCH);
+    expect(pass!.looked.has(`p${SCREEN_BATCH}`)).toBe(false);
+    // asked again, only the people it did not reach are looked at
+    llm.judge.mockResolvedValue({ keep: ['P1'] });
+    const again = await screen('u1', 'x', ['Runs a robotics company'], many);
+    expect(llm.judge).toHaveBeenCalledTimes(3);
+    expect(again!.looked.size).toBe(many.length);
+    expect([...again!.keep]).toEqual([`p${SCREEN_BATCH}`]);
+  });
+
+  it('nothing to ask picks nobody and asks nothing', async () => {
+    expect((await screen('u1', 'x', [], many.slice(0, 5)))!.keep.size).toBe(0);
+    expect(llm.judge).not.toHaveBeenCalled();
   });
 });

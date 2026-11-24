@@ -27,6 +27,8 @@ vi.mock('./goals', async (orig) => ({
   activeGoals: async () => [],
 }));
 
+import { normalizeCompany } from '@orbit/core';
+import { db } from '../db/schema';
 import {
   barsOfScore,
   compareRows,
@@ -853,6 +855,135 @@ describe('one run: the network and beyond, as one list', () => {
     expect(r.rows[1]).toMatchObject({ title: 'VC Scout', company: undefined, lead: false });
     expect(r.rows[1]!.headline).toBe('Startup Banking @ Rho | VC Scout');
     expect(r.rows[0]).toMatchObject({ title: 'Investor', company: 'Anfa', lead: true });
+  });
+
+  describe('the student’s own criteria, when a reader was there to read people', () => {
+    beforeEach(() => {
+      llm.reachable = true;
+      src.searchPeople.mockResolvedValue({
+        ok: true,
+        value: { batchId: 'b', relaxed: [], unconfigured: [], results: [] },
+      });
+    });
+    afterEach(() => {
+      llm.reachable = false;
+    });
+    const mine = { ...asked, filters: { ...asked.filters, reach: 'mine' as const } };
+    const unread = { ...check('criterion:0', 'likely'), evidence: 'not checked yet', unread: true };
+    const readYes = {
+      ...check('criterion:0', 'likely'),
+      evidence: '"Co-founder at PostHog"',
+      source: 'judge',
+    };
+
+    it('"unicorn founders": a founder nobody read, and one the reader found nothing for, are not listed', async () => {
+      network([
+        row('p1', 'Ana Read', 'likely', [check('position:0', 'yes'), readYes]),
+        row('p2', 'Ben Unread', 'likely', [check('position:0', 'yes'), unread]),
+        row('p3', 'Cy Nothing', 'unchecked', [check('position:0', 'yes'), check('criterion:0', 'unknown')]),
+        row('p4', 'Di No', 'no', [check('position:0', 'yes'), check('criterion:0', 'no')]),
+        row('p5', 'Eve Other Job', 'unchecked', [
+          check('position:0', 'unknown'),
+          check('criterion:0', 'unknown'),
+        ]),
+      ]);
+      const r = await runPeopleSearch({ id: 'u1', school: '' }, mine);
+      expect(r.rows.map((x) => x.name)).toEqual(['Ana Read']);
+      // a likely is never a full match, and the column carries the words it rests on
+      expect(r.rows[0]!.match).toBeLessThanOrEqual(85);
+      expect(r.rows[0]!.checks).toEqual([
+        { id: asked.criteria[0]!.id, answer: 'likely', evidence: '"Co-founder at PostHog"' },
+      ]);
+      // the two who pass the filter and are held back for the criterion are counted; the no and the other job are not
+      expect(r.notes).toEqual([
+        '1 more of your people pass the filters, but nothing Orbit has on them says "Works at a venture capital firm". Make it a nice to have to list them too.',
+        'Orbit has not read 1 more of your people against "Works at a venture capital firm" yet. Search again to read more of them.',
+      ]);
+      expect(r.unchecked).toBe(false);
+      expect(net.runNetworkSearch.mock.calls[0]![2]).toMatchObject({ screen: true });
+    });
+
+    it('nobody confirmed: an empty table that says how many passed the filters', async () => {
+      network([
+        row('p2', 'Ben Unread', 'likely', [check('position:0', 'yes'), unread]),
+        row('p3', 'Cy Nothing', 'unchecked', [check('position:0', 'yes'), check('criterion:0', 'unknown')]),
+      ]);
+      const r = await runPeopleSearch({ id: 'u1', school: '' }, mine);
+      expect(r.rows).toEqual([]);
+      expect(r.notes[0]).toMatch(/^1 of your people pass the filters, but nothing Orbit has on them says/);
+      expect(r.notes[1]).toMatch(/^Orbit has not read 1 more of your people against/);
+    });
+
+    it('a nice-to-have nobody read is a dash that says so, never a thumb, and keeps the person listed', async () => {
+      const nice = form({ families: ['investing'], reach: 'mine' }, [
+        ['Works at a venture capital firm', 'nice'],
+      ]);
+      network([
+        row('p1', 'Ana Own', 'strong', [
+          check('position:0', 'yes'),
+          { ...check('criterion:0', 'likely', 'nice'), unread: true },
+        ]),
+      ]);
+      const r = await runPeopleSearch({ id: 'u1', school: '' }, nice);
+      expect(r.rows.map((x) => x.name)).toEqual(['Ana Own']);
+      expect(r.rows[0]!.checks).toEqual([
+        { id: nice.criteria[0]!.id, answer: 'unknown', evidence: 'Not checked yet' },
+      ]);
+      expect(r.notes).toEqual([]);
+    });
+  });
+
+  it('with no reader, a criterion nobody read is a dash too, and the filters decide who is listed', async () => {
+    network(
+      [
+        row('p1', 'Ana Own', 'likely', [
+          check('position:0', 'yes'),
+          { ...check('criterion:0', 'likely'), unread: true },
+        ]),
+      ],
+      { judgeUnavailable: true },
+    );
+    const r = await runPeopleSearch(
+      { id: 'u1', school: '' },
+      { ...asked, filters: { ...asked.filters, reach: 'mine' } },
+    );
+    expect(r.rows.map((x) => x.name)).toEqual(['Ana Own']);
+    expect(r.rows[0]!.checks[0]).toMatchObject({ answer: 'unknown', evidence: 'Not checked yet' });
+    expect(r.unchecked).toBe(true);
+  });
+
+  it('a company in the table links to its page in Orbit when the student has that company', async () => {
+    await db.organizations.bulkPut([
+      {
+        id: 'o-balderton',
+        userId: 'u1',
+        nameRaw: 'Balderton',
+        nameNormalized: normalizeCompany('Balderton'),
+      },
+    ] as never);
+    world.people.set('p1', { ...world.people.get('p1')!, currentOrganizationId: 'o-accel' } as never);
+    network([row('p1', 'Ana Own', 'strong', [check('position:0', 'yes'), check('criterion:0', 'yes')])]);
+    src.searchPeople.mockResolvedValue({
+      ok: true,
+      value: {
+        batchId: 'b',
+        relaxed: [],
+        unconfigured: [],
+        results: [sourced({ id: 'r1' }), sourced({ id: 'r2', name: 'Oz New', org: 'Nowhere Labs' })],
+      },
+    });
+    const r = await runPeopleSearch({ id: 'u1', school: '' }, asked);
+    const by = (n: string) => r.rows.find((x) => x.name === n)!;
+    expect(by('Ana Own').companyId).toBe('o-accel');
+    expect(by('Nia Out').companyId).toBe('o-balderton');
+    expect(by('Oz New').companyId).toBeUndefined();
+    world.people.set('p1', {
+      id: 'p1',
+      currentTitle: 'Partner',
+      currentOrganizationRaw: 'Accel',
+      linkedinUrl: 'https://li/p1',
+    } as never);
+    await db.organizations.clear();
   });
 
   it("joins both, the student's own first on a tie, and a known person found outside is listed once", async () => {

@@ -155,6 +155,7 @@ export function evaluateDoc(
       answer,
       signal: answer === 'unknown' ? (judged ? 'hint' : 'none') : undefined,
       source: judged ? 'judge' : undefined,
+      ...(judged ? {} : { unread: true }),
       evidence: judged
         ? judged.quote
           ? `"${judged.quote}"`

@@ -72,6 +72,11 @@ export interface Check {
   unsettled?: boolean;
   /** unsettled, and the words are in a longer line that more likely mentions the job than states it */
   mention?: boolean;
+  /**
+   * a criterion nobody has read this person against yet. Its "likely" only keeps the person in the running until a
+   * reader gets to them: it is not an answer, and nothing shown to the student may present it as one
+   */
+  unread?: boolean;
   /** the job the check rests on, as the person wrote it, when it is not the job in their title field */
   role?: { title?: string; org?: string; lead: boolean };
 }

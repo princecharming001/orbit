@@ -1,5 +1,7 @@
 import { Download, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { type FormEvent, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { createBatch } from '../../engine/batch';
 import {
   type CriterionForm,
   countFilters,
@@ -15,10 +17,32 @@ import {
 import { addSourced, findEmail } from '../../engine/sourcing';
 import { isServerUser } from '../../integrations/orbitApi';
 import { useSession } from '../../state/session';
+import { readView, useViewState, writeView } from '../../state/viewState';
 import { Button, cx, EmptyState, Spinner } from '../../ui';
 import { CriteriaDialog } from '../search/CriteriaDialog';
 import { FiltersDialog } from '../search/FiltersDialog';
 import { ResultsTable } from '../search/ResultsTable';
+
+/**
+ * One search in Find people: what was asked, what Orbit read it as, where the work stands and what came back. It is
+ * kept outside the component (state/viewState), so it is still there when the student comes back to the tab, by the
+ * tab itself or by the back button after opening someone, and a search that was still running goes on meanwhile and
+ * lands here.
+ */
+interface FindSession {
+  query: string;
+  form?: SearchForm;
+  phase: 'idle' | 'reading' | 'searching';
+  error?: string;
+  result?: PeopleSearchResult;
+  picked: Set<string>;
+  /** row key -> the person it was added as */
+  added: Record<string, string>;
+  /** counts the searches started: a slower one that finishes after a newer one began is dropped */
+  run: number;
+}
+const NO_SESSION: FindSession = { query: '', phase: 'idle', picked: new Set(), added: {}, run: 0 };
+const findKey = (userId: string) => `find-people:${userId}`;
 
 /**
  * Discover's "Find people" tab: one sentence says who, Orbit reads it into filters and criteria the student can open
@@ -27,37 +51,40 @@ import { ResultsTable } from '../search/ResultsTable';
  */
 export function FindPeople({ userId }: { userId: string }) {
   const { user } = useSession();
-  const [query, setQuery] = useState('');
-  const [form, setForm] = useState<SearchForm>();
-  const [phase, setPhase] = useState<'idle' | 'reading' | 'searching'>('idle');
-  const [error, setError] = useState<string>();
-  const [result, setResult] = useState<PeopleSearchResult>();
+  const key = findKey(userId);
+  const [session] = useViewState<FindSession>(key, NO_SESSION);
+  // the work below outlives this component, so it reads and writes the session by its key, never through a closure
+  const now = () => readView<FindSession>(key) ?? NO_SESSION;
+  const change = (part: Partial<FindSession> | ((s: FindSession) => Partial<FindSession>)) =>
+    writeView<FindSession>(
+      key,
+      (s) => ({ ...s, ...(typeof part === 'function' ? part(s) : part) }),
+      NO_SESSION,
+    );
+  const { query, form, phase, error, result, picked, added } = session;
+  const setQuery = (q: string) => change({ query: q });
+  const setError = (e: string | undefined) => change({ error: e });
+  const setPicked = (next: Set<string> | ((p: Set<string>) => Set<string>)) =>
+    change((s) => ({ picked: typeof next === 'function' ? next(s.picked) : next }));
   const [dialog, setDialog] = useState<'filters' | 'criteria'>();
-  const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [added, setAdded] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState<string>();
   const [addingMany, setAddingMany] = useState(false);
   const [finding, setFinding] = useState<string>();
-  // a slower search that finishes after a newer one started is dropped
-  const run = useRef(0);
   const busy = phase !== 'idle';
   const who = { id: userId, school: user?.school ?? '' };
 
   const search = async (next: SearchForm) => {
-    const mine = ++run.current;
-    setPhase('searching');
-    setError(undefined);
-    setPicked(new Set());
+    const mine = now().run + 1;
+    change({ run: mine, phase: 'searching', error: undefined, picked: new Set() });
     try {
       const r = await runPeopleSearch(who, next);
-      if (mine !== run.current) return;
-      setForm(r.form);
-      setResult(r);
+      if (mine !== now().run) return;
+      change({ form: r.form, result: r });
     } catch (e) {
-      if (mine === run.current)
-        setError(e instanceof Error ? e.message : 'The search did not finish. Try again.');
+      if (mine === now().run)
+        change({ error: e instanceof Error ? e.message : 'The search did not finish. Try again.' });
     } finally {
-      if (mine === run.current) setPhase('idle');
+      if (mine === now().run) change({ phase: 'idle' });
     }
   };
 
@@ -65,42 +92,48 @@ export function FindPeople({ userId }: { userId: string }) {
     e?.preventDefault();
     const ask = query.replace(/\s+/g, ' ').trim();
     if (!ask || busy) return;
-    const mine = ++run.current;
-    setPhase('reading');
-    setError(undefined);
+    const mine = now().run + 1;
+    change({ run: mine, phase: 'reading', error: undefined });
     const { form: read } = await interpretAsk(ask);
-    if (mine !== run.current) return;
+    if (mine !== now().run) return;
     await search(read);
   };
 
-  const patch = (rowKey: string, change: Partial<ResultRow>) =>
-    setResult((r) =>
-      r ? { ...r, rows: r.rows.map((x) => (x.key === rowKey ? { ...x, ...change } : x)) } : r,
+  const patch = (rowKey: string, part: Partial<ResultRow>) =>
+    change((s) =>
+      s.result
+        ? {
+            result: {
+              ...s.result,
+              rows: s.result.rows.map((x) => (x.key === rowKey ? { ...x, ...part } : x)),
+            },
+          }
+        : {},
     );
 
-  const add = async (rows: ResultRow[]) => {
-    const ids = rows.map((r) => r.recommendationId).filter((x): x is string => !!x);
-    if (!ids.length) return;
+  /** Adds people found outside to the student's Orbit; returns row key → the person they became. */
+  const add = async (rows: ResultRow[], keepPicked = false): Promise<Record<string, string> | undefined> => {
+    const todo = rows.filter((r) => r.recommendationId);
+    const ids = todo.map((r) => r.recommendationId!);
+    if (!ids.length) return {};
     setError(undefined);
     const r = await addSourced({ id: userId }, ids);
     if (!r.ok) {
       setError(r.message);
-      return;
+      return undefined;
     }
     // the server answers in the order asked
-    setAdded((a) => {
-      const next = { ...a };
-      rows.forEach((row, i) => {
-        const p = r.people[i];
-        if (p) next[row.key] = p.id;
-      });
-      return next;
+    const made: Record<string, string> = {};
+    todo.forEach((row, i) => {
+      const p = r.people[i];
+      if (p) made[row.key] = p.id;
     });
-    setPicked((p) => {
-      const next = new Set(p);
-      for (const row of rows) next.delete(row.key);
-      return next;
+    change((s) => {
+      const nextPicked = new Set(s.picked);
+      if (!keepPicked) for (const row of todo) nextPicked.delete(row.key);
+      return { added: { ...s.added, ...made }, picked: nextPicked };
     });
+    return made;
   };
 
   const lookUp = async (row: ResultRow) => {
@@ -149,7 +182,45 @@ export function FindPeople({ userId }: { userId: string }) {
   };
 
   const rows = result?.rows ?? [];
-  const pickedRows = rows.filter((r) => picked.has(r.key) && r.recommendationId && !added[r.key]);
+  const pickedAll = rows.filter((r) => picked.has(r.key));
+  // the picked people not in the student's Orbit yet
+  const pickedRows = pickedAll.filter((r) => r.recommendationId && !added[r.key]);
+  // the row a range pick starts from: the last one picked or unpicked by a plain click
+  const anchor = useRef<string | undefined>(undefined);
+  const pick = (key: string, on: boolean, range: boolean) => {
+    const from = range && anchor.current ? rows.findIndex((r) => r.key === anchor.current) : -1;
+    const to = rows.findIndex((r) => r.key === key);
+    setPicked((p) => {
+      const next = new Set(p);
+      const span =
+        from >= 0 && to >= 0 ? rows.slice(Math.min(from, to), Math.max(from, to) + 1) : [rows[to]!];
+      for (const r of span) {
+        if (!r) continue;
+        if (on) next.add(r.key);
+        else next.delete(r.key);
+      }
+      return next;
+    });
+    anchor.current = key;
+  };
+  const nav = useNavigate();
+  const [writing, setWriting] = useState(false);
+  /** Send to many with everyone picked: people found outside are added to the student's Orbit first. */
+  const writeToPicked = async () => {
+    if (!user || !pickedAll.length) return;
+    setWriting(true);
+    try {
+      const made = (await add(pickedRows, true)) ?? {};
+      const ids = pickedAll
+        .map((r) => made[r.key] ?? added[r.key] ?? r.personId)
+        .filter((x): x is string => !!x);
+      if (!ids.length) return;
+      const b = await createBatch(user, ids);
+      nav(`/send?batch=${b.id}`);
+    } finally {
+      setWriting(false);
+    }
+  };
   const nFilters = form ? countFilters(form.filters) : 0;
   const extras = form ? extraWords(form) : [];
   const toolButton =
@@ -212,11 +283,38 @@ export function FindPeople({ userId }: { userId: string }) {
           </div>
         )}
         <div className="ml-auto flex items-center gap-2">
+          {pickedAll.length > 0 && (
+            <span className="flex items-center gap-2 text-[13px] text-ink-3" data-testid="find-picked">
+              <span className="tabular-nums">{pickedAll.length} picked</span>
+              <button
+                type="button"
+                className="rounded px-1 underline decoration-line underline-offset-4 hover:text-ink"
+                onClick={() => {
+                  setPicked(new Set());
+                  anchor.current = undefined;
+                }}
+                data-testid="find-pick-clear"
+              >
+                Clear
+              </button>
+            </span>
+          )}
+          {pickedAll.length > 0 && (
+            <Button
+              size="sm"
+              disabled={writing || addingMany}
+              onClick={writeToPicked}
+              title="Write to everyone picked in Send to many"
+              data-testid="find-write-picked"
+            >
+              {writing ? <Spinner /> : null} Write to {pickedAll.length}
+            </Button>
+          )}
           {pickedRows.length > 0 && (
             <Button
               size="sm"
               variant="primary"
-              disabled={addingMany}
+              disabled={addingMany || writing}
               onClick={async () => {
                 setAddingMany(true);
                 try {
@@ -281,21 +379,11 @@ export function FindPeople({ userId }: { userId: string }) {
             criteria={form?.criteria ?? []}
             unchecked={result?.unchecked}
             picked={picked}
-            onPick={(key, on) =>
-              setPicked((p) => {
-                const next = new Set(p);
-                if (on) next.add(key);
-                else next.delete(key);
-                return next;
-              })
-            }
-            onPickAll={(on) =>
-              setPicked(
-                on
-                  ? new Set(rows.filter((r) => r.recommendationId && !added[r.key]).map((r) => r.key))
-                  : new Set(),
-              )
-            }
+            onPick={pick}
+            onPickAll={(on) => {
+              setPicked(on ? new Set(rows.map((r) => r.key)) : new Set());
+              anchor.current = undefined;
+            }}
             added={added}
             adding={adding}
             onAdd={async (row) => {

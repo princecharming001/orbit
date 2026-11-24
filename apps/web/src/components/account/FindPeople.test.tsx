@@ -18,6 +18,8 @@ import {
 const search = vi.hoisted(() => ({ interpretAsk: vi.fn(), runPeopleSearch: vi.fn() }));
 const sourcing = vi.hoisted(() => ({ findEmail: vi.fn(), addSourced: vi.fn() }));
 const hints = vi.hoisted(() => ({ suggestFilter: vi.fn() }));
+const batch = vi.hoisted(() => ({ createBatch: vi.fn() }));
+vi.mock('../../engine/batch', () => batch);
 vi.mock('../search/filterSuggest', () => hints);
 vi.mock('../../engine/peopleSearch', async (orig) => ({
   ...(await orig<typeof import('../../engine/peopleSearch')>()),
@@ -167,9 +169,11 @@ describe('Find people: the results table', () => {
     expect($('find-thumb', a!)!.getAttribute('aria-label')).toBe('Yes: Partner at Accel');
     expect($('result-path', a!)!.dataset.kind).toBe('direct');
     expect($('result-path-bars', a!)!.dataset.level).toBe('3');
-    // someone the student already has is never offered Add or a tick box
+    // someone the student already has is never offered Add; they can be picked like anyone, and start unpicked
     expect($('find-add', a!)).toBeNull();
-    expect($('find-pick', a!)).toBeNull();
+    expect(($('find-pick', a!) as HTMLInputElement).checked).toBe(false);
+    // the company opens its page in Orbit, or who the student knows there when Orbit has no page for it
+    expect($('find-company', a!)!.getAttribute('href')).toBe('/map?reach=1&company=Accel');
     // the new person: a path through someone warm, a dash where nothing is known, and Add
     expect(b!.dataset.own).toBe('false');
     expect($('find-name', b!)!.tagName).toBe('SPAN');
@@ -238,6 +242,84 @@ describe('Find people: the results table', () => {
     expect($('find-quiet')!.textContent).toContain('Not searched yet: Apollo.');
     expect($('find-outside-error')!.textContent).toBe('Orbit could not reach its server.');
     expect($('find-unchecked')).not.toBeNull();
+  });
+});
+
+describe('Find people: the search is still there after the page was away', () => {
+  const mount = () =>
+    act(async () => {
+      root.render(
+        <MemoryRouter>
+          <FindPeople userId="u1" />
+        </MemoryRouter>,
+      );
+    });
+  // leaving the tab or opening someone's page unmounts the component; coming back mounts a new one
+  const leave = () => {
+    act(() => root.unmount());
+    root = createRoot(host);
+  };
+
+  it('back from a profile, or back to the tab: the sentence, the rows, the picks and what was added', async () => {
+    sourcing.addSourced.mockResolvedValue({ ok: true, people: [{ id: 'p77' }] });
+    await searchFor([own, fresh, other]);
+    await click($('find-add', $$('find-result')[1]!));
+    await click($('find-pick', $$('find-result')[2]!));
+    expect(search.runPeopleSearch).toHaveBeenCalledTimes(1);
+
+    leave();
+    await mount();
+    // nothing is searched again: what was on the page is on the page
+    expect(search.runPeopleSearch).toHaveBeenCalledTimes(1);
+    expect(search.interpretAsk).toHaveBeenCalledTimes(1);
+    expect(($('find-query') as HTMLInputElement).value).toBe('seed investors');
+    expect($$('find-result').map((r) => $('find-name', r)?.textContent)).toEqual([
+      'Ana Own',
+      'Maya Chen',
+      'Leo Grant',
+    ]);
+    expect($('find-count')?.textContent).toBe('3 matches');
+    expect($('find-tools')).not.toBeNull();
+    expect($('find-open', $$('find-result')[1]!)?.getAttribute('href')).toBe('/people/p77');
+    expect($('find-add-picked')?.textContent).toContain('Add 1');
+  });
+
+  it('a search still running when the student left goes on, and its rows are there on return', async () => {
+    let finish: (r: PeopleSearchResult) => void = () => {};
+    search.runPeopleSearch.mockReturnValue(new Promise<PeopleSearchResult>((res) => (finish = res)));
+    await mount();
+    await type($('find-query') as HTMLInputElement, 'seed investors');
+    await click($('find-search'));
+    expect($('find-busy')).not.toBeNull();
+
+    // to "Your network" and back while it loads: still loading, the same search, not a second one
+    leave();
+    await mount();
+    expect($('find-busy')?.textContent).toMatch(/Searching/);
+    expect(($('find-query') as HTMLInputElement).value).toBe('seed investors');
+    expect(search.runPeopleSearch).toHaveBeenCalledTimes(1);
+
+    // it finishes while the page is away
+    leave();
+    await act(async () => finish(result([own, fresh])));
+    await mount();
+    expect($('find-busy')).toBeNull();
+    expect($$('find-result')).toHaveLength(2);
+    expect(search.runPeopleSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("one person's search is never shown to another", async () => {
+    await searchFor([own]);
+    leave();
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <FindPeople userId="u2" />
+        </MemoryRouter>,
+      );
+    });
+    expect(($('find-query') as HTMLInputElement).value).toBe('');
+    expect($$('find-result')).toHaveLength(0);
   });
 });
 
@@ -444,6 +526,72 @@ describe('Find people: adding and emails', () => {
     expect(sourcing.addSourced).toHaveBeenCalledWith({ id: 'u1' }, ['r1', 'r2']);
     expect($$('find-open').map((a) => a.getAttribute('href'))).toEqual(['/people/n1', '/people/n2']);
     expect($('find-add-picked')).toBeNull();
+  });
+
+  it('nobody starts picked, whoever they are; any row can be picked and the count says how many', async () => {
+    await searchFor([own, { ...own, key: 'p:p2', personId: 'p2', name: 'Bo Own', companyId: 'o1' }, fresh]);
+    expect($$('find-pick').map((b) => (b as HTMLInputElement).checked)).toEqual([false, false, false]);
+    expect(($('find-pick-all') as HTMLInputElement).checked).toBe(false);
+    expect($('find-picked')).toBeNull();
+    // nothing in the first column looks like a tick until the student makes one
+    expect($$('find-result').every((r) => r.querySelector('td svg.lucide-check') === null)).toBe(true);
+    expect($('find-company', $$('find-result')[1]!)!.getAttribute('href')).toBe('/companies/o1');
+    await click($$('find-pick')[0]!);
+    expect($$('find-pick').map((b) => (b as HTMLInputElement).checked)).toEqual([true, false, false]);
+    expect($('find-picked')!.textContent).toContain('1 picked');
+    // someone already in Orbit is never offered Add, picked or not
+    expect($('find-add-picked')).toBeNull();
+    await click($('find-pick-clear'));
+    expect($$('find-pick').map((b) => (b as HTMLInputElement).checked)).toEqual([false, false, false]);
+  });
+
+  it('Shift-click picks everyone from the last row clicked to this one, and unpicks a range the same way', async () => {
+    const five = ['a', 'b', 'c', 'd', 'e'].map(
+      (k): ResultRow => ({ ...own, key: `p:${k}`, personId: k, name: `Person ${k.toUpperCase()}` }),
+    );
+    await searchFor(five);
+    const picks = () => $$('find-pick').map((b) => (b as HTMLInputElement).checked);
+    const shiftClick = (el: Element) =>
+      act(async () => {
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }));
+      });
+    await click($$('find-pick')[1]!);
+    await shiftClick($$('find-pick')[3]!);
+    expect(picks()).toEqual([false, true, true, true, false]);
+    expect($('find-picked')!.textContent).toContain('3 picked');
+    // upward works too, from the row last clicked
+    await shiftClick($$('find-pick')[0]!);
+    expect(picks()).toEqual([true, true, true, true, false]);
+    // a Shift-click on a picked row unpicks the range back to the last one clicked, that one included
+    await click($$('find-pick')[4]!);
+    await shiftClick($$('find-pick')[2]!);
+    expect(picks()).toEqual([true, true, false, false, false]);
+    // the box in the header picks everyone, then no one
+    await click($('find-pick-all'));
+    expect(picks()).toEqual([true, true, true, true, true]);
+    await click($('find-pick-all'));
+    expect(picks()).toEqual([false, false, false, false, false]);
+  });
+
+  it('Write to the picked: new people are added first, and everyone goes to Send to many in the order shown', async () => {
+    sourcing.addSourced.mockResolvedValue({ ok: true, people: [{ id: 'n1', displayName: 'Maya Chen' }] });
+    batch.createBatch.mockResolvedValue({ id: 'b7' });
+    await searchFor([own, fresh, other]);
+    await click($$('find-pick')[0]!);
+    await click($$('find-pick')[1]!);
+    expect($('find-write-picked')!.textContent).toContain('Write to 2');
+    await click($('find-write-picked'));
+    expect(sourcing.addSourced).toHaveBeenCalledWith({ id: 'u1' }, ['r1']);
+    expect(batch.createBatch).toHaveBeenCalledWith({ id: 'u1', school: 'Berkeley' }, ['p1', 'n1']);
+  });
+
+  it('Write to the picked stops when a new person could not be added, and says why', async () => {
+    sourcing.addSourced.mockResolvedValue({ ok: false, message: 'Orbit could not add them just now.' });
+    await searchFor([fresh]);
+    await click($$('find-pick')[0]!);
+    await click($('find-write-picked'));
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe('Orbit could not add them just now.');
+    expect(batch.createBatch).not.toHaveBeenCalled();
   });
 
   it('a failed add says why and leaves the row as it was', async () => {
