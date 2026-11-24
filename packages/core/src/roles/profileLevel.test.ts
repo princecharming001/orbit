@@ -17,6 +17,10 @@ describe('yearMonth', () => {
     expect(yearMonth('May 2027')).toBe('2027-05');
     expect(yearMonth('Sept. 2024')).toBe('2024-09');
     expect(yearMonth('5/2027')).toBe('2027-05');
+    // LinkedIn through Unipile: month/day/year
+    expect(yearMonth('6/1/2026')).toBe('2026-06');
+    expect(yearMonth('11/3/2019')).toBe('2019-11');
+    expect(yearMonth('13/1/2019')).toBeUndefined();
     expect(yearMonth('Spring 2027')).toBe('2027-05');
     expect(yearMonth('2027')).toBe('2027-05');
     expect(yearMonth('Present')).toBeUndefined();
