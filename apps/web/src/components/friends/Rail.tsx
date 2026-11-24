@@ -5,7 +5,7 @@
  * that says only what the server knows. Flat sections on white space: no cards, no rules between them.
  */
 import type { Friend, FriendInvite } from '@orbit/core';
-import { Check, Link2 } from 'lucide-react';
+import { Check, Link2, Mail } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar, Button, cx, Skeleton, useToast } from '../../ui';
 import { NameLink } from './Discover';
@@ -60,6 +60,8 @@ function PersonRow({
   onPhoto,
   photoLabel,
   children,
+  tone,
+  address,
 }: {
   name: string;
   photo?: string | null;
@@ -75,8 +77,24 @@ function PersonRow({
   photoLabel?: string;
   /** actions under the line (Accept, Decline) */
   children?: ReactNode;
+  /** a dot before the line: waiting on the student (amber), on its way (green), nothing to do (grey) */
+  tone?: 'wait' | 'ok' | 'idle';
+  /** someone known only by an address: a quiet mail tile, and the address with its domain set back */
+  address?: boolean;
 }) {
-  const picture = <Avatar name={name} src={photo ?? undefined} id={seed} size={PHOTO} shape="square" />;
+  const picture = address ? (
+    <span
+      data-shape="square"
+      className="flex shrink-0 items-center justify-center rounded-[12px] border border-line-2 bg-canvas-2 text-ink-3"
+      style={{ width: PHOTO, height: PHOTO }}
+      aria-hidden
+    >
+      <Mail className="h-5 w-5" strokeWidth={1.5} />
+    </span>
+  ) : (
+    <Avatar name={name} src={photo ?? undefined} id={seed} size={PHOTO} shape="square" />
+  );
+  const at = address ? name.indexOf('@') : -1;
   return (
     <li className="flex items-center gap-3.5 min-w-0" data-testid={testId}>
       {onPhoto ? (
@@ -102,10 +120,29 @@ function PersonRow({
           )}
           testId={`${testId}-name`}
         >
-          {name}
+          {at > 0 ? (
+            <>
+              {name.slice(0, at)}
+              <span className="font-normal text-ink-3">{name.slice(at)}</span>
+            </>
+          ) : (
+            name
+          )}
         </NameLink>
-        <div className="mt-0.5 text-[13.5px] leading-snug text-ink-3 truncate" data-testid={`${testId}-line`}>
-          {line}
+        <div
+          className="mt-1 flex min-w-0 items-center gap-1.5 text-[13px] leading-snug text-ink-3"
+          data-testid={`${testId}-line`}
+        >
+          {tone && (
+            <span
+              aria-hidden
+              className={cx(
+                'h-1.5 w-1.5 shrink-0 rounded-full',
+                tone === 'wait' ? 'bg-[#d9a441]' : tone === 'ok' ? 'bg-[#5fa777]' : 'bg-[#c9c5be]',
+              )}
+            />
+          )}
+          <span className="truncate">{line}</span>
         </div>
         {children}
       </div>
@@ -339,8 +376,15 @@ export function RequestsSection({
 export function requestedLine(i: FriendInvite): string {
   if (i.name) return 'Request sent';
   // an invite nobody was emailed is not "invited" yet: the student still has to pass the link on
-  if (i.emailed === false) return 'Not emailed yet: send them your invite link';
-  return i.emailed ? 'Invite emailed, not on Orbit yet' : 'Invited, not on Orbit yet';
+  if (i.emailed === false) return 'Not emailed yet, share your link';
+  return i.emailed ? 'Emailed, not on Orbit yet' : 'Invited, not on Orbit yet';
+}
+
+/** The dot beside that line: amber while it waits on the student, green once the invite went out. */
+export function requestedTone(i: FriendInvite): 'wait' | 'ok' | 'idle' {
+  if (i.name) return 'idle';
+  if (i.emailed === false) return 'wait';
+  return i.emailed ? 'ok' : 'idle';
 }
 
 /** Requests the student sent that nobody has answered yet. */
@@ -373,6 +417,8 @@ export function RequestedSection({ pending }: { pending: FriendInvite[] }) {
             to={i.personId ? `/people/${i.personId}` : undefined}
             href={i.linkedinUrl}
             line={requestedLine(i)}
+            tone={requestedTone(i)}
+            address={!i.name && !i.avatarUrl && !!i.email}
             testId="friends-requested-row"
           />
         ))}

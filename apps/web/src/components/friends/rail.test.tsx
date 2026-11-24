@@ -12,6 +12,7 @@ import {
   RequestedSection,
   RequestsSection,
   requestedLine,
+  requestedTone,
 } from './Rail';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -243,7 +244,8 @@ describe('Requested', () => {
     ]);
     expect(section.textContent).not.toContain('Priya Shah');
     expect(section.textContent).not.toMatch(DASH_OR_BANG);
-    // a photo when they have one, their initials on a colour when not; square with rounded corners either way
+    // a photo when they have one, their initials on a colour when not, a quiet mail tile for an address alone;
+    // square with rounded corners either way
     const [jordan, marcus] = rows;
     expect(jordan!.querySelector('img')!.getAttribute('src')).toBe(PHOTO);
     expect(marcus!.querySelector('img')).toBeNull();
@@ -280,11 +282,14 @@ describe('Requested', () => {
     expect(requestedLine(invite('b', { email: 'noah@example.org' }))).toBe('Invited, not on Orbit yet');
     // whether the email went out is said when it is known: an invite nobody was emailed is not "invited" yet
     expect(requestedLine(invite('c', { email: 'noah@example.org', emailed: true }))).toBe(
-      'Invite emailed, not on Orbit yet',
+      'Emailed, not on Orbit yet',
     );
     expect(requestedLine(invite('d', { email: 'noah@example.org', emailed: false }))).toBe(
-      'Not emailed yet: send them your invite link',
+      'Not emailed yet, share your link',
     );
+    expect(requestedTone(invite('d', { email: 'noah@example.org', emailed: false }))).toBe('wait');
+    expect(requestedTone(invite('c', { email: 'noah@example.org', emailed: true }))).toBe('ok');
+    expect(requestedTone(invite('a', { name: 'Jordan Ellis' }))).toBe('idle');
   });
 });
 
