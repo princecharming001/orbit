@@ -561,9 +561,7 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     // the row says picking him adds him to People, so the add is the student's choice
     await expect(result.getByTestId('map-linkedin-add')).toHaveText(/Add$/);
     await result.dispatchEvent('mousedown');
-    await expect(page.getByTestId('toasts')).toContainText(
-      'Added Kenji Watanabe to People, saved to contact.',
-    );
+    await expect(page.getByTestId('toasts')).toContainText('Saved Kenji Watanabe to People.');
     // never "No route found" for him: the routes go through the people LinkedIn says know him
     const route = page.getByTestId('reach-path').first();
     await expect(route).toBeVisible({ timeout: 30_000 });

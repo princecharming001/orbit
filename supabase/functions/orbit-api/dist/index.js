@@ -20929,6 +20929,83 @@ async function linkedinSend(s, p) {
     memberId: member
   };
 }
+var FIRST_DEGREE = /^(first_degree|distance_1|1)$/i;
+function inviteRefusal(status4, body2) {
+  const o = body2 && typeof body2 === "object" ? body2 : {};
+  const said = [o.type, o.title, o.detail, o.message].filter((x) => typeof x === "string").join(" ").toLowerCase();
+  if (/already[_ ]invited|already (sent|pending)|invitation (is )?(already|pending)/.test(said))
+    return "linkedin_already_invited";
+  if (/already[_ ]connected|is_relationship|already a (connection|relation)/.test(said))
+    return "linkedin_already_connected";
+  if (status4 === 429 || /cannot_resend|limit[_ ](exceeded|reached)|too[_ ]many|quota/.test(said))
+    return "linkedin_invite_limit";
+  if (status4 === 404 || /not_found|not found|invalid_recipient/.test(said)) return "no_linkedin_member";
+  return `unipile_${status4}`;
+}
+async function linkedinInvite(s, p) {
+  const base2 = (s.env.unipileBase ?? "").replace(/\/+$/, "");
+  if (!s.env.unipileKey || !base2) return { ok: false, retry: false, error: "unipile_unconfigured" };
+  const headers2 = { "X-API-KEY": s.env.unipileKey, accept: "application/json" };
+  const note2 = p.note?.trim() ?? "";
+  if (note2.length > LINKEDIN_NOTE_MAX2) return { ok: false, retry: false, error: "linkedin_note_too_long" };
+  let member = p.memberId ?? void 0;
+  if (!member && p.slug) {
+    if (s.targetTake && !(await s.targetTake(p.accountId, p.slug, "connect")).allowed)
+      return { ok: false, retry: true, error: "linkedin_busy" };
+    let res2;
+    try {
+      res2 = await s.fetch(
+        `${base2}/api/v1/users/${encodeURIComponent(p.slug)}?account_id=${encodeURIComponent(p.accountId)}&notify=false`,
+        { method: "GET", headers: headers2, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }
+      );
+    } catch {
+      return { ok: false, retry: true, error: "network" };
+    }
+    if (res2.status === 429 || res2.status >= 500) {
+      await res2.body?.cancel();
+      return { ok: false, retry: true, error: `unipile_${res2.status}` };
+    }
+    if (res2.ok) {
+      const j = await res2.json().catch(() => ({}));
+      member = j.provider_id || void 0;
+      if (member && (j.is_relationship === true || FIRST_DEGREE.test(String(j.network_distance ?? ""))))
+        return { ok: false, retry: false, error: "linkedin_already_connected", memberId: member };
+      if (member && String(j.invitation?.type ?? "").toUpperCase() === "SENT" && String(j.invitation?.status ?? "").toUpperCase() === "PENDING")
+        return { ok: false, retry: false, error: "linkedin_already_invited", memberId: member };
+    } else await res2.body?.cancel();
+  }
+  if (!member) return { ok: false, retry: false, error: "no_linkedin_member" };
+  const stop = await p.beforeInvite?.();
+  if (stop) return { ok: false, retry: false, error: stop, memberId: member };
+  let res;
+  try {
+    res = await s.fetch(`${base2}/api/v1/users/invite`, {
+      method: "POST",
+      headers: { ...headers2, "content-type": "application/json" },
+      body: JSON.stringify({
+        account_id: p.accountId,
+        provider_id: member,
+        ...note2 ? { message: note2 } : {}
+      }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+    });
+  } catch {
+    return { ok: false, retry: true, error: "network", ambiguous: true, memberId: member };
+  }
+  if (res.status >= 500) {
+    await res.body?.cancel();
+    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: true, memberId: member };
+  }
+  if (!res.ok)
+    return {
+      ok: false,
+      retry: false,
+      error: inviteRefusal(res.status, await res.json().catch(() => ({}))),
+      memberId: member
+    };
+  const b = await res.json().catch(() => ({}));
+  return { ok: true, invitationId: b.invitation_id ?? null, memberId: member };
+}
 
 // supabase/functions/_shared/sending/send.ts
 var LINKEDIN_CONFIRM_MS = 15 * 6e4;
@@ -39479,6 +39556,24 @@ function socialPatternRoute(path) {
   return void 0;
 }
 
+// packages/core/src/server/api.ts
+var SOURCE_CONNECT_REASONS = {
+  already_requested: "You already sent them a connection request. Saved to People.",
+  already_connected: "You are already connected on LinkedIn. Saved to People.",
+  no_profile: "Orbit has no LinkedIn profile for them. Saved to People instead.",
+  profile_not_found: "LinkedIn could not find their profile. Saved to People instead.",
+  linkedin_not_active: "LinkedIn is not connected. Saved to People instead.",
+  daily_limit: "Today's limit on connection requests is reached. Saved to People instead.",
+  weekly_limit: "LinkedIn's weekly limit on connection requests is reached. Saved to People instead.",
+  linkedin_limit: "LinkedIn says you have reached its limit on connection requests. Saved to People instead.",
+  do_not_contact: "They asked not to be contacted, so no request was sent. Saved to People.",
+  minor: "Their profile reads as someone under 18, so no request was sent. Saved to People.",
+  busy: "LinkedIn is busy just now, so no request was sent. Saved to People instead.",
+  unconfirmed: "LinkedIn did not confirm the request. Saved to People. Check their profile on LinkedIn before trying again.",
+  refused: "LinkedIn would not take the request. Saved to People instead.",
+  unavailable: "Orbit cannot send connection requests right now. Saved to People instead."
+};
+
 // supabase/functions/_shared/sourcing/run.ts
 import Anthropic2 from "npm:@anthropic-ai/sdk@0.133.0";
 
@@ -41893,6 +41988,189 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
   return { student, warm, known, orgDomains, connections };
 }
 
+// supabase/functions/_shared/sourcing/connect.ts
+var NOT_ACTIVE = {
+  parked: "LinkedIn is paused because you were away. Saved to People instead.",
+  needs_reauth: "LinkedIn signed Orbit out. Saved to People instead.",
+  connecting: "LinkedIn is still connecting. Saved to People instead.",
+  error: "LinkedIn stopped working with Orbit. Saved to People instead."
+};
+function codeOf(error) {
+  switch (error) {
+    case "linkedin_invite_daily_cap":
+      return "daily_limit";
+    case "linkedin_invite_weekly_cap":
+      return "weekly_limit";
+    case "linkedin_invite_limit":
+      return "linkedin_limit";
+    case "linkedin_already_invited":
+      return "already_requested";
+    case "linkedin_already_connected":
+      return "already_connected";
+    case "no_linkedin_member":
+      return "profile_not_found";
+    case "linkedin_busy":
+    case "network":
+      return "busy";
+    case "unipile_unconfigured":
+      return "unavailable";
+    default:
+      return /^unipile_(429|5\d\d)$/.test(error) ? "busy" : "refused";
+  }
+}
+async function connectSourced(s, userId, who) {
+  const db2 = s.db;
+  const now = s.now();
+  if (!who.recommendationId === !who.personId)
+    throw new HttpError(400, "bad_request", "send one of recommendationId or personId");
+  let person2;
+  let found = {};
+  if (who.recommendationId) {
+    const { people } = await addSourced(s, userId, [who.recommendationId]);
+    person2 = people[0];
+    const [rec] = await db2.sql`
+      select candidate from orbit.recommendations
+       where id = ${who.recommendationId}::uuid and user_id = ${userId}::uuid`;
+    found = { memberId: rec?.candidate?.memberId, degree: rec?.candidate?.networkDistance };
+  } else {
+    const [p2] = await db2.sql`
+      select q.id, q.display_name
+        from orbit.people p join orbit.people q on q.id = coalesce(p.merged_into, p.id)
+       where p.id = ${who.personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null
+         and q.deleted_at is null and not q.is_self`;
+    if (!p2)
+      throw new HttpError(404, "person_not_found", "Orbit does not have this person on your account yet");
+    const [open] = await db2.sql`
+      select id from orbit.chats
+       where user_id = ${userId}::uuid and person_id = ${p2.id}::uuid and archived_at is null
+       order by created_at desc limit 1`;
+    person2 = {
+      id: p2.id,
+      displayName: p2.display_name,
+      chatId: open?.id ?? await ensureChat(db2, userId, p2.id, null, now)
+    };
+  }
+  const saved = (code, reason2 = SOURCE_CONNECT_REASONS[code]) => ({
+    person: person2,
+    sent: false,
+    code,
+    reason: reason2
+  });
+  const [p] = await db2.sql`
+    select id, display_name, title, headline, do_not_contact, linkedin_member_id, linkedin_slug, linkedin_connected_on
+      from orbit.people where id = ${person2.id}::uuid and user_id = ${userId}::uuid`;
+  if (!p) throw new HttpError(404, "person_not_found", "Orbit does not have this person on your account yet");
+  if (p.do_not_contact) return saved("do_not_contact");
+  if (looksLikeMinor({ title: p.title ?? void 0, headline: p.headline ?? void 0 }))
+    return saved("minor");
+  const memberId = p.linkedin_member_id ?? found.memberId ?? null;
+  if (!memberId && !p.linkedin_slug) return saved("no_profile");
+  if (p.linkedin_connected_on || found.degree === 1) return saved("already_connected");
+  const targets = [
+    ...p.linkedin_slug ? [`in:${p.linkedin_slug.trim().toLowerCase()}`] : [],
+    ...memberId ? [`id:${memberId}`] : []
+  ];
+  const target = targets[0];
+  const [had] = await db2.sql`
+    select status, created_at from orbit.linkedin_connects
+     where user_id = ${userId}::uuid and (person_id = ${p.id}::uuid or target = any(${targets}::text[]))
+     order by (status = 'sent') desc limit 1`;
+  if (had) {
+    const stuck = had.status === "sending" && now.getTime() - new Date(had.created_at).getTime() > STUCK_SENDING_MS;
+    return saved(had.status === "unconfirmed" || stuck ? "unconfirmed" : "already_requested");
+  }
+  const [acct] = await db2.sql`
+    select external_account_id, status from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (acct?.status !== "active" || !acct.external_account_id)
+    return saved("linkedin_not_active", acct && NOT_ACTIVE[acct.status] || void 0);
+  const cap = await inviteCapReached(db2, userId, now);
+  if (cap) return saved(codeOf(cap));
+  const [claim] = await db2.sql`
+    insert into orbit.linkedin_connects (user_id, target, person_id, status, created_at)
+    values (${userId}::uuid, ${target}, ${p.id}::uuid, 'sending', ${now}::timestamptz)
+    on conflict (user_id, target) do nothing
+    returning target`;
+  if (!claim) return saved("already_requested");
+  const mark = (status4, invitationId = null) => db2.sql`
+      update orbit.linkedin_connects
+         set status = ${status4}, invitation_id = ${invitationId},
+             sent_at = ${status4 === "sent" ? now : null}::timestamptz
+       where user_id = ${userId}::uuid and target = ${target}`;
+  const release2 = () => db2.sql`
+      delete from orbit.linkedin_connects
+       where user_id = ${userId}::uuid and target = ${target} and status = 'sending'`;
+  let out;
+  try {
+    out = await linkedinInvite(s, {
+      accountId: acct.external_account_id,
+      memberId,
+      slug: p.linkedin_slug,
+      // asked again just before the request goes, as for a draft sent as a request
+      beforeInvite: () => inviteCapReached(db2, userId, now)
+    });
+  } catch (e) {
+    await release2().catch(() => void 0);
+    throw e;
+  }
+  if (out.memberId && !p.linkedin_member_id)
+    await db2.sql`
+      update orbit.people set linkedin_member_id = ${out.memberId}
+       where id = ${p.id}::uuid and linkedin_member_id is null`.catch(() => void 0);
+  if (!out.ok) {
+    if (out.ambiguous) {
+      await mark("unconfirmed");
+      await audit3(s, userId, "linkedin.invite_unconfirmed", p.id, {
+        error: out.error,
+        chatId: person2.chatId
+      });
+      return saved("unconfirmed");
+    }
+    const code = codeOf(out.error);
+    if (code === "already_requested") await mark("sent");
+    else await release2();
+    await audit3(s, userId, "linkedin.invite_refused", p.id, {
+      error: out.error,
+      code,
+      chatId: person2.chatId
+    });
+    return saved(
+      code,
+      code === "already_requested" ? "LinkedIn says you already have a connection request out to them. Saved to People." : void 0
+    );
+  }
+  await mark("sent", out.invitationId);
+  await audit3(s, userId, "linkedin.invite", p.id, {
+    at: iso(now),
+    via: "source.connect",
+    note: false,
+    chatId: person2.chatId,
+    ...who.recommendationId ? { recommendationId: who.recommendationId } : {},
+    ...out.invitationId ? { invitationId: out.invitationId } : {}
+  });
+  await afterRequest(s, userId, person2.chatId, now);
+  return { person: person2, sent: true };
+}
+async function audit3(s, userId, action, personId, details) {
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', ${action}, 'people', ${personId}, ${details}::jsonb)`;
+}
+async function afterRequest(s, userId, chatId, now) {
+  const db2 = s.db;
+  const [c] = await db2.sql`
+    select stage, data from orbit.chats where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
+  if (!c) return;
+  const early = ["identified", "warming"].includes(c.stage);
+  const data = {
+    ...c.data ?? {},
+    connectionRequestedAt: now.toISOString(),
+    ...early || !c.data?.outreachChannel ? { outreachChannel: "linkedin" } : {}
+  };
+  await db2.sql`update orbit.chats set data = ${data}::jsonb where id = ${chatId}::uuid`;
+  if (early) await moveChat(db2, userId, chatId, "outreach_sent", "connection request sent", now, "user");
+}
+
 // supabase/functions/orbit-api/routes/source.ts
 var list9 = (v, key2) => {
   if (v === void 0) return void 0;
@@ -41961,6 +42239,13 @@ async function add3(ctx) {
   const b = await body(ctx);
   return json(200, await addSourced(ctx.services(), ctx.userId, b.recommendationIds));
 }
+async function connect(ctx) {
+  const b = await body(ctx);
+  const recommendationId = optUuid(b, "recommendationId");
+  const personId = optUuid(b, "personId");
+  if (!recommendationId === !personId) throw badRequest("send one of recommendationId or personId");
+  return json(200, await connectSourced(ctx.services(), ctx.userId, { recommendationId, personId }));
+}
 async function email(ctx) {
   const b = await body(ctx);
   const recommendationId = optUuid(b, "recommendationId");
@@ -41977,6 +42262,7 @@ async function email(ctx) {
 var sourceRoutes = {
   "/source/search": { method: "POST", auth: true, run: search4 },
   "/source/add": { method: "POST", auth: true, run: add3 },
+  "/source/connect": { method: "POST", auth: true, run: connect },
   "/source/email": { method: "POST", auth: true, run: email }
 };
 
@@ -42877,7 +43163,7 @@ var shape = (table, row) => {
   const t = PULL_BY_NAME.get(table);
   return row && t ? shapeRow(t, row) : row;
 };
-async function audit3(db2, userId, action, table, id, fields = []) {
+async function audit4(db2, userId, action, table, id, fields = []) {
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', ${action}, ${table}, ${id}, ${{ fields }}::jsonb)`;
@@ -42942,7 +43228,7 @@ async function write(db2, userId, spec, id, row) {
       [id, userId, ...params]
     );
     if (!r2) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
-    await audit3(
+    await audit4(
       db2,
       userId,
       "sync.update",
@@ -42961,7 +43247,7 @@ async function write(db2, userId, spec, id, row) {
     [id, userId, ...params]
   );
   await spec.afterInsert?.(db2, userId, id, values);
-  await audit3(
+  await audit4(
     db2,
     userId,
     "sync.insert",
@@ -42976,7 +43262,7 @@ async function remove(db2, userId, spec, id) {
   const sql = spec.del === "soft" ? `update orbit.${spec.table} set deleted_at = now() where ${spec.key} = $1::uuid and user_id = $2::uuid and deleted_at is null returning 1` : `delete from orbit.${spec.table} where ${spec.key} = $1::uuid and user_id = $2::uuid returning 1`;
   const rows = await db2.query(sql, [id, userId]);
   if (!rows.length) throw new ChangeError("not_found", `${spec.table} ${id} was not found`);
-  await audit3(db2, userId, "sync.delete", spec.table, id);
+  await audit4(db2, userId, "sync.delete", spec.table, id);
   return void 0;
 }
 var DraftPatchS = z10.object({
@@ -43015,7 +43301,7 @@ async function pushDraft(db2, userId, id, row) {
     throw new ChangeError("conflict", `the draft is already ${cur.status}`);
   }
   const changed = ["status", "subject", "body", "channel"].filter((k) => k in row);
-  await audit3(db2, userId, "sync.update", "drafts", id, changed);
+  await audit4(db2, userId, "sync.update", "drafts", id, changed);
   if (body2 !== void 0)
     await recordDraftEdit(db2, r.row);
   return shape("drafts", r.row);
@@ -43034,7 +43320,7 @@ async function pushEdit(db2, userId, id, row) {
   if (!p.success) throw new ChangeError("invalid", p.error.issues[0]?.message ?? "invalid edit");
   const r = await pushDraftEdit(db2, userId, id, p.data);
   if (!r) throw new ChangeError("not_found", `draft_edits ${id} was not found`);
-  await audit3(db2, userId, "sync.insert", "draft_edits", id, ["before", "after"]);
+  await audit4(db2, userId, "sync.insert", "draft_edits", id, ["before", "after"]);
   return r;
 }
 
