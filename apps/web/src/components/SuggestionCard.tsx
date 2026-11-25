@@ -860,11 +860,19 @@ export function RoleLine({
   person?: Pick<Person, 'currentOrganizationRaw' | 'currentOrganizationId' | 'emails' | 'primaryEmail'>;
 }) {
   return (
-    // the company is its logo (named on hover); written out only when there is no title to show
-    <span className="text-ink-3 text-[13px] flex items-center gap-1.5 min-w-0 max-w-full">
-      {company &&
-        (person ? <PersonCompanyLogo person={person} size={14} /> : <CompanyLogo name={company} size={14} />)}
-      <span className="truncate min-w-0">{title ?? company}</span>
+    // the company is its logo (named on hover); written out only when there is no title to show. A long title wraps
+    // onto a second line rather than being cut off (a phone, beside the card's kind)
+    <span className="text-ink-3 text-[13px] leading-snug flex items-start gap-1.5 min-w-0 max-w-full">
+      {company && (
+        <span className="mt-[2px] shrink-0">
+          {person ? (
+            <PersonCompanyLogo person={person} size={14} />
+          ) : (
+            <CompanyLogo name={company} size={14} />
+          )}
+        </span>
+      )}
+      <span className="min-w-0 [overflow-wrap:anywhere]">{title ?? company}</span>
     </span>
   );
 }
