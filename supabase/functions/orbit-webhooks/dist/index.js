@@ -597,15 +597,27 @@ function normalizeLinkedInUrl(raw) {
     if (!/(^|\.)linkedin\.com$/i.test(u2.hostname)) return void 0;
     const m = u2.pathname.match(/\/in\/([^/?#]+)/i);
     if (!m?.[1]) return void 0;
-    const slug = decodeURIComponent(m[1]).toLowerCase().replace(/\/+$/, "");
+    const raw2 = decodeURIComponent(m[1]).replace(/\/+$/, "");
+    const slug = isLinkedInMemberId(raw2) ? raw2 : raw2.toLowerCase();
     return `https://www.linkedin.com/in/${slug}`;
   } catch {
     return void 0;
   }
 }
+function isLinkedInMemberId(s) {
+  return !!s && /^ACoAA[A-Za-z0-9_-]{20,}$/.test(s);
+}
 function linkedInSlug(url) {
   const n = normalizeLinkedInUrl(url);
-  return n ? n.slice(n.lastIndexOf("/") + 1) : void 0;
+  return n ? n.slice(n.lastIndexOf("/") + 1).toLowerCase() : void 0;
+}
+function linkedInProfileUrl(url, memberId) {
+  const n = normalizeLinkedInUrl(url);
+  const id = isLinkedInMemberId(memberId) ? memberId : void 0;
+  if (!n) return id ? `https://www.linkedin.com/in/${id}` : url || void 0;
+  const slug = n.slice(n.lastIndexOf("/") + 1);
+  if (id && slug.toLowerCase() === id.toLowerCase()) return `https://www.linkedin.com/in/${id}`;
+  return n;
 }
 var GENERIC_ORG_TAIL = /* @__PURE__ */ new Set([
   "&",
@@ -4830,8 +4842,11 @@ function slugOf(i) {
   return linkedInSlug(i.linkedinUrl) ?? void 0;
 }
 function urlOf(i) {
+  const fromUrl = normalizeLinkedInUrl(i.linkedinUrl);
+  if (fromUrl) return linkedInProfileUrl(fromUrl, i.linkedinMemberId);
+  if (isLinkedInMemberId(i.linkedinSlug)) return `https://www.linkedin.com/in/${i.linkedinSlug}`;
   const slug = slugOf(i);
-  return normalizeLinkedInUrl(i.linkedinUrl) ?? (slug ? `https://www.linkedin.com/in/${slug}` : void 0);
+  return slug ? `https://www.linkedin.com/in/${slug}` : void 0;
 }
 function nameOf(i) {
   if (i.firstName || i.lastName) return nameFromParts(i.firstName, i.lastName);

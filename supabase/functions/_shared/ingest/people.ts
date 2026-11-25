@@ -28,6 +28,8 @@ import { isAtsSender, isAutomatedSender, isRoleName } from '@orbit/core/text/ema
 import {
   emailDomain,
   emailLocalPart,
+  isLinkedInMemberId,
+  linkedInProfileUrl,
   linkedInSlug,
   nameFromParts,
   normalizeCompany,
@@ -113,8 +115,12 @@ function slugOf(i: Incoming): string | undefined {
 }
 
 function urlOf(i: Incoming): string | undefined {
+  const fromUrl = normalizeLinkedInUrl(i.linkedinUrl);
+  if (fromUrl) return linkedInProfileUrl(fromUrl, i.linkedinMemberId);
+  // a member id keeps its case in the link (lowercased, LinkedIn does not know it); a public name is lower case
+  if (isLinkedInMemberId(i.linkedinSlug)) return `https://www.linkedin.com/in/${i.linkedinSlug}`;
   const slug = slugOf(i);
-  return normalizeLinkedInUrl(i.linkedinUrl) ?? (slug ? `https://www.linkedin.com/in/${slug}` : undefined);
+  return slug ? `https://www.linkedin.com/in/${slug}` : undefined;
 }
 
 /** The item's real name, if it has one. */

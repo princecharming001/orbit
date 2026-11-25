@@ -1,4 +1,4 @@
-import type { Person, PersonSource } from '@orbit/core';
+import { linkedInProfileUrl, type Person, type PersonSource } from '@orbit/core';
 import { Link } from 'react-router-dom';
 import { mergeEvidence } from '../engine/people';
 import { Avatar, cx, LinkedInMark } from '../ui';
@@ -34,7 +34,7 @@ export function PersonNameLink({
   onNavigate,
   testId,
 }: {
-  person: Pick<Person, 'id' | 'displayName' | 'linkedinUrl'>;
+  person: Pick<Person, 'id' | 'displayName' | 'linkedinUrl' | 'linkedinMemberId'>;
   className?: string;
   /** called before an in-app link navigates (a sheet closes itself) */
   onNavigate?: () => void;
@@ -44,7 +44,7 @@ export function PersonNameLink({
   if (person.linkedinUrl)
     return (
       <a
-        href={person.linkedinUrl}
+        href={linkedInProfileUrl(person.linkedinUrl, person.linkedinMemberId)}
         target="_blank"
         rel="noreferrer noopener"
         className={cls}

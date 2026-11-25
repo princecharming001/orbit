@@ -6,6 +6,7 @@ import {
   canonicalFirstName,
   firstNameRelation,
   initials,
+  linkedInProfileUrl,
   linkedInSlug,
   nameFromEmailLocal,
   nameFromParts,
@@ -40,6 +41,25 @@ describe('linkedin urls', () => {
     );
     expect(linkedInSlug('https://www.linkedin.com/in/priya-patel')).toBe('priya-patel');
     expect(normalizeLinkedInUrl('https://example.com/in/x')).toBeUndefined();
+  });
+
+  // a member id only opens in its own case: lowercased, LinkedIn shows "This page doesn't exist"
+  const ID = 'ACoAABcDeFgHiJkLmNoPqRsTuVwXyZ0123456_x';
+  it('keeps a member id in its own case, and matches it in lower case', () => {
+    expect(normalizeLinkedInUrl(`https://www.linkedin.com/in/${ID}/`)).toBe(
+      `https://www.linkedin.com/in/${ID}`,
+    );
+    expect(linkedInSlug(`https://www.linkedin.com/in/${ID}`)).toBe(ID.toLowerCase());
+  });
+
+  it('repairs a link stored with a lowercased member id, and makes one from the id alone', () => {
+    const broken = `https://www.linkedin.com/in/${ID.toLowerCase()}`;
+    expect(linkedInProfileUrl(broken, ID)).toBe(`https://www.linkedin.com/in/${ID}`);
+    expect(linkedInProfileUrl(undefined, ID)).toBe(`https://www.linkedin.com/in/${ID}`);
+    expect(linkedInProfileUrl('https://www.linkedin.com/in/Priya-Patel', ID)).toBe(
+      'https://www.linkedin.com/in/priya-patel',
+    );
+    expect(linkedInProfileUrl(undefined, '12345')).toBeUndefined();
   });
 });
 

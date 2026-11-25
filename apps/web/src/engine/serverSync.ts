@@ -27,7 +27,7 @@ import type {
   StageEvent,
   User,
 } from '@orbit/core';
-import { chatToRow, normalizeCompany, noteToRow, stageEventToRow } from '@orbit/core';
+import { chatToRow, linkedInProfileUrl, normalizeCompany, noteToRow, stageEventToRow } from '@orbit/core';
 import Dexie, { type Table, type Transaction } from 'dexie';
 import { db, type OutboxRow, type TieLabelRow } from '../db/schema';
 import {
@@ -286,6 +286,10 @@ function withDefaults(table: string, row: Record<string, unknown>, userId: strin
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       ...stripNulls(r),
+      // a link stored with a lowercased member id leads to "This page doesn't exist": open the member id as it is
+      ...(typeof r.linkedinUrl === 'string' || typeof r.linkedinMemberId === 'string'
+        ? { linkedinUrl: linkedInProfileUrl(r.linkedinUrl as string, r.linkedinMemberId as string) }
+        : {}),
     };
   }
   if (table === 'goals')

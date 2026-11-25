@@ -417,16 +417,42 @@ export function normalizeLinkedInUrl(raw: string | undefined | null): string | u
     if (!/(^|\.)linkedin\.com$/i.test(u.hostname)) return undefined;
     const m = u.pathname.match(/\/in\/([^/?#]+)/i);
     if (!m?.[1]) return undefined;
-    const slug = decodeURIComponent(m[1]).toLowerCase().replace(/\/+$/, '');
+    const raw = decodeURIComponent(m[1]).replace(/\/+$/, '');
+    // a public name ("jane-doe") reads the same in any case; a member id ("ACoAA...") only in its own: lowercased,
+    // LinkedIn answers "This page doesn't exist"
+    const slug = isLinkedInMemberId(raw) ? raw : raw.toLowerCase();
     return `https://www.linkedin.com/in/${slug}`;
   } catch {
     return undefined;
   }
 }
 
+/** A LinkedIn member id as Unipile and LinkedIn's own links carry it ("ACoAA..."), case and all. */
+export function isLinkedInMemberId(s: string | undefined | null): boolean {
+  return !!s && /^ACoAA[A-Za-z0-9_-]{20,}$/.test(s);
+}
+
+/** The profile's key for matching: the slug in lower case, member ids included (stored keys are lower case). */
 export function linkedInSlug(url: string | undefined | null): string | undefined {
   const n = normalizeLinkedInUrl(url);
-  return n ? n.slice(n.lastIndexOf('/') + 1) : undefined;
+  return n ? n.slice(n.lastIndexOf('/') + 1).toLowerCase() : undefined;
+}
+
+/**
+ * The link to open someone's LinkedIn profile. A link stored before member ids kept their case points at the
+ * lowercased id, which LinkedIn does not know: with the person's member id at hand, the link uses it as it is. With
+ * no link, a member id alone still makes one.
+ */
+export function linkedInProfileUrl(
+  url: string | undefined | null,
+  memberId?: string | undefined | null,
+): string | undefined {
+  const n = normalizeLinkedInUrl(url);
+  const id = isLinkedInMemberId(memberId) ? memberId! : undefined;
+  if (!n) return id ? `https://www.linkedin.com/in/${id}` : url || undefined;
+  const slug = n.slice(n.lastIndexOf('/') + 1);
+  if (id && slug.toLowerCase() === id.toLowerCase()) return `https://www.linkedin.com/in/${id}`;
+  return n;
 }
 
 /** Trailing words that do not distinguish one employer from another ("McKinsey & Company", "Blackstone Group"). */

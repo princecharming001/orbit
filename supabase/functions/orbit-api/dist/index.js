@@ -3427,15 +3427,19 @@ function normalizeLinkedInUrl(raw) {
     if (!/(^|\.)linkedin\.com$/i.test(u2.hostname)) return void 0;
     const m = u2.pathname.match(/\/in\/([^/?#]+)/i);
     if (!m?.[1]) return void 0;
-    const slug = decodeURIComponent(m[1]).toLowerCase().replace(/\/+$/, "");
+    const raw2 = decodeURIComponent(m[1]).replace(/\/+$/, "");
+    const slug = isLinkedInMemberId(raw2) ? raw2 : raw2.toLowerCase();
     return `https://www.linkedin.com/in/${slug}`;
   } catch {
     return void 0;
   }
 }
+function isLinkedInMemberId(s) {
+  return !!s && /^ACoAA[A-Za-z0-9_-]{20,}$/.test(s);
+}
 function linkedInSlug(url) {
   const n = normalizeLinkedInUrl(url);
-  return n ? n.slice(n.lastIndexOf("/") + 1) : void 0;
+  return n ? n.slice(n.lastIndexOf("/") + 1).toLowerCase() : void 0;
 }
 var GENERIC_ORG_TAIL = /* @__PURE__ */ new Set([
   "&",

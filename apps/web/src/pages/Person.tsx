@@ -1,13 +1,16 @@
-import type { CoffeeChat, MessageKind, Person } from '@orbit/core';
 import {
   CHANNEL_LABELS,
+  type CoffeeChat,
   composeKindFor,
   composeKinds,
   conflictingFacts,
   FACT_TYPE_LABELS,
   keepTouch,
+  linkedInProfileUrl,
   MESSAGE_KIND_LABELS,
+  type MessageKind,
   NOTE_SOURCE_LABELS,
+  type Person,
   promiseText,
   RELATIONSHIP_LABELS,
   relTime,
@@ -67,6 +70,7 @@ import { SUMMARY_RULES_AT } from '../engine/repair';
 import { lastTouch } from '../engine/search';
 import { useSources } from '../engine/sources';
 import { pullUntilHere } from '../engine/sourcing';
+import { conversationCounts, groupTimeline, type TimelineRow } from '../engine/timeline';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
@@ -139,6 +143,64 @@ const TP_ICON: Record<string, string> = {
   manual_log: '✓',
   intro_observed: '⇄',
 };
+
+const timelineWhen = (at: string) =>
+  new Date(at).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+const dayWords = (at: string) =>
+  new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+/** A back-and-forth on one channel as one row: when, how many each way, every message one click away. */
+function ConversationRow({
+  row,
+  firstName,
+}: {
+  row: Extract<TimelineRow, { type: 'conversation' }>;
+  firstName: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const from = dayWords(row.from);
+  const to = dayWords(row.at);
+  return (
+    <li className="pl-5" data-testid="timeline-conversation">
+      <span className="absolute -left-[9px] w-[18px] h-[18px] rounded-full bg-canvas border border-line text-[10px] inline-flex items-center justify-center text-ink-3">
+        {row.icon}
+      </span>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="group block text-left"
+      >
+        <span className="block text-[13.5px] group-hover:underline">{row.text}</span>
+        <span className="block text-[12px] text-ink-3">
+          {conversationCounts(row, firstName || 'them')} · {from === to ? from : `${from} to ${to}`}
+        </span>
+      </button>
+      {open && (
+        <ol
+          className="mt-2 space-y-1.5 border-l border-line-2 pl-3"
+          data-testid="timeline-conversation-messages"
+        >
+          {row.entries.map((e) => (
+            <li key={e.at + e.kind} className="text-[12.5px]">
+              <span className="text-ink-2">
+                {e.kind.endsWith('_in') ? `From ${firstName || 'them'}` : 'From you'}
+              </span>
+              <span className="ml-2 text-ink-3">{timelineWhen(e.at)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </li>
+  );
+}
 
 export function PersonPage() {
   const { id } = useParams();
@@ -568,7 +630,7 @@ export function PersonPage() {
               )}
               {person.linkedinUrl && (
                 <a
-                  href={person.linkedinUrl}
+                  href={linkedInProfileUrl(person.linkedinUrl, person.linkedinMemberId)}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 hover:text-ink"
@@ -1103,23 +1165,21 @@ export function PersonPage() {
               ) : (
                 timeline.length === 0 && <li className="pl-5 text-ink-3 text-[13px]">No interactions yet.</li>
               )}
-              {timeline.slice(0, 100).map((t, i) => (
-                <li key={i} className="pl-5" data-testid="timeline-item">
-                  <span className="absolute -left-[9px] w-[18px] h-[18px] rounded-full bg-canvas border border-line text-[10px] inline-flex items-center justify-center text-ink-3">
-                    {t.icon}
-                  </span>
-                  <div className="text-[13.5px]">{t.text}</div>
-                  <div className="text-[12px] text-ink-3">
-                    {new Date(t.at).toLocaleString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                      hour: 'numeric',
-                      minute: '2-digit',
-                    })}
-                  </div>
-                </li>
-              ))}
+              {groupTimeline(timeline, person.firstName || person.displayName)
+                .slice(0, 100)
+                .map((t, i) =>
+                  t.type === 'conversation' ? (
+                    <ConversationRow key={`${t.kind}-${t.at}`} row={t} firstName={person.firstName} />
+                  ) : (
+                    <li key={i} className="pl-5" data-testid="timeline-item">
+                      <span className="absolute -left-[9px] w-[18px] h-[18px] rounded-full bg-canvas border border-line text-[10px] inline-flex items-center justify-center text-ink-3">
+                        {t.icon}
+                      </span>
+                      <div className="text-[13.5px]">{t.text}</div>
+                      <div className="text-[12px] text-ink-3">{timelineWhen(t.at)}</div>
+                    </li>
+                  ),
+                )}
             </ol>
           )}
           {tab === 'conversation' && <Conversation person={person} />}
