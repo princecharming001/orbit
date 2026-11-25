@@ -112,3 +112,46 @@ test.describe('the plan from a job link', () => {
     await expect(page.getByTestId('company-plan-card').getByTestId('target-plan')).toBeVisible();
   });
 });
+
+/** A target nobody in the network is at: the card says what to do and does it, with no controls that do nothing. */
+test('a company nobody you know is at: Find people looks on LinkedIn from the card', async ({ page }) => {
+  test.setTimeout(120_000);
+  await loadDemo(page);
+  // the program the student named while setting up: the first home screen shows its plan
+  await page.evaluate(async () => {
+    const db = (
+      window as unknown as {
+        __orbitDb: {
+          goals: {
+            toArray(): Promise<{ userId: string }[]>;
+            update(id: string, c: object): Promise<number>;
+          };
+        };
+      }
+    ).__orbitDb;
+    const [g] = await db.goals.toArray();
+    await db.goals.update(g!.userId, { currentJob: { text: 'Princeton SYNAPSE' } });
+  });
+  await page.goto('./');
+  await page.reload();
+  const plan = page.getByTestId('target-plan');
+  await expect(plan).toBeVisible({ timeout: 15_000 });
+  await expect(plan.getByTestId('target-plan-sub')).toContainText('Who can help you get in');
+  await expect(plan.getByRole('combobox')).toHaveCount(0);
+  await expect(plan.locator('input[type="date"]')).toHaveCount(0);
+  await expect(plan.getByTestId('target-plan-empty')).toContainText(
+    'Nobody you know is at Princeton SYNAPSE',
+  );
+  await expect(plan).not.toContainText('on the Map');
+  await page.screenshot({ path: 'test-results/plan-cold-before.png' });
+  await plan.getByTestId('target-plan-find').click();
+  // LinkedIn finds people there (steps to draft), says it looked, or says how to connect it: never nothing
+  await expect(
+    plan
+      .getByTestId('target-plan-step')
+      .first()
+      .or(plan.getByText('Orbit looked on LinkedIn'))
+      .or(plan.getByTestId('target-plan-find-note')),
+  ).toBeVisible({ timeout: 20_000 });
+  await page.screenshot({ path: 'test-results/plan-cold-after.png' });
+});

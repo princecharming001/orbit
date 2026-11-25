@@ -513,7 +513,15 @@ export interface TargetPlanStep {
   status: 'proposed' | 'drafted' | 'held' | 'done';
   suggestionId?: ID;
   /** a person found on LinkedIn for the plan, not yet in Orbit: added only when the student picks them */
-  found?: { id: string; name: string; headline?: string; pictureUrl?: string; slug?: string };
+  found?: {
+    id: string;
+    name: string;
+    headline?: string;
+    pictureUrl?: string;
+    slug?: string;
+    /** the search result as LinkedIn gave it, so the find can be added after a reload */
+    raw?: unknown;
+  };
 }
 
 /** The plan for one posting at one target company (plan 23 §4.1), kept in this browser. */
@@ -530,6 +538,8 @@ export interface TargetPlan {
   more: number;
   /** the network does not touch the company: the three are LinkedIn finds, cold, warm up first */
   cold?: boolean;
+  /** when the card last looked on LinkedIn for people there (Find people at X), so it says what it found */
+  linkedInSearchedAt?: string;
   suggestionIds: ID[];
 }
 

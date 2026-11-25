@@ -21,7 +21,9 @@ import {
 } from '../engine/graph';
 import { setTargetStatus } from '../engine/settings';
 import { planForPosting } from '../engine/targetPlan';
+import { opensWarmUpSheet } from '../engine/warmupAuto';
 import { useSession } from '../state/session';
+import { openWarmUpSheet } from '../state/warmUpSheet';
 import { Button, Card, cx, NotFound, PageHeader, Skeleton, SkeletonRows, useToast, useWorking } from '../ui';
 
 /** Rows drawn at first and each time the list's end scrolls into view: a big company never draws everyone at once. */
@@ -135,6 +137,11 @@ export function CompanyPage() {
       return;
     }
     if (c.action === 'warm_up') {
+      // Orbit can run the warm-up from the student's LinkedIn: the start sheet shows the plan and the comment first
+      if (await opensWarmUpSheet(user, c.person.id)) {
+        openWarmUpSheet({ personId: c.person.id, source: 'reach' });
+        return;
+      }
       await working.run(actKey(c), `Writing to ${c.person.firstName}…`, async () => {
         const r = await startWarmUpOrOutreach(user, c.person.id, 'linkedin', 'reach');
         if (r.draft) nav(`/people/${c.person.id}?open=${r.draft.id}`);

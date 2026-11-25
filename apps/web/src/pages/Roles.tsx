@@ -275,6 +275,15 @@ function RolesBody({ user }: { user: User }) {
     next.delete('role');
     setParams(next, { replace: true });
   };
+  // a link from elsewhere (a plan's "3 open roles for you at Stripe") opens the list searched for it
+  useEffect(() => {
+    const q = params.get('q');
+    if (!q) return;
+    setPlace((pl) => ({ ...pl, view: 'roles', filters: { ...pl.filters, query: q } }));
+    const next = new URLSearchParams(params);
+    next.delete('q');
+    setParams(next, { replace: true });
+  }, [params.get('q')]);
   useEffect(() => {
     const v = params.get('view');
     if (v === 'saved' || v === 'companies' || v === 'roles' || v === 'applied') set({ view: v });

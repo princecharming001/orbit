@@ -132,6 +132,13 @@ test.describe('Orbit runs the LinkedIn warm-up', () => {
     await expect(upcoming).toContainText('Orbit is warming up');
     await expect(page.getByTestId('warmup-steps')).toHaveCount(0);
 
+    // the pipeline card says Orbit runs it, with nothing to do by hand
+    await page.goto('people?view=board');
+    const pipe = page.getByTestId('card-warmup').filter({ hasText: 'Orbit is running it' });
+    await expect(pipe).toHaveCount(1, { timeout: 15_000 });
+    await expect(pipe).toHaveAttribute('data-auto', 'running');
+    await expect(pipe.getByTestId('card-warmup-hand-over')).toHaveCount(0);
+
     // the server runs the profile view: the page shows it done
     await openPriya(page);
     await serverRuns(page, api, { at: new Date(BROWSER_NOW + 3 * 3_600_000).toISOString() });

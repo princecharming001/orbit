@@ -23,12 +23,19 @@ import {
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
+import { isServerUser } from '../integrations/orbitApi';
 import { linkIn, postingFromText, readPosting } from '../integrations/postings';
 import { startWarmUpOrOutreach, upsertSuggestions } from './brief';
 import { requestIntro } from './drafts';
 import { budgetLeft, readBudget, spend } from './enrichment/store';
 import { type CompanyPerson, type CompanyTeam, reachCompany, teamOf } from './graph';
-import { addLinkedInFound, type FoundView, linkedInSearchReady, searchLinkedInLive } from './linkedinSearch';
+import {
+  addLinkedInFound,
+  type FoundView,
+  linkedInLookupReady,
+  lookUpLinkedInPeople,
+  rememberFound,
+} from './linkedinSearch';
 import { addTarget } from './targets';
 
 const DAY = 86_400_000;
@@ -371,25 +378,24 @@ export async function linkedInFinds(
   opts: { now?: Date } = {},
 ): Promise<{ role: TargetPlanStep['role']; found: FoundView }[]> {
   const now = opts.now ?? new Date();
-  if (plan.steps.length >= 3 || !(await linkedInSearchReady(user))) return [];
+  if (plan.steps.length >= 3 || !(await linkedInLookupReady(user))) return [];
   const company = plan.posting.company;
-  const queries: [TargetPlanStep['role'], string, { title?: string; company?: string; school?: string }][] = [
-    ['recruiter', `${company} recruiter`, { company, title: 'recruiter' }],
-    ['team', `${company} ${plan.posting.role}`, { company }],
-    ['alum', `${company} ${user.school}`, { company, school: user.school }],
+  const queries: [TargetPlanStep['role'], string][] = [
+    ['recruiter', `${company} recruiter`],
+    ['team', plan.posting.role ? `${company} ${plan.posting.role}` : company],
+    ...(user.school ? ([['alum', `${company} ${user.school}`]] as [TargetPlanStep['role'], string][]) : []),
   ];
   const have = new Set(plan.steps.map((s) => s.role));
   const out: { role: TargetPlanStep['role']; found: FoundView }[] = [];
   const seen = new Set(plan.steps.map((s) => s.personId));
-  for (const [role, keywords, filters] of queries) {
+  for (const [role, keywords] of queries) {
     if (have.has(role) || out.length + plan.steps.length >= 3) continue;
-    if (!usesMockConnectors(user.id)) {
+    // with an account the server counts LinkedIn searches; this browser's own LinkedIn counts them here
+    if (!isServerUser(user.id) && !usesMockConnectors(user.id)) {
       if (budgetLeft(await readBudget(user.id, now), 'search') <= 0) break;
       await spend(user.id, 'search', now);
     }
-    const r = await searchLinkedInLive(user, keywords, {
-      filters: role === 'team' ? filters : { company: filters.company },
-    });
+    const r = await lookUpLinkedInPeople(user, keywords);
     if (!r.ok) break;
     const f = r.people.find(
       (p) =>
@@ -403,6 +409,59 @@ export async function linkedInFinds(
     }
   }
   return out;
+}
+
+const FIND_ROLE_TEXT: Record<TargetPlanStep['role'], (company: string, school?: string) => string> = {
+  recruiter: (c) => `recruits at ${c}`,
+  team: (c) => `works at ${c}`,
+  manager: (c) => `leads a team at ${c}`,
+  alum: (c, school) => (school ? `went to ${school} and works at ${c}` : `works at ${c}`),
+};
+
+/**
+ * Find people at X (the card's button when nobody in the network is there): look on LinkedIn for a recruiter, someone
+ * on the team and an alum, and add them to the plan as cold steps (a warm-up first). They join Orbit only when the
+ * student drafts for them. Returns how many it added, or why it could not look.
+ */
+export async function findPlanPeopleOnLinkedIn(
+  user: User,
+  planId: string,
+  opts: { now?: Date } = {},
+): Promise<{ ok: true; added: number } | { ok: false; reason: 'linkedin' | 'gone' }> {
+  const now = opts.now ?? new Date();
+  const plan = await db.targetPlans.get(planId);
+  if (!plan) return { ok: false, reason: 'gone' };
+  if (!(await linkedInLookupReady(user))) return { ok: false, reason: 'linkedin' };
+  const finds = await linkedInFinds(user, plan, { now });
+  const fresh = (await db.targetPlans.get(planId)) ?? plan;
+  const have = new Set(fresh.steps.map((s) => s.personId));
+  const steps: TargetPlanStep[] = finds
+    .filter(({ found }) => !have.has(`li:${found.id}`))
+    .map(({ role, found }, i) => ({
+      personId: `li:${found.id}`,
+      role,
+      roleText: FIND_ROLE_TEXT[role](fresh.posting.company, user.school),
+      route: { kind: 'cold', score: 0, line: 'on LinkedIn, a warm-up first' },
+      when:
+        i === 0
+          ? { kind: 'today', at: now.toISOString() }
+          : { kind: 'on', at: addDays(now, i).toISOString() },
+      draft: 'warm_up',
+      status: 'proposed',
+      found: {
+        id: found.id,
+        name: found.name,
+        headline: found.headline,
+        pictureUrl: found.pictureUrl,
+        raw: { ...found, id: undefined, knownPersonId: undefined },
+      },
+    }));
+  await db.targetPlans.put({
+    ...fresh,
+    steps: [...fresh.steps, ...steps],
+    linkedInSearchedAt: now.toISOString(),
+  });
+  return { ok: true, added: steps.length };
 }
 
 /** Why this person, for the intro ask: "I'm applying for the Software Engineer Intern role at Stripe, and Priya recruits for it." */
@@ -496,7 +555,8 @@ async function draftStep(
   now: Date,
 ): Promise<string | undefined> {
   if (step.found) {
-    // a LinkedIn find joins Orbit only now, when the student picked them
+    // a LinkedIn find joins Orbit only now, when the student picked them (after a reload, from what was kept)
+    if (step.found.raw) rememberFound(step.found.raw as Parameters<typeof rememberFound>[0]);
     const added = await addLinkedInFound(user, [step.found.id], now);
     if (!added.ok) return undefined;
     step.personId = added.people[0]!.id;

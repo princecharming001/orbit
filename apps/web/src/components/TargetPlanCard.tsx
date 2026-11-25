@@ -4,16 +4,16 @@
  * the plan, the way in as the Map shows it and the day, then Draft all three or Pick who. Nothing is drafted until
  * the student says so, and nothing is sent without their approval.
  */
-import { TARGET_STATUS_LABELS, type TargetPlan, type TargetPlanStep } from '@orbit/core';
+import { normalizeCompany, type TargetPlan, type TargetPlanStep } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ExternalLink } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
-import { setTargetDeadline, setTargetStatus } from '../engine/settings';
-import { draftPlan, postingLine, whenText } from '../engine/targetPlan';
+import { keptMatches } from '../engine/roles';
+import { draftPlan, findPlanPeopleOnLinkedIn, postingLine, whenText } from '../engine/targetPlan';
 import { useSession } from '../state/session';
-import { Avatar, Button, Card, cx, Input, Select, useToast, useWorking } from '../ui';
+import { Avatar, Button, Card, cx, useToast, useWorking } from '../ui';
 import { CompanyLogo } from './CompanyLogo';
 import { RouteBadge } from './map/RouteBadge';
 
@@ -39,6 +39,8 @@ export function TargetPlanCard({
   const toast = useToast();
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // why Find people could not look: LinkedIn is not connected, or it could not be searched just now
+  const [findNote, setFindNote] = useState<'linkedin' | 'down'>();
   // Claude writes each draft, which takes a few seconds: the button spins and a working toast says so meanwhile
   const { busy, run } = useWorking();
   const target = useLiveQuery(() => db.targetCompanies.get(plan.targetCompanyId), [plan.targetCompanyId]);
@@ -61,6 +63,18 @@ export function TargetPlanCard({
     () => (target?.organizationId ? db.organizations.get(target.organizationId) : undefined),
     [target?.organizationId],
   );
+  // the open roles Orbit found for the student at this company (Roles), so the plan and the roles meet
+  const roles = useLiveQuery(async () => {
+    if (!user) return 0;
+    const key = normalizeCompany(plan.posting.company);
+    return (await keptMatches(user.id)).filter(
+      (r) =>
+        r.match.status !== 'dismissed' &&
+        r.match.state !== 'gone' &&
+        !r.match.job.closedAt &&
+        normalizeCompany(r.match.job.companyName) === key,
+    ).length;
+  }, [user?.id, plan.posting.company]);
   if (!user) return null;
   const now = new Date();
   const tz = user.timezone;
@@ -90,6 +104,18 @@ export function TargetPlanCard({
       },
     );
   };
+  const findPeople = () =>
+    run('find', `Looking for people at ${p.company} on LinkedIn…`, async () => {
+      setFindNote(undefined);
+      const r = await findPlanPeopleOnLinkedIn(user, plan.id).catch(
+        () => ({ ok: false, reason: 'down' }) as const,
+      );
+      if (!r.ok) setFindNote(r.reason === 'gone' ? 'down' : r.reason);
+    });
+  const looked = !!plan.linkedInSearchedAt;
+  const due = target?.deadline
+    ? new Date(`${target.deadline}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : undefined;
   return (
     <Card padded className={cx('max-w-[560px] w-full', className)} data-testid="target-plan">
       <div className="flex items-start gap-3">
@@ -98,56 +124,82 @@ export function TargetPlanCard({
           <div className="font-medium text-[14.5px] leading-snug" data-testid="target-plan-title">
             {postingLine(p) || p.company}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-3">
+          <div className="mt-0.5 text-[12.5px] text-ink-3" data-testid="target-plan-sub">
+            Who can help you get in, and what to send each. Nothing goes out until you approve it.
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-2">
             {p.url && (
               <a
                 href={p.url}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-ink"
+                className="inline-flex items-center gap-1 underline underline-offset-2 decoration-[#cfcdc9] hover:decoration-ink"
               >
                 The posting <ExternalLink size={11} aria-hidden />
               </a>
             )}
-            {target && !hideTarget && (
-              <label className="inline-flex items-center gap-1">
-                <span>Target ·</span>
-                <Select
-                  value={target.status}
-                  onChange={(e) => void setTargetStatus(target.id, e.target.value as never)}
-                  className="h-7 text-[12.5px] text-ink-2"
-                  aria-label="Where the application stands"
-                  data-testid="target-plan-status"
-                >
-                  {Object.entries(TARGET_STATUS_LABELS).map(([k, l]) => (
-                    <option key={k} value={k}>
-                      {l.toLowerCase()}
-                    </option>
-                  ))}
-                </Select>
-              </label>
+            {!!roles && (
+              <Link
+                to={`/roles?q=${encodeURIComponent(p.company)}`}
+                className="underline underline-offset-2 decoration-[#cfcdc9] hover:decoration-ink"
+                data-testid="target-plan-roles"
+              >
+                {roles === 1 ? 'One open role' : `${roles} open roles`} for you at {p.company}
+              </Link>
             )}
-            {target && !hideTarget && (
-              <label className="inline-flex items-center gap-1">
-                <span>Deadline</span>
-                <Input
-                  type="date"
-                  value={target.deadline ?? ''}
-                  onChange={(e) => void setTargetDeadline(target.id, e.target.value || undefined)}
-                  className="!h-7 !text-[12px] w-[8.5rem]"
-                  aria-label="Application deadline"
-                />
-              </label>
-            )}
+            {due && !hideTarget && <span className="text-ink-3">Due {due}</span>}
           </div>
         </div>
       </div>
       {plan.steps.length === 0 && (
-        <p className="mt-3 text-[13px] text-ink-2" data-testid="target-plan-empty">
-          {plan.cold
-            ? `Nobody you know is at ${p.company} yet. Search LinkedIn on the Map to find people there.`
-            : `Everyone Orbit would pick at ${p.company} is already in your pipeline.`}
-        </p>
+        <div className="mt-3" data-testid="target-plan-empty">
+          <p className="text-[13px] text-ink-2">
+            {!plan.cold && plan.inPipeline.length
+              ? `Everyone Orbit would pick at ${p.company} is already in your pipeline.`
+              : looked
+                ? `Orbit looked on LinkedIn and found nobody at ${p.company} yet.`
+                : `Nobody you know is at ${p.company} yet. Orbit can find a recruiter, someone on the team${user.school ? ` and someone from ${user.school}` : ''} on LinkedIn.`}
+          </p>
+          {findNote && (
+            <p className="mt-1.5 text-[13px] text-ink-2" data-testid="target-plan-find-note">
+              {findNote === 'linkedin' ? (
+                <>
+                  Orbit looks on LinkedIn from your account.{' '}
+                  <Link to="/settings/integrations" className="underline underline-offset-2 hover:text-ink">
+                    Connect LinkedIn
+                  </Link>{' '}
+                  first.
+                </>
+              ) : (
+                'LinkedIn could not be searched just now. Try again in a moment.'
+              )}
+            </p>
+          )}
+          {(plan.cold || !plan.inPipeline.length) && (
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              {!looked && (
+                <Button
+                  variant="primary"
+                  loading={busy === 'find'}
+                  onClick={() => void findPeople()}
+                  data-testid="target-plan-find"
+                >
+                  Find people at {p.company}
+                </Button>
+              )}
+              {org && (
+                <Button
+                  variant={looked ? 'primary' : 'secondary'}
+                  disabled={!!busy}
+                  onClick={() => nav(`/companies/${org.id}`)}
+                  data-testid="target-plan-company"
+                >
+                  Open {p.company}
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
       )}
       <ul className="mt-3 divide-y divide-line-2">
         {plan.steps.map((s) => {

@@ -6,9 +6,12 @@ import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } f
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
+import { useSession } from '../../state/session';
+import { openWarmUpSheet } from '../../state/warmUpSheet';
 import { Avatar, cx, relDate, Select, Skeleton } from '../../ui';
 import { LogoText } from '../CompanyLogo';
 import { chatTimeLabel } from '../ScheduleChat';
+import { useAutoWarmUp } from '../WarmUpCard';
 import { NextStepPill } from './NextStep';
 import { daysLabel, STAGE_COLOR, wentQuiet } from './shared';
 
@@ -137,6 +140,9 @@ export function PipelineBoard({
   move: (chat: CoffeeChat, to: ChatStage) => void;
   setTime: (chat: CoffeeChat) => void;
 }) {
+  const { user } = useSession();
+  // asked once for the board, not once per card
+  const canAuto = useAutoWarmUp(user);
   const { drag, start, justDragged } = useCardDrag(move);
   const dragging = drag?.live ? drag : undefined;
   return (
@@ -207,6 +213,7 @@ export function PipelineBoard({
                         e.stopPropagation();
                       }}
                       next={nextFor(chat.id, person.id)}
+                      canAuto={canAuto}
                       meetingAt={meetingFor(chat)?.startAt}
                       move={move}
                       setTime={setTime}
@@ -297,6 +304,7 @@ export function BoardSkeleton() {
 function BoardCard({
   chat,
   person,
+  canAuto,
   next,
   meetingAt,
   move,
@@ -315,6 +323,8 @@ function BoardCard({
   meetingAt?: string;
   move: (chat: CoffeeChat, to: ChatStage) => void;
   setTime: (chat: CoffeeChat) => void;
+  /** Orbit can run LinkedIn warm-ups for this student: a warm-up done by hand offers to hand over */
+  canAuto: boolean;
 }) {
   const stage = chat.stage;
   return (
@@ -360,28 +370,12 @@ function BoardCard({
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[12px] text-ink-3">
         <CardWhen chat={chat} meetingAt={meetingAt} onSetTime={() => setTime(chat)} />
-        {next && <NextLink s={next} />}
+        {next && !(next.kind === 'warm_up_engage' && chat.warmUp?.auto?.status === 'running') && (
+          <NextLink s={next} />
+        )}
       </div>
       {chat.warmUp && stage === 'warming' && (
-        <div className="mt-2 text-[11px] text-ink-3">
-          {chat.warmUp.auto?.status === 'done'
-            ? 'Warmed up'
-            : chat.warmUp.auto?.status === 'running'
-              ? 'Orbit is warming up'
-              : 'Warm-up'}
-          : {chat.warmUp.actions.filter((a) => a.doneAt || a.skippedAt).length} of{' '}
-          {chat.warmUp.actions.length} steps
-        </div>
-      )}
-      {chat.warmUp && stage === 'warming' && (
-        <div className="mt-1 h-1 rounded bg-line" aria-hidden>
-          <div
-            className="h-1 rounded bg-warn"
-            style={{
-              width: `${(chat.warmUp.actions.filter((a) => a.doneAt).length / chat.warmUp.actions.length) * 100}%`,
-            }}
-          />
-        </div>
+        <WarmUpLine chat={chat} warmUp={chat.warmUp} person={person} canAuto={canAuto} />
       )}
       {/* Move to: a quiet menu in the corner, shown on hover (always on touch); dragging the card does the same */}
       <div className="absolute top-2 right-2 z-10 h-7 w-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink focus-within:ring-2 focus-within:ring-accent/40 @3xl:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -570,4 +564,63 @@ function CardWhen({
       </span>
     );
   return <span className="whitespace-nowrap">{daysLabel(chat.stageEnteredAt)} in stage</span>;
+}
+
+/**
+ * A warm-up on its pipeline card. Orbit running it: what it has done and the next step's day, nothing to do. Done by
+ * hand (or handed back): the steps done, and "Let Orbit run it" when Orbit can run warm-ups for the student.
+ */
+function WarmUpLine({
+  chat,
+  warmUp,
+  person,
+  canAuto,
+}: {
+  chat: CoffeeChat;
+  warmUp: NonNullable<CoffeeChat['warmUp']>;
+  person: Person;
+  canAuto: boolean;
+}) {
+  const total = warmUp.actions.length;
+  const done = warmUp.actions.filter((a) => a.doneAt || a.skippedAt).length;
+  const next = warmUp.actions.find((a) => !a.doneAt && !a.skippedAt);
+  const status = warmUp.auto?.status;
+  const running = status === 'running';
+  const nextDay = next
+    ? new Date(next.dueAt) <= new Date()
+      ? 'today'
+      : new Date(next.dueAt).toLocaleDateString('en-US', { weekday: 'short' })
+    : undefined;
+  const words =
+    status === 'done' || (!next && total > 0)
+      ? 'Warmed up, ready for your message'
+      : running
+        ? `Orbit is running it · ${done} of ${total} done${nextDay ? `, next ${nextDay}` : ''}`
+        : `By hand · ${done} of ${total} steps`;
+  return (
+    <div className="mt-2" data-testid="card-warmup" data-auto={status ?? 'manual'}>
+      <div className="flex items-center justify-between gap-2 text-[11.5px] text-ink-3">
+        <span className="min-w-0">{words}</span>
+        {!running && status !== 'done' && next && canAuto && (
+          <button
+            type="button"
+            className="relative z-10 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-ink-2 underline underline-offset-2 decoration-[#cfcdc9] hover:text-ink hover:decoration-ink"
+            onClick={(e) => {
+              e.preventDefault();
+              openWarmUpSheet({ personId: person.id, source: chat.source });
+            }}
+            data-testid="card-warmup-hand-over"
+          >
+            Let Orbit run it
+          </button>
+        )}
+      </div>
+      <div className="mt-1 h-1 rounded bg-line" aria-hidden>
+        <div
+          className={cx('h-1 rounded', running || status === 'done' ? 'bg-accent' : 'bg-warn')}
+          style={{ width: `${total ? (done / total) * 100 : 0}%` }}
+        />
+      </div>
+    </div>
+  );
 }
