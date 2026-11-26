@@ -5,6 +5,8 @@
  *   approved, Stop while it is under way, "Warmed up" once the last step has run, and plain words when it stopped;
  * - one the student does by hand: the steps as links to LinkedIn, as before, with Stop, and "Let Orbit run it" when
  *   Orbit can (an Orbit account with LinkedIn connected and the setting on).
+ *
+ * Either way "See the plan" opens the whole plan with the day and time of each step (WarmUpPlanView.tsx).
  */
 import {
   autoDayLabel,
@@ -19,6 +21,7 @@ import { ExternalLink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { autoWarmUpMode, demoRunNextStep, stopWarmUp } from '../engine/warmupAuto';
 import { usesMockConnectors } from '../integrations/connectorsMock';
+import { openWarmUpPlan } from '../state/warmUpPlan';
 import { openWarmUpSheet } from '../state/warmUpSheet';
 import { Button, Card, Chip, cx, useToast } from '../ui';
 
@@ -66,6 +69,20 @@ export function useStopWarmUp(user: Pick<User, 'id'> | undefined) {
   return { stop, stopping };
 }
 
+/** Opens the whole plan, step by step, with the day and time of each (WarmUpPlanView). */
+function PlanLink({ chat }: { chat: Pick<CoffeeChat, 'id'> }) {
+  return (
+    <button
+      type="button"
+      className="text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+      onClick={() => openWarmUpPlan({ chatId: chat.id })}
+      data-testid="warmup-see-plan"
+    >
+      See the plan
+    </button>
+  );
+}
+
 function Mark({ a }: { a: WarmUpAction }) {
   return (
     <span
@@ -105,7 +122,10 @@ export function WarmUpCard({
     return (
       <Card data-testid="warmup-card">
         <div className="flex items-center justify-between gap-2 mb-2">
-          <div className="font-medium">LinkedIn warm-up</div>
+          <div className="flex items-baseline gap-2 min-w-0">
+            <span className="font-medium">LinkedIn warm-up</span>
+            <PlanLink chat={chat} />
+          </div>
           {over ? (
             <Chip tone="good" data-testid="warmup-warmed">
               {ran > 0 ? 'Warmed up' : 'Could not run'}
@@ -187,7 +207,10 @@ export function WarmUpCard({
   // by hand: the reminders with links to LinkedIn (and what Orbit ran before it stopped, if it had started)
   return (
     <Card data-testid="warmup-card">
-      <div className="font-medium mb-2">LinkedIn warm-up</div>
+      <div className="flex items-baseline gap-2 mb-2">
+        <span className="font-medium">LinkedIn warm-up</span>
+        <PlanLink chat={chat} />
+      </div>
       {auto?.status === 'stopped' && (
         <p className="text-[12.5px] text-ink-2 mb-2" data-testid="warmup-stopped-line">
           {warmUpStopWords(auto.stopReason, first)}
