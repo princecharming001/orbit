@@ -231,7 +231,10 @@ test.describe('Orbit runs the LinkedIn warm-up', () => {
     await sheet.getByTestId('warmup-start').click();
     await expect(sheet).toBeHidden({ timeout: 20_000 });
     expect(api.state.warmups.started[0]!.comment).toBeNull();
-    await expect(page.getByTestId('warmup-progress').locator('li')).toHaveCount(1);
+    // the profile view, then the plan says why there is no like or comment, then the message that waits for Send
+    await expect(page.getByTestId('warmup-progress').locator('li')).toHaveCount(3);
+    await expect(page.getByTestId('warmup-step-no_post')).toContainText('No like or comment');
+    await expect(page.getByTestId('warmup-step-message')).toContainText('ready for you to send');
   });
 
   test('"Run warm-ups for me" off brings back the reminders', async ({ page }) => {
@@ -307,7 +310,9 @@ test.describe('The demo simulates the run, so it can be tried', () => {
     await sheet.getByTestId('warmup-start').click();
     await expect(sheet).toBeHidden({ timeout: 20_000 });
     await expect(card.getByTestId('warmup-running')).toBeVisible({ timeout: 20_000 });
-    await expect(card.getByTestId('warmup-progress').locator('li')).toHaveCount(steps);
+    // every step, and the first message last
+    await expect(card.getByTestId('warmup-progress').locator('li')).toHaveCount(steps + 1);
+    await expect(card.getByTestId('warmup-step-message')).toBeVisible();
 
     // each tap runs the next step; after the last one the person is warmed up and the student is told
     for (let i = 0; i < steps; i++) {

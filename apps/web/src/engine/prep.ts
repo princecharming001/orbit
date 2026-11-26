@@ -154,7 +154,12 @@ export function personSummary(args: {
   const tz = user.timezone || 'UTC';
   const first = person.firstName || person.displayName;
   const parts: string[] = [];
-  const title = person.currentTitle?.trim();
+  // a "title" that is really a headline sentence ("I teach sales", "Helping founders hire") is not a job to put after
+  // "is a": it is quoted as their headline instead
+  const rawTitle = person.currentTitle?.trim();
+  const headlineLike =
+    !!rawTitle && /^(i|i'm|im|we|we're|my|helping|building|making|passionate|obsessed)\b/i.test(rawTitle);
+  const title = headlineLike ? undefined : rawTitle;
   const org = person.currentOrganizationRaw?.trim();
   if (title && org && /^(student|undergrad(uate)?|mba candidate|grad(uate)? student)$/i.test(title)) {
     // "Tom is a student at the University of Michigan", not "works at ... as a Student"
@@ -164,7 +169,8 @@ export function personSummary(args: {
     parts.push(`${first} works at ${org} as ${withArticle(main)}${team ? ` (${team})` : ''}.`);
   } else if (title) parts.push(`${first} is ${withArticle(title)}.`);
   else if (org) parts.push(`${first} works at ${org}.`);
-  else if (person.headline) parts.push(`${first}'s LinkedIn headline: ${person.headline}.`);
+  else if (person.headline || rawTitle)
+    parts.push(`${first}'s LinkedIn headline: ${(person.headline || rawTitle)!.replace(/[.\s]+$/, '')}.`);
   // an alum only on evidence they studied there (engine/alumni.ts); the same school on their record is a classmate,
   // a professor or staff: "at your school", never "went to"
   if (person.isAlumni && user.school) parts.push(`Like you, ${first} went to ${user.school}.`);

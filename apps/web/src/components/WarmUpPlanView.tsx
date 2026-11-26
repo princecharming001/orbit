@@ -31,7 +31,7 @@ export type PlanStatus = 'done' | 'today' | 'due' | 'upcoming' | 'skipped' | 're
 
 export interface PlanRow {
   key: string;
-  kind: WarmUpAction['kind'] | 'message';
+  kind: WarmUpAction['kind'] | 'no_post' | 'message';
   /** who does the step: Orbit from the student's LinkedIn, or the student by hand */
   who: 'orbit' | 'you';
   /** the time shown: when it ran, or when it is due */
@@ -177,6 +177,19 @@ export function warmUpPlanRows(o: {
     if (who === 'you' && !a.doneAt && !a.skippedAt) row.url = a.url;
     return row;
   });
+  // Orbit's plan without a like or a comment: the person posted nothing recent to act on, and the plan says so
+  // rather than look cut short
+  const view = plan.actions.find((a) => a.kind === 'view_profile');
+  if (auto && view && !plan.actions.some((a) => a.kind === 'react_post' || a.kind === 'comment_post'))
+    rows.push({
+      key: 'no_post',
+      kind: 'no_post',
+      who: 'orbit',
+      at: view.doneAt ?? view.dueAt,
+      text: 'No like or comment',
+      status: 'skipped',
+      note: `${first} has no recent post on LinkedIn, so the warm-up is the profile view only.`,
+    });
   // the first message last: it waits for the student's Send, whoever ran the steps
   const on = o.chat.stage === 'warming' || auto?.status === 'done' || !!o.chat.firstOutreachAt;
   if (on) {

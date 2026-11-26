@@ -111,6 +111,22 @@ describe('person summary (UI-17)', () => {
     });
     expect(r.summary).toContain('You last met yesterday.');
   });
+  it('a title that is really a headline sentence is quoted as the headline, never "is an I teach sales"', () => {
+    const r = personSummary({
+      user,
+      person: person({
+        firstName: 'Shelby',
+        displayName: 'Shelby H',
+        currentTitle: 'I teach sales',
+        currentOrganizationRaw: undefined,
+      }),
+      facts: [],
+      touchpoints: [],
+      now: NOW,
+    });
+    expect(r.summary).toContain("Shelby's LinkedIn headline: I teach sales.");
+    expect(r.summary).not.toContain('is an I');
+  });
   it('says when in the user timezone', () => {
     expect(sayWhen('2026-10-06T03:00:00Z', NOW, TZ)).toBe('yesterday'); // 11pm on Oct 5 in New York
     expect(sayWhen('2026-10-02T15:00:00Z', NOW, TZ)).toBe('on Friday');

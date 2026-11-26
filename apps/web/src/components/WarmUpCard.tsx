@@ -24,6 +24,7 @@ import { usesMockConnectors } from '../integrations/connectorsMock';
 import { openWarmUpPlan } from '../state/warmUpPlan';
 import { openWarmUpSheet } from '../state/warmUpSheet';
 import { Button, Card, Chip, cx, useToast } from '../ui';
+import { warmUpPlanRows } from './WarmUpPlanView';
 
 const day = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
@@ -152,6 +153,32 @@ export function WarmUpCard({
               </span>
             </li>
           ))}
+          {warmUpPlanRows({ chat, person, now, tz: user.timezone })
+            .filter((r) => r.kind === 'no_post' || r.kind === 'message')
+            .map((r) => (
+              <li key={r.key} className="flex items-start gap-2" data-testid={`warmup-step-${r.kind}`}>
+                <span
+                  className={cx(
+                    'mt-0.5 w-4 h-4 rounded-full border shrink-0',
+                    r.status === 'sent'
+                      ? 'bg-good border-good'
+                      : r.status === 'skipped'
+                        ? 'bg-line border-line'
+                        : 'border-line',
+                  )}
+                  aria-hidden
+                />
+                <span className="flex-1 min-w-0">
+                  <span className={cx(r.status === 'skipped' && 'text-ink-3')}>{r.text}</span>
+                  <span className="block text-[12px] text-ink-3">
+                    {r.kind === 'message' && r.status !== 'sent'
+                      ? `${autoDayLabel(r.at, now, user.timezone)}. `
+                      : ''}
+                    {r.note}
+                  </span>
+                </span>
+              </li>
+            ))}
         </ul>
         {auto.comment ? (
           <p className="text-[12.5px] text-ink-2 mt-3" data-testid="warmup-approved-comment">

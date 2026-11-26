@@ -68,6 +68,27 @@ body {
   font-feature-settings: "cv11", "ss01";
 }
 
+/* Text actions ("Not right?", "Refresh summary", "The posting", "Open company page"): no standing underline anywhere in
+   the app. They read as actions by their weight and colour; hover or keyboard focus underlines them. Unlayered, so it
+   wins over the `underline` utility wherever a link or a button carries it. */
+a.underline,
+button.underline {
+  text-decoration-line: none;
+  font-weight: 500;
+}
+a.underline.text-ink-3,
+button.underline.text-ink-3 {
+  color: var(--color-ink-2);
+}
+a.underline:hover,
+button.underline:hover,
+a.underline:focus-visible,
+button.underline:focus-visible {
+  text-decoration-line: underline;
+  text-decoration-color: currentColor;
+  text-underline-offset: 3px;
+}
+
 /* Component classes live in the components layer, so a utility on the same element (a radius, a border colour,
    position: absolute) still wins. */
 @layer components {
