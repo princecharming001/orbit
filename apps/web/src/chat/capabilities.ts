@@ -1154,7 +1154,7 @@ export const CAPABILITIES: readonly Capability[] = [
     // plan 44: Roles, only while the owner's switch has it on for the student
     id: 'roles_find',
     area: 'Roles',
-    title: 'Find open roles that fit you, with a score out of 10 and who you know at each company',
+    title: 'Find open roles that fit you, with a score out of 100 and who you know at each company',
     kind: 'read',
     utterances: ['What roles fit me?', 'internships I should apply to', 'roles at Stripe'],
   },

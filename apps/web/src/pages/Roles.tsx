@@ -1,6 +1,6 @@
 /**
  * Plan 44, Roles for you: the tab. The student's profile is read from their resume or LinkedIn and corrected by them;
- * Orbit lists open roles that fit with a score out of 10, the reasons and the gaps, and who the student knows at each
+ * Orbit lists open roles that fit with a score out of 100, the reasons and the gaps, and who the student knows at each
  * company; one tap turns a role into a target with the plan of who to reach.
  *
  * Plan 45: a small recruiting workspace with the way in first. Tabs For you, Saved, Applied, Companies; a search box
@@ -34,6 +34,7 @@ import {
   DEFAULT_FILTERS,
   filterMatches,
   findWayIn,
+  fitFloor,
   keptMatches,
   keptProfile,
   keptSearch,
@@ -215,7 +216,7 @@ function RolesBody({ user }: { user: User }) {
     [table, place.filters, kinds, ways, paths, intros],
   );
   const running = run.phase === 'running';
-  const scoredStrong = table.some((m) => (m.fit?.score ?? 0) >= 6);
+  const scoredStrong = table.some((m) => (m.fit?.score ?? 0) >= 50);
   const stretches = useMemo(
     () => (search?.done && !running && !scoredStrong && table.some((m) => m.fit) ? bestStretches(table) : []),
     [search?.done, running, scoredStrong, table],
@@ -238,7 +239,7 @@ function RolesBody({ user }: { user: User }) {
       .slice(0, 12);
   }, [table]);
   const groups = useMemo(
-    () => companyGroups(table, paths, targets, watchList, place.filters.minFit),
+    () => companyGroups(table, paths, targets, watchList, fitFloor(place.filters.minFit)),
     [table, paths, targets, watchList, place.filters.minFit],
   );
 
@@ -250,7 +251,7 @@ function RolesBody({ user }: { user: User }) {
         ? sortMatches(applied, 'newest')
         : filtered.length
           ? filtered
-          : stretches.length && place.filters.minFit >= 6
+          : stretches.length && fitFloor(place.filters.minFit) >= 50
             ? stretches
             : [];
 
@@ -560,7 +561,7 @@ function RolesBody({ user }: { user: User }) {
           {place.view === 'roles' &&
             stretches.length > 0 &&
             !filtered.length &&
-            place.filters.minFit >= 6 && (
+            fitFloor(place.filters.minFit) >= 50 && (
               <p className="mb-3 text-[13.5px]" data-testid="roles-no-strong">
                 <span className="font-medium">No strong fits yet.</span>{' '}
                 <span className="text-ink-2">The best five, as stretches.</span>{' '}

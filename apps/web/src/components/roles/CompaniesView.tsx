@@ -7,11 +7,12 @@
 import { normalizeCompany, type RoleMatch, type TargetCompany } from '@orbit/core';
 import { Eye, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { pathOf, type RolePath } from '../../engine/roles';
+import { BAND_WORDS, pathOf, type RolePath, whereWords } from '../../engine/roles';
 import { Button, cx } from '../../ui';
 import { Clip, Table, TableBox, Td, Th, Tr } from '../../ui/table';
 import { CompanyLogo } from '../CompanyLogo';
-import { FitCell, PathCell } from './parts';
+import { PathCell } from './parts';
+import { FitRing } from './RoleCards';
 import { companyHref } from './RolesTable';
 
 export interface CompanyGroup {
@@ -96,19 +97,30 @@ export function CompaniesView({
           </Clip>
         </Link>
       </Td>
-      <Td>
+      <Td className="min-w-[260px]">
         {g.best ? (
-          <span className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => onOpen(g.best!)}
-              className="truncate text-left hover:underline max-w-[260px]"
-              title={g.best.job.title}
-              data-testid="roles-company-best"
-            >
-              {g.best.job.title}
-            </button>
-            <FitCell match={g.best} />
+          // the score as a ring, the title on one line, and what the score means with where the role is under it
+          <span className="flex items-center gap-2.5 min-w-0" data-testid="roles-company-best-cell">
+            <FitRing match={g.best} size={32} />
+            <span className="min-w-0">
+              <button
+                type="button"
+                onClick={() => onOpen(g.best!)}
+                className="block max-w-[300px] truncate text-left font-medium hover:underline"
+                title={g.best.job.title}
+                data-testid="roles-company-best"
+              >
+                {g.best.job.title}
+              </button>
+              <span className="block max-w-[300px] truncate text-[12px] text-ink-3">
+                {[
+                  g.best.fit ? BAND_WORDS[g.best.fit.band] : 'Not read closely yet',
+                  whereWords(g.best.job).place,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </span>
+            </span>
           </span>
         ) : (
           <span className="text-ink-3" data-testid="roles-company-nothing">
@@ -116,8 +128,8 @@ export function CompaniesView({
           </span>
         )}
       </Td>
-      <Td className="tabular-nums text-ink-2" data-testid="roles-company-fits">
-        {g.best ? `${g.fits} of ${g.roles}` : ''}
+      <Td className="tabular-nums text-ink-2 whitespace-nowrap" data-testid="roles-company-fits">
+        {g.best ? (g.fits ? `${g.fits} of ${g.roles}` : `0 of ${g.roles}`) : ''}
       </Td>
       <Td className="min-w-[170px]">
         <PathCell path={g.path} />

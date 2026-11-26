@@ -525,7 +525,7 @@ describe('/roles/search and /roles/more', () => {
     expect(m.body.done).toBe(true);
     const intern = m.body.matches.find((x) => x.job.title === 'Software Engineer Intern')!;
     // Python and SQL shown in work, Git not shown, React nice and listed by the project; related internship; at level
-    expect(intern.fit!.score).toBeGreaterThanOrEqual(6);
+    expect(intern.fit!.score).toBeGreaterThanOrEqual(55);
     expect(intern.answers!.skills.find((s) => s.name === 'Git')!.answer).toBe('none');
     expect(intern.answers!.skills.find((s) => s.name === 'Python')!.answer).toBe('work');
     expect(intern.reason).toBe('Python and SQL from your Ramp internship');
@@ -698,6 +698,7 @@ describe('/roles/search and /roles/more', () => {
        where j.title = 'Software Engineer Intern'`;
     expect(austin!.caps.map((c) => c.kind)).toContain('place');
     expect(austin!.fit).toBeLessThanOrEqual(5);
+    // the column keeps 1 to 10; the score itself (out of 100) is held to 50 by the place cap
     const listed = await h.call<{ matches: RoleMatch[] }>('/roles/list', u.token, {});
     expect(titles(listed.body.matches)).toEqual(['Platform Engineer Intern']);
   });
@@ -775,7 +776,7 @@ describe('a role whose text cannot be read just now', () => {
     expect(m.body).toMatchObject({ listed: 3, read: 2, done: true });
     // a source with no text to give: scored on what the listing says, and held at 6 (never a good fit on paper)
     expect(by(none).fit!.caps.map((c) => c.kind)).toEqual(['thin']);
-    expect(by(none).fit!.score).toBeLessThanOrEqual(7);
+    expect(by(none).fit!.score).toBeLessThanOrEqual(60);
     expect(by(fine).fit!.caps).toEqual([]);
     const [row] = await t.db.sql<{ state: string; read_at: Date | null; fit: number | null }>`
       select state, read_at, fit from orbit.role_matches where job_id = ${busy}::uuid`;
@@ -784,7 +785,7 @@ describe('a role whose text cannot be read just now', () => {
     h.src.later.clear();
     const again = await h.call<RolesSearchResponse>('/roles/more', u.token, { searchId: r.body.searchId });
     expect(again.body).toMatchObject({ read: 3, done: true });
-    expect(again.body.matches.find((x) => x.job.id === busy)!.fit!.score).toBeGreaterThan(1);
+    expect(again.body.matches.find((x) => x.job.id === busy)!.fit!.score).toBeGreaterThan(10);
   });
 
   it('a role taken down while it waited is not read and does not keep the search open', async () => {
@@ -909,7 +910,7 @@ describe('reading closely', () => {
     // the posting that asks for one thing is read twice too, says the same, and is held at 6
     expect(little.answers!.skills.map((x) => x.name)).toEqual(['Python']);
     expect(little.fit!.caps.map((x) => x.kind)).toEqual(['thin']);
-    expect(little.fit!.score).toBeLessThanOrEqual(6);
+    expect(little.fit!.score).toBeLessThanOrEqual(60);
     // two reads each: the one answered above, and three more
     expect(reads).toBe(2);
     expect(h.count('requirements')).toBe(3);
@@ -1032,7 +1033,7 @@ describe('reading closely', () => {
     const good = m.body.matches.find((x) => x.job.companyName === 'Acme')!;
     const evil = m.body.matches.find((x) => x.job.companyName === 'Evil')!;
     expect(evil.fit!.score).toBeLessThanOrEqual(good.fit!.score);
-    expect(evil.fit!.score).toBeLessThan(10);
+    expect(evil.fit!.score).toBeLessThan(100);
     // what the student's own lines show is what they show for the honest posting, no more: the same answers, each
     // resting on the same line of theirs, and none of the lines this model made up ("Ten years of Python at Google")
     expect(evil.answers!.skills.map((s) => [s.name, s.answer, s.you])).toEqual(
@@ -1058,7 +1059,7 @@ describe('reading closely', () => {
     expect(pasted.status).toBe(200);
     expect(pasted.body.match.job.source).toBe('posting');
     expect(pasted.body.match.job.title).toBe('Data Analyst Intern');
-    expect(pasted.body.match.fit!.score).toBeGreaterThanOrEqual(1);
+    expect(pasted.body.match.fit!.score).toBeGreaterThanOrEqual(0);
     const byUrl = await h.call<{ match: RoleMatch }>('/roles/score', u.token, {
       url: 'https://boards.greenhouse.io/stripe/jobs/1',
     });

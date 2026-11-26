@@ -279,10 +279,12 @@ export interface FitParts {
   experience?: number;
   education?: number;
   level?: number;
+  /** the kind of work and the place the student is after */
+  goals?: number;
 }
 
 export interface Fit {
-  /** 1 to 10 */
+  /** 0 to 100 (a row read before plan 46 holds 1 to 10 and no `scale`: see fitOnHundred) */
   score: number;
   /** before the caps */
   raw: number;
@@ -292,6 +294,8 @@ export interface Fit {
   weights: FitParts;
   caps: FitCapFact[];
   band: FitBand;
+  /** 100: the score is out of 100 */
+  scale?: 100;
 }
 
 export type FitBand = 'strong' | 'good' | 'stretch' | 'out';

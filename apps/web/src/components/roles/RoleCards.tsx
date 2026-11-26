@@ -23,7 +23,7 @@ import { Avatar, cx } from '../../ui';
 import { RowMenu } from '../../ui/RowMenu';
 import { CompanyLogo } from '../CompanyLogo';
 
-/** The fit out of 10 as a ring, in its band's tone; a dashed ring with no number when not read closely. */
+/** The fit out of 100 as a ring, in its band's tone; a dashed ring with no number when not read closely. */
 export function FitRing({
   match,
   size = 40,
@@ -61,14 +61,14 @@ export function FitRing({
       </span>
     );
   const tone =
-    f.score >= 7 ? 'var(--color-accent)' : f.score >= 5 ? 'var(--color-warn)' : 'var(--color-ink-3)';
+    f.score >= 65 ? 'var(--color-accent)' : f.score >= 50 ? 'var(--color-warn)' : 'var(--color-ink-3)';
   return (
     <span
       className="relative inline-flex shrink-0 items-center justify-center"
       style={{ width: size, height: size }}
-      title={`${f.score} out of 10, ${(BAND_WORDS[f.band] ?? '').toLowerCase()}${stretch ? ', a stretch' : ''}. Fit on paper: how well what you wrote matches what the posting asks, not a chance of an offer.`}
+      title={`${f.score} out of 100, ${(BAND_WORDS[f.band] ?? '').toLowerCase()}${stretch ? ', a stretch' : ''}. Fit on paper: how well what you wrote matches what the posting asks, not a chance of an offer.`}
       role="img"
-      aria-label={`Fit ${f.score} out of 10, ${BAND_WORDS[f.band]}`}
+      aria-label={`Fit ${f.score} out of 100, ${BAND_WORDS[f.band]}`}
       data-testid="role-fit"
       data-score={f.score}
     >
@@ -82,12 +82,12 @@ export function FitRing({
           stroke={tone}
           strokeWidth={3}
           strokeLinecap="round"
-          strokeDasharray={`${(c * f.score) / 10} ${c}`}
+          strokeDasharray={`${(c * f.score) / 100} ${c}`}
         />
       </svg>
       <span
         className="relative font-semibold tabular-nums leading-none"
-        style={{ fontSize: Math.round(size * 0.36) }}
+        style={{ fontSize: Math.round(size * (f.score >= 100 ? 0.3 : 0.36)) }}
       >
         {f.score}
       </span>

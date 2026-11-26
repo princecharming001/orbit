@@ -219,7 +219,9 @@ describe('Roles in the browser, against the fake orbit-api', () => {
     expect(calls.filter((c) => c === '/roles/more')).toHaveLength(Math.ceil(search!.listed / 5));
     const rows = tableMatches(await keptMatches(user.id), search);
     expect(rows).toHaveLength(search!.listed);
-    expect(rows.every((m) => m.fit && m.fit.score >= 1 && m.fit.score <= 10)).toBe(true);
+    expect(rows.every((m) => m.fit && m.fit.score >= 0 && m.fit.score <= 100 && m.fit.scale === 100)).toBe(
+      true,
+    );
     // only internships for a student
     expect(rows.every((m) => m.job.level === 'intern' || !m.job.level)).toBe(true);
   });
@@ -607,8 +609,8 @@ describe('Roles in the browser, against the fake orbit-api', () => {
   });
 });
 
-describe('the score (the sample server keeps the plan 44 formula)', () => {
-  it('1 and 10 are both reachable, a silent part is left out, and caps hold a score down', () => {
+describe('the score (the sample server keeps the server formula)', () => {
+  it('0 and 100 are both reachable, a silent part is left out, and caps hold a score down', () => {
     const none = fitOf({
       skills: [{ name: 'Go', need: 'must', answer: 'none' }],
       experience: { answer: 'none' },
@@ -618,7 +620,7 @@ describe('the score (the sample server keeps the plan 44 formula)', () => {
       reason: '',
       gaps: [],
     });
-    expect(none.score).toBe(1);
+    expect(none.score).toBe(0);
     const answers: FitAnswers = {
       skills: [
         { name: 'Go', need: 'must', answer: 'work' },
@@ -632,12 +634,12 @@ describe('the score (the sample server keeps the plan 44 formula)', () => {
       gaps: [],
     };
     const all = fitOf(answers);
-    expect(all.score).toBe(10);
+    expect(all.score).toBe(100);
     expect(all.parts.education).toBeUndefined();
     expect(all.weights.skills! + all.weights.experience! + all.weights.level!).toBeCloseTo(1);
     const capped = fitOf({ ...answers, caps: [{ kind: 'thin', label: 'The posting says little' }] });
-    expect(capped.score).toBe(6);
-    expect(capped.raw).toBe(10);
+    expect(capped.score).toBe(60);
+    expect(capped.raw).toBe(100);
   });
 
   it('the demo search runs on the sample server in the browser, with no Orbit account', async () => {

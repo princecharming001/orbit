@@ -473,14 +473,15 @@ function checkJob(j: Job, what: string) {
 }
 
 function checkFit(f: Fit, a: FitAnswers, what: string) {
-  only(f, ['score', 'raw', 'parts', 'weights', 'caps', 'band'], `${what} fit`);
-  expect(Number.isInteger(f.score) && f.score >= 1 && f.score <= 10, `${what} score ${f.score}`).toBe(true);
+  only(f, ['score', 'raw', 'parts', 'weights', 'caps', 'band', 'scale'], `${what} fit`);
+  expect(f.scale, what).toBe(100);
+  expect(Number.isInteger(f.score) && f.score >= 0 && f.score <= 100, `${what} score ${f.score}`).toBe(true);
   expect(Number.isInteger(f.raw) && f.raw >= f.score, `${what} raw ${f.raw}`).toBe(true);
   expect(f.band, what).toBe(bandOf(f.score));
   const parts = Object.keys(f.parts);
   expect(parts.sort(), what).toEqual(Object.keys(f.weights).sort());
   for (const k of parts) {
-    expect(['skills', 'experience', 'education', 'level'], what).toContain(k);
+    expect(['skills', 'experience', 'education', 'level', 'goals'], what).toContain(k);
     const v = f.parts[k as keyof Fit['parts']]!;
     expect(v >= 0 && v <= 1, `${what} parts.${k} ${v}`).toBe(true);
   }
@@ -566,7 +567,7 @@ function checkMatch(m: RoleMatch, what: string) {
     expect(
       words.map((w) => w.part),
       what,
-    ).toEqual(['skills', 'experience', 'education', 'level']);
+    ).toEqual(['skills', 'experience', 'education', 'level', ...('goals' in m.fit.parts ? ['goals'] : [])]);
     for (const w of words) {
       text(w.words, `${what} words for ${w.part}`);
       expect(w.words, what).not.toMatch(/undefined|NaN/);
@@ -960,7 +961,7 @@ describe('a search, read behind the answer as production reads it', () => {
       ['SQL', 'must', 'work'],
       ['Kafka', 'nice', 'none'],
     ]);
-    expect(nimbus.fit).toMatchObject({ score: 8, band: 'good', caps: [] });
+    expect(nimbus.fit).toMatchObject({ score: 80, band: 'strong', caps: [] });
     // quotes: the student's own job line, the posting's own words
     const quarry = table.find((m) => m.job.companyName === 'Quarry')!;
     expect(quarry.answers!.skills).toEqual([
@@ -1173,7 +1174,7 @@ describe('a posting scored now', () => {
       title: 'Software Engineering Intern, Payments',
       url: NIMBUS_JOB,
     });
-    expect(linked.match.fit).toMatchObject({ score: 8, band: 'good' });
+    expect(linked.match.fit).toMatchObject({ score: 80, band: 'strong' });
     // it is the role the board lists, not a second copy of it
     const [copies] = await t.db.sql<{ n: number }>`
       select count(*)::int as n from orbit_private.jobs where source = 'greenhouse' and external_id = '7770001'`;

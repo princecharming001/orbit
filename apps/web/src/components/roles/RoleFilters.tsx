@@ -8,6 +8,7 @@ import type { JobLevel, RoleKind } from '@orbit/core';
 import { Search, X } from 'lucide-react';
 import {
   DEFAULT_FILTERS,
+  fitFloor,
   LEVEL_WORDS,
   type RoleFilters,
   type RolesSort,
@@ -60,7 +61,7 @@ export function RoleFiltersBar({
     filters.remote ||
     filters.noSponsorship ||
     filters.wayIn !== 'any' ||
-    filters.minFit !== DEFAULT_FILTERS.minFit;
+    fitFloor(filters.minFit) !== DEFAULT_FILTERS.minFit;
   return (
     <div className="flex flex-col gap-2.5" data-testid="roles-filters">
       <div className="flex items-center gap-2">
@@ -158,15 +159,15 @@ export function RoleFiltersBar({
           ))}
         </Select>
         <Select
-          value={String(filters.minFit)}
+          value={String(fitFloor(filters.minFit))}
           onChange={(e) => set({ minFit: Number(e.target.value) })}
           aria-label="Least fit shown"
           className={select}
           data-testid="roles-min-fit"
         >
-          {[8, 7, 6, 5, 4, 1].map((n) => (
+          {[80, 65, 50, 30, 0].map((n) => (
             <option key={n} value={n}>
-              {n === 1 ? 'Any fit' : `Fit ${n}+`}
+              {n === 0 ? 'Any fit' : `Fit ${n}+`}
             </option>
           ))}
         </Select>

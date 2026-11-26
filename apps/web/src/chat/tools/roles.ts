@@ -42,7 +42,7 @@ export const findRoles = defineTool({
   name: 'find_roles',
   kind: 'read',
   description:
-    'Call this when the student asks which jobs, roles or internships fit them, which ones to apply to, or for open roles at a company ("What roles fit me?", "internships I should apply to", "new grad roles", "roles at Stripe"). Orbit searches open roles against the profile read from their resume and LinkedIn, scores each out of 10 on paper with the reasons and the gaps, and says who they know at each company. A job link they paste goes to plan_for_posting instead.',
+    'Call this when the student asks which jobs, roles or internships fit them, which ones to apply to, or for open roles at a company ("What roles fit me?", "internships I should apply to", "new grad roles", "roles at Stripe"). Orbit searches open roles against the profile read from their resume and LinkedIn, scores each out of 100 on paper with the reasons and the gaps, and says who they know at each company. A job link they paste goes to plan_for_posting instead.',
   input: z.object({
     company: z
       .string()
@@ -84,7 +84,7 @@ export const findRoles = defineTool({
     if (input.level === 'internship')
       matches = matches.filter((m) => m.job.level === 'intern' || !m.job.level);
     if (input.level === 'new_grad') matches = matches.filter((m) => m.job.level === 'entry' || !m.job.level);
-    const fits = matches.filter((m) => (m.fit?.score ?? 0) >= 6 || !m.fit);
+    const fits = matches.filter((m) => (m.fit?.score ?? 0) >= 50 || !m.fit);
     const shown = (fits.length ? fits : matches).slice(0, CARD_ROWS);
     const paths = await pathsFor(
       user.id,
@@ -98,8 +98,8 @@ export const findRoles = defineTool({
       ? company
         ? `No open roles at ${company} fit your profile right now. On Roles you can watch ${company}, and Orbit says when one appears.`
         : 'No open roles fit your profile yet. On Roles you can tick more kinds of role or add a place.'
-      : `${fits.length ? `Found ${plural(fits.length, 'role')} that fit` : 'Nothing fits 6 or more yet; these are the closest'}${
-          best?.fit ? `. The best is ${line(best)}, ${best.fit.score}/10` : ''
+      : `${fits.length ? `Found ${plural(fits.length, 'role')} that fit` : 'Nothing fits 50 or more yet; these are the closest'}${
+          best?.fit ? `. The best is ${line(best)}, ${best.fit.score} out of 100` : ''
         }.${still ? ' More are being read on Roles.' : ''}`;
     return ok(
       'roles',
@@ -116,7 +116,7 @@ export const findRoles = defineTool({
             matchId: m.id,
             role: wrapped(ctx, 'posting', line(m), 200),
             fit: m.fit
-              ? `${m.fit.score}/10, ${BAND_WORDS[m.fit.band]?.toLowerCase()}`
+              ? `${m.fit.score} out of 100, ${BAND_WORDS[m.fit.band]?.toLowerCase()}`
               : 'not read closely yet',
             why: m.reason ? wrapped(ctx, 'posting', m.reason, 200) : undefined,
             capped: m.fit?.caps.map((c) => c.label),

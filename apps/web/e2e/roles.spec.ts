@@ -276,7 +276,7 @@ test.describe('Roles (plan 44, fake orbit-api)', () => {
     // the student never left Roles
     await expect(page).toHaveURL(/\/roles/);
     // the way-in filter keeps only where they know someone
-    await page.getByTestId('roles-min-fit').selectOption('1');
+    await page.getByTestId('roles-min-fit').selectOption('0');
     await page.getByTestId('roles-way-in-filter').selectOption('known');
     for (const c of await page.getByTestId('role-company').allTextContents()) expect(c).toBe('Stripe');
     expect(await page.getByTestId('roles-page').innerText()).not.toMatch(/[—–!]/);
@@ -412,6 +412,6 @@ test.describe('Roles in the demo and the chat (plan 44 §2.6)', () => {
     await page.getByTestId('composer-input').fill(`here is a posting ${LINK}`);
     await page.keyboard.press('Enter');
     await expect(page.getByTestId('target-plan').last()).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId('plan-fit-score').last()).toHaveText(/^\d+\/10$/, { timeout: 20_000 });
+    await expect(page.getByTestId('plan-fit-score').last()).toHaveText(/^\d{1,3}$/, { timeout: 20_000 });
   });
 });

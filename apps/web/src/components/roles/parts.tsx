@@ -1,5 +1,5 @@
 /**
- * The small pieces every Roles view shares: the fit ("8/10" with a short bar, its parts on hover or tap), the path
+ * The small pieces every Roles view shares: the fit ("78" with a short bar, its parts on hover or tap), the path
  * (who the student knows there), and the "Not for me" reasons.
  */
 import type { DismissReason, RoleMatch } from '@orbit/core';
@@ -10,7 +10,7 @@ import { BAND_WORDS, DISMISS_REASONS, partWords, type RolePath } from '../../eng
 import { Avatar, cx } from '../../ui';
 import { Bars } from '../../ui/table';
 
-/** A score's bar: ten steps, filled to the score, in the band's tone. */
+/** A score's bar, filled to the score out of 100, in the band's tone. */
 export function FitBar({ score, className }: { score: number; className?: string }) {
   return (
     <span
@@ -23,9 +23,9 @@ export function FitBar({ score, className }: { score: number; className?: string
       <span
         className={cx(
           'absolute inset-y-0 left-0 rounded-full',
-          score >= 7 ? 'bg-accent' : score >= 5 ? 'bg-warn' : 'bg-ink-3',
+          score >= 65 ? 'bg-accent' : score >= 50 ? 'bg-warn' : 'bg-ink-3',
         )}
-        style={{ width: `${score * 10}%` }}
+        style={{ width: `${score}%` }}
       />
     </span>
   );
@@ -45,7 +45,7 @@ export function PartBar({ value }: { value?: number }) {
   );
 }
 
-/** "8/10" and its bar; the parts in words on hover, and on a tap. A role not read closely has no number. */
+/** "78" and its bar; the parts in words on hover, and on a tap. A role not read closely has no number. */
 export function FitCell({ match, stretch }: { match: RoleMatch; stretch?: boolean }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
@@ -70,7 +70,7 @@ export function FitCell({ match, stretch }: { match: RoleMatch; stretch?: boolea
   const f = match.fit;
   const parts = partWords(match);
   const words = [
-    `${f.score} out of 10: ${BAND_WORDS[f.band]}.`,
+    `${f.score} out of 100: ${BAND_WORDS[f.band]}.`,
     ...parts.map((p) => `${p.name}: ${p.value === undefined ? 'left out. ' : ''}${p.words}`),
     ...f.caps.map((c) => c.label),
   ].join('\n');
@@ -85,11 +85,11 @@ export function FitCell({ match, stretch }: { match: RoleMatch; stretch?: boolea
         className="inline-flex items-center gap-2 rounded-[6px] px-1 -mx-1 py-0.5 tabular-nums hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         title={words}
         aria-expanded={open}
-        aria-label={`Fit ${f.score} out of 10, ${BAND_WORDS[f.band]}. Show the parts`}
+        aria-label={`Fit ${f.score} out of 100, ${BAND_WORDS[f.band]}. Show the parts`}
         data-testid="role-fit"
         data-score={f.score}
       >
-        <span className="font-medium">{f.score}/10</span>
+        <span className="font-medium">{f.score}</span>
         <span className="hidden @[36rem]:inline-flex">
           <FitBar score={f.score} />
         </span>
@@ -103,7 +103,7 @@ export function FitCell({ match, stretch }: { match: RoleMatch; stretch?: boolea
           data-testid="role-fit-parts"
         >
           <span className="block text-[13px] font-medium">
-            {f.score}/10, {(BAND_WORDS[f.band] ?? '').toLowerCase()}
+            {f.score} out of 100, {(BAND_WORDS[f.band] ?? '').toLowerCase()}
           </span>
           <span className="mt-2 block space-y-2">
             {parts.map((p) => (

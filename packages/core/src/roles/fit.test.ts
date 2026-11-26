@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bandOf, capsFor, FIT_WEIGHTS, fitOf, partsOf } from './fit';
+import { bandOf, capsFor, FIT_WEIGHTS, fitOf, fitOnHundred, goalsOf, missingMustOf, partsOf } from './fit';
 import type {
   EducationAnswer,
   ExperienceAnswer,
@@ -27,43 +27,54 @@ const answers = (o: {
 
 const three = (answer: SkillAnswer) => [{ answer }, { answer }, { answer }];
 
-describe('fitOf: the worked examples of §6.3', () => {
-  it('nothing matches at all is a 1', () => {
+describe('fitOf: the worked examples, out of 100', () => {
+  it('nothing matches at all is a 0', () => {
     const f = fitOf(answers({ skills: three('none'), experience: 'none', education: 'no', level: 'far' }));
-    expect(f.raw).toBe(1);
-    expect(f.score).toBe(1);
+    expect(f.raw).toBe(0);
+    expect(f.score).toBe(0);
     expect(f.band).toBe('out');
+    expect(f.scale).toBe(100);
   });
 
-  it('skills only listed, a related internship, education unsaid, at level is a 6', () => {
+  it('skills only listed, a related internship, education unsaid, at level is a 53', () => {
     const f = fitOf(
       answers({ skills: three('listed'), experience: 'related', education: 'unsaid', level: 'at' }),
     );
     expect(f.parts.education).toBeUndefined();
     expect(f.weights.education).toBeUndefined();
-    expect(f.score).toBe(6);
+    expect(f.score).toBe(53);
     expect(f.band).toBe('stretch');
   });
 
-  it('the same with a degree that fits is a 7', () => {
+  it('the same with a degree that fits is a 61', () => {
     const f = fitOf(
       answers({ skills: three('listed'), experience: 'related', education: 'fits', level: 'at' }),
     );
-    expect(f.score).toBe(7);
-    expect(f.band).toBe('good');
+    expect(f.score).toBe(61);
   });
 
-  it('skills shown in projects, related internship, degree fits, at level is an 8', () => {
+  it('skills shown in projects, related internship, degree fits, at level is a 78, a good fit', () => {
     const f = fitOf(
       answers({ skills: three('project'), experience: 'related', education: 'fits', level: 'at' }),
     );
-    expect(f.score).toBe(8);
+    expect(f.score).toBe(78);
+    expect(f.band).toBe('good');
   });
 
-  it('everything shown in work at the same kind of role is a 10', () => {
+  it('everything shown in work at the same kind of role is a 100', () => {
     const f = fitOf(answers({ skills: three('work'), experience: 'same', education: 'fits', level: 'at' }));
-    expect(f.score).toBe(10);
+    expect(f.score).toBe(100);
     expect(f.band).toBe('strong');
+  });
+
+  it('scores between the old steps: one skill moving from a project to work moves the score a little', () => {
+    const base = answers({ skills: three('project'), experience: 'related', education: 'fits', level: 'at' });
+    const more = structuredClone(base);
+    more.skills[0]!.answer = 'work';
+    const a = fitOf(base).score;
+    const b = fitOf(more).score;
+    expect(b).toBeGreaterThan(a);
+    expect(b - a).toBeLessThan(5);
   });
 });
 
@@ -80,24 +91,46 @@ describe('fitOf: parts and weights', () => {
     expect(p.skills).toBeCloseTo(2 / 3);
   });
 
+  it('a must-have skill shown nowhere costs points on top of its weight', () => {
+    const shown = answers({
+      skills: [
+        { answer: 'work', need: 'must' },
+        { answer: 'none', need: 'nice' },
+      ],
+      experience: 'same',
+      level: 'at',
+    });
+    const missing = answers({
+      skills: [
+        { answer: 'none', need: 'must' },
+        { answer: 'work', need: 'nice' },
+      ],
+      experience: 'same',
+      level: 'at',
+    });
+    expect(missingMustOf(missing)).toBe(1);
+    expect(fitOf(shown).score - fitOf(missing).score).toBeGreaterThan(FIT_WEIGHTS.missingMust);
+  });
+
   it('a silent part is left out and the others share its weight in proportion', () => {
     const f = fitOf(answers({ skills: [], experience: 'same', education: 'unsaid', level: 'at' }));
     expect(f.parts.skills).toBeUndefined();
     expect(f.parts.education).toBeUndefined();
-    expect(f.weights.experience).toBeCloseTo(0.3 / 0.45);
-    expect(f.weights.level).toBeCloseTo(0.15 / 0.45);
-    expect(f.score).toBe(10);
+    expect(f.parts.goals).toBeUndefined();
+    expect(f.weights.experience).toBeCloseTo(0.25 / 0.35);
+    expect(f.weights.level).toBeCloseTo(0.1 / 0.35);
+    expect(f.score).toBe(100);
     const sum = Object.values(f.weights).reduce((s, w) => s + (w ?? 0), 0);
     expect(sum).toBeCloseTo(1);
   });
 
   it('the weights are one constant', () => {
     const p = FIT_WEIGHTS.parts;
-    expect(p.skills + p.experience + p.education + p.level).toBeCloseTo(1);
+    expect(p.skills + p.experience + p.education + p.level + p.goals).toBeCloseTo(1);
   });
 
   it('bands', () => {
-    expect([1, 4, 5, 6, 7, 8, 9, 10].map(bandOf)).toEqual([
+    expect([0, 49, 50, 64, 65, 79, 80, 100].map(bandOf)).toEqual([
       'out',
       'out',
       'stretch',
@@ -110,37 +143,88 @@ describe('fitOf: parts and weights', () => {
   });
 });
 
+describe('the goals part: the kind of work and the place the student is after', () => {
+  const profile = (o: Partial<Pick<RoleProfile, 'kinds' | 'wants'>> = {}) => ({
+    kinds: [{ title: 'Product manager', on: true }],
+    wants: { levels: [], places: [], notPlaces: [], remote: false },
+    ...o,
+  });
+  const job = (title: string, places = ['San Francisco, CA'], remote: 'remote' | 'on_site' = 'on_site') => ({
+    title,
+    places,
+    remote,
+  });
+
+  it('the title the student ticked is 1, another kind of work is 0', () => {
+    expect(goalsOf(job('Associate Product Manager'), profile())).toBe(1);
+    expect(goalsOf(job('Accountant'), profile())).toBe(0);
+  });
+
+  it('the place counts a quarter when the student named one', () => {
+    const wants = { levels: [], places: ['New York'], notPlaces: [], remote: false };
+    expect(goalsOf(job('Product Manager'), profile({ wants }))).toBeCloseTo(0.75);
+    expect(goalsOf(job('Product Manager', ['New York, NY']), profile({ wants }))).toBe(1);
+  });
+
+  it('nothing ticked and no place named: the part is left out', () => {
+    expect(goalsOf(job('Product Manager'), profile({ kinds: [] }))).toBeUndefined();
+  });
+
+  it('a role that is the work the student is after scores above one that is not, all else the same', () => {
+    const a = answers({ skills: three('project'), experience: 'related', education: 'fits', level: 'at' });
+    const want = fitOf(a, { goals: goalsOf(job('Product Manager Intern'), profile()) });
+    const other = fitOf(a, { goals: goalsOf(job('Sales Associate'), profile()) });
+    expect(want.score - other.score).toBeGreaterThanOrEqual(10);
+    expect(want.parts.goals).toBe(1);
+  });
+});
+
+describe('rows kept from before the score went out of 100', () => {
+  const old = { score: 8, raw: 8, parts: {}, weights: {}, caps: [], band: 'good' as const };
+  it('are scored again from their answers', () => {
+    const a = answers({ skills: three('project'), experience: 'related', education: 'fits', level: 'at' });
+    expect(fitOnHundred(old, a)?.score).toBe(78);
+  });
+  it('without answers, carry the old number at ten times', () => {
+    expect(fitOnHundred(old)).toMatchObject({ score: 80, band: 'strong', scale: 100 });
+  });
+  it('leave a score already out of 100 as it is', () => {
+    const f = fitOf(answers({ skills: three('work'), experience: 'same', level: 'at' }));
+    expect(fitOnHundred(f)).toBe(f);
+  });
+});
+
 const perfect = () => answers({ skills: three('work'), experience: 'same', education: 'fits', level: 'at' });
 
-describe('fitOf: caps (§6.4)', () => {
+describe('fitOf: caps', () => {
   const cases: [FitAnswers['caps'][number]['kind'], number][] = [
-    ['degree', 3],
-    ['years', 4],
-    ['graduation', 4],
-    ['sponsorship', 2],
-    ['citizenship_no', 2],
-    ['citizenship_ask', 5],
-    ['place', 5],
-    ['thin', 6],
+    ['degree', 30],
+    ['years', 40],
+    ['graduation', 40],
+    ['sponsorship', 20],
+    ['citizenship_no', 20],
+    ['citizenship_ask', 50],
+    ['place', 50],
+    ['thin', 60],
   ];
   for (const [kind, cap] of cases)
-    it(`${kind} holds a 10 down to ${cap}`, () => {
+    it(`${kind} holds a 100 down to ${cap}`, () => {
       const f = fitOf({ ...perfect(), caps: [{ kind, label: 'x' }] });
-      expect(f.raw).toBe(10);
+      expect(f.raw).toBe(100);
       expect(f.score).toBe(cap);
       expect(f.caps.map((c) => c.kind)).toEqual([kind]);
     });
 
-  it('a posting with fewer than three requirements is thin and caps at 6: never a good fit on paper', () => {
-    expect(fitOf(perfect(), { requirements: 2 }).score).toBe(6);
+  it('a posting with fewer than three requirements is thin and caps at 60: never a good fit on paper', () => {
+    expect(fitOf(perfect(), { requirements: 2 }).score).toBe(60);
     expect(fitOf(perfect(), { requirements: 2 }).band).toBe('stretch');
     expect(fitOf(perfect(), { requirements: 2 }).caps[0]!.label).toBe('The posting says little');
-    expect(fitOf(perfect(), { requirements: 3 }).score).toBe(10);
+    expect(fitOf(perfect(), { requirements: 3 }).score).toBe(100);
   });
 
   it('a cap never raises a low score', () => {
     const low = answers({ skills: three('none'), experience: 'none', education: 'no', level: 'far' });
-    expect(fitOf({ ...low, caps: [{ kind: 'thin', label: 'x' }] }).score).toBe(1);
+    expect(fitOf({ ...low, caps: [{ kind: 'thin', label: 'x' }] }).score).toBe(0);
   });
 });
 

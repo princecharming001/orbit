@@ -234,7 +234,7 @@ async function respond(
         evidenceHash: stored.evidenceHash,
         open: true,
       }),
-      { evidenceHash: stored.evidenceHash },
+      { evidenceHash: stored.evidenceHash, profile: stored.profile },
     );
     // the search is over for now (nothing left to read, or the model is off): the roles not read closely come too,
     // with the parts Orbit can read without it
@@ -464,7 +464,7 @@ export async function scoreOne(
   );
   if (!row) return { problem: 'Orbit could not keep this posting. Paste its text.' };
   if (row.state === 'read' && row.evidence_hash === stored.evidenceHash)
-    return { match: matchOf(row, job, { evidenceHash: stored.evidenceHash }) };
+    return { match: matchOf(row, job, { evidenceHash: stored.evidenceHash, profile: stored.profile }) };
   if (!s.claude.configured || (await readsToday(s.db, userId, s.now())) >= READS_PER_DAY)
     return { match: matchOf(row, job, { evidenceHash: stored.evidenceHash, profile: stored.profile }) };
   const out = await readRows(s, deps, userId, stored, [row]);

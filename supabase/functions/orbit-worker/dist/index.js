@@ -46029,38 +46029,43 @@ import { z as z11 } from "npm:zod@3.25.76/v4";
 // packages/core/src/roles/fit.ts
 var FIT_WEIGHTS = {
   /** each part's share of the sum before left-out parts are shared out */
-  parts: { skills: 0.4, experience: 0.3, education: 0.15, level: 0.15 },
-  skill: { work: 1, project: 0.8, listed: 0.35, none: 0 },
+  parts: { skills: 0.35, experience: 0.25, education: 0.15, level: 0.1, goals: 0.15 },
+  skill: { work: 1, project: 0.75, listed: 0.35, none: 0 },
   /** how much one skill counts in the skills part */
   need: { must: 2, nice: 1 },
+  /** points off when must-have skills show nowhere, scaled by the share of must-haves missing */
+  missingMust: 15,
   experience: { same: 1, related: 0.6, projects: 0.35, none: 0 },
   /** `unsaid`: the part is left out */
   education: { fits: 1, close: 0.6, no: 0, unsaid: void 0 },
-  level: { at: 1, below: 0.6, stretch: 0.4, far: 0 },
-  /** the most each fact lets the score be (§6.4) */
+  level: { at: 1, below: 0.6, stretch: 0.45, far: 0 },
+  /** goals: how much of the part is the kind of work, and how much the place */
+  goals: { kind: 0.75, place: 0.25, sameFamily: 0.6 },
+  /** the most each fact lets the score be */
   caps: {
-    degree: 3,
-    years: 4,
-    graduation: 4,
-    sponsorship: 2,
-    citizenship_no: 2,
-    citizenship_ask: 5,
-    place: 5,
-    // §6.4 drafted this at 7. A posting that says little cannot be called a good fit on paper, because there is
-    // little paper: at 7 it was the one cap under which a role still showed as a good fit (§6.7: none may)
-    thin: 6
+    degree: 30,
+    years: 40,
+    graduation: 40,
+    sponsorship: 20,
+    citizenship_no: 20,
+    citizenship_ask: 50,
+    place: 50,
+    // a posting that says little cannot be called a good fit on paper, because there is little paper
+    thin: 60
   },
   /** fewer requirements than this and the posting "says little" */
-  thinBelow: 3
+  thinBelow: 3,
+  /** the bands' lower bounds */
+  bands: { strong: 80, good: 65, stretch: 50 }
 };
-var PART_KEYS = ["skills", "experience", "education", "level"];
+var PART_KEYS = ["skills", "experience", "education", "level", "goals"];
 function bandOf(score) {
-  if (score >= 9) return "strong";
-  if (score >= 7) return "good";
-  if (score >= 5) return "stretch";
+  if (score >= FIT_WEIGHTS.bands.strong) return "strong";
+  if (score >= FIT_WEIGHTS.bands.good) return "good";
+  if (score >= FIT_WEIGHTS.bands.stretch) return "stretch";
   return "out";
 }
-function partsOf(a) {
+function partsOf(a, goals) {
   const parts = {};
   let total = 0;
   let got = 0;
@@ -46077,10 +46082,16 @@ function partsOf(a) {
   if (eduValue !== void 0) parts.education = eduValue;
   const lvl = a.level?.answer;
   if (lvl !== void 0) parts.level = FIT_WEIGHTS.level[lvl] ?? 0;
+  if (goals !== void 0) parts.goals = clamp2(goals, 0, 1);
   return parts;
 }
+function missingMustOf(a) {
+  const musts = (a.skills ?? []).filter((s) => s.need === "must");
+  if (!musts.length) return 0;
+  return musts.filter((s) => s.answer === "none").length / musts.length;
+}
 function fitOf(answers, o = {}) {
-  const parts = partsOf(answers);
+  const parts = partsOf(answers, o.goals);
   const present = PART_KEYS.filter((k) => parts[k] !== void 0);
   const share = present.reduce((s, k) => s + FIT_WEIGHTS.parts[k], 0);
   const weights = {};
@@ -46090,14 +46101,32 @@ function fitOf(answers, o = {}) {
     weights[k] = w;
     sum += w * parts[k];
   }
-  const raw = clamp2(Math.round(1 + 9 * Math.round(sum * 1e9) / 1e9), 1, 10);
+  const exact = Math.round(sum * 1e9) / 1e9;
+  const raw = clamp2(Math.round(100 * exact - FIT_WEIGHTS.missingMust * missingMustOf(answers)), 0, 100);
   const caps = [...answers.caps ?? []];
   if (o.requirements !== void 0 && o.requirements < FIT_WEIGHTS.thinBelow && !caps.some((c) => c.kind === "thin"))
     caps.push(THIN_CAP);
   let score = raw;
-  for (const c of caps) score = Math.min(score, FIT_WEIGHTS.caps[c.kind] ?? 10);
-  score = clamp2(score, 1, 10);
-  return { score, raw, parts, weights, caps, band: bandOf(score) };
+  for (const c of caps) score = Math.min(score, FIT_WEIGHTS.caps[c.kind] ?? 100);
+  score = clamp2(score, 0, 100);
+  return { score, raw, parts, weights, caps, band: bandOf(score), scale: 100 };
+}
+var placeIn = (places2, wanted) => places2.some((p) => wanted.some((w) => w.trim() && p.toLowerCase().includes(w.trim().toLowerCase())));
+function goalsOf(job, profile) {
+  const kinds = (profile.kinds ?? []).filter((k) => k.on);
+  const wants = profile.wants ?? { places: [], remote: false };
+  const placed = (wants.places?.length ?? 0) > 0 || !!wants.remote;
+  if (!kinds.length && !placed) return void 0;
+  let kind;
+  if (kinds.length) {
+    kind = titleMatch(job.title, kinds);
+    if (job.family && kinds.some((k) => kindFamilies(k).includes(job.family)))
+      kind = Math.max(kind, FIT_WEIGHTS.goals.sameFamily);
+  }
+  const place = placed ? wants.remote && job.remote === "remote" || placeIn(job.places, wants.places ?? []) ? 1 : 0 : void 0;
+  if (kind === void 0) return place;
+  if (place === void 0) return kind;
+  return FIT_WEIGHTS.goals.kind * kind + FIT_WEIGHTS.goals.place * place;
 }
 var clamp2 = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 var THIN_CAP = { kind: "thin", label: "The posting says little" };
@@ -46470,14 +46499,10 @@ function matchOf(r, job, current) {
   const match = { id: r.id, job, state: r.state, rank: Number(r.rank), status: r.status };
   if (r.dismiss_reason) match.dismissReason = r.dismiss_reason;
   if (r.state === "read" && fresh && r.fit !== null && r.parts && r.answers) {
-    match.fit = {
-      score: r.fit,
-      raw: r.parts.raw,
-      parts: r.parts.parts,
-      weights: r.parts.weights,
-      caps: r.caps ?? [],
-      band: r.fit >= 9 ? "strong" : r.fit >= 7 ? "good" : r.fit >= 5 ? "stretch" : "out"
-    };
+    match.fit = fitOf(
+      { ...r.answers, caps: r.caps ?? r.answers.caps ?? [] },
+      { goals: current?.profile ? goalsOf(job, current.profile) : void 0 }
+    );
     match.answers = r.answers;
     if (r.reason) match.reason = r.reason;
     if (r.gaps?.length) match.gaps = r.gaps;
@@ -46592,15 +46617,19 @@ ${body}`.slice(0, POSTING_CHARS) : listingText(job);
 async function release(db2, it, stored2) {
   await db2.sql`update orbit.role_matches set read_at = null where id = ${it.row.id}::uuid and state = 'to_read'`;
   return {
-    ...matchOf({ ...it.row, state: "to_read" }, it.job, { evidenceHash: stored2.evidenceHash }),
+    ...matchOf({ ...it.row, state: "to_read" }, it.job, {
+      evidenceHash: stored2.evidenceHash,
+      profile: stored2.profile
+    }),
     roughFit: roughFitOf(it.job, stored2.profile, it.thin ? void 0 : it.posting)
   };
 }
+var fitColumn = (score) => Math.max(1, Math.min(10, Math.round(score / 10)));
 async function store(s, it, answers, stored2) {
-  const fit = fitOf(answers, { requirements: it.reqs.length });
+  const fit = fitOf(answers, { requirements: it.reqs.length, goals: goalsOf(it.job, stored2.profile) });
   const now = s.now();
   const [row] = await s.db.sql`
-    update orbit.role_matches m set state = 'read', fit = ${fit.score}::smallint,
+    update orbit.role_matches m set state = 'read', fit = ${fitColumn(fit.score)}::smallint,
            parts = ${{ parts: fit.parts, weights: fit.weights, raw: fit.raw }}::jsonb,
            answers = ${{ ...answers, caps: fit.caps }}::jsonb, caps = ${JSON.stringify(fit.caps)}::jsonb,
            reason = ${answers.reason || null}, gaps = ${JSON.stringify(answers.gaps)}::jsonb,
@@ -46608,7 +46637,7 @@ async function store(s, it, answers, stored2) {
      where m.id = ${it.row.id}::uuid
      returning m.id::text as id, m.job_id::text as job_id, m.search_id::text as search_id, m.evidence_hash, m.state,
                m.rank, m.fit, m.parts, m.answers, m.caps, m.reason, m.gaps, m.status, m.dismiss_reason, m.read_at`;
-  return matchOf(row, it.job, { evidenceHash: stored2.evidenceHash });
+  return matchOf(row, it.job, { evidenceHash: stored2.evidenceHash, profile: stored2.profile });
 }
 function scoreUser(fence, evidence, p, items) {
   const about = [

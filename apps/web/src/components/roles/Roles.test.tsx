@@ -405,9 +405,9 @@ describe('the roles, as cards', () => {
     for (const r of $$('role-row')) expect($('role-company', r)!.textContent).toBe('Stripe');
     await click($('roles-filters-clear'));
     const n = $$('role-row').length;
-    await choose($('roles-min-fit'), '8');
+    await choose($('roles-min-fit'), '80');
     expect($$('role-row').length).toBeLessThan(n);
-    expect($$('role-fit').every((f) => Number(f.dataset.score) >= 8)).toBe(true);
+    expect($$('role-fit').every((f) => Number(f.dataset.score) >= 80)).toBe(true);
   });
 
   it('the way in: someone they know lifts a role in Best match, shows on the card, and the filter keeps only those', async () => {
@@ -839,7 +839,7 @@ describe('in the chat', () => {
       );
     });
     await until(() => $('plan-fit', host));
-    expect($('plan-fit-score', host)!.textContent).toMatch(/^\d+\/10$/);
+    expect($('plan-fit-score', host)!.textContent).toMatch(/^\d{1,3}$/);
     expect($('plan-fit-reason', host)!.textContent?.length).toBeGreaterThan(3);
   });
 });

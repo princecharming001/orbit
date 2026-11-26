@@ -1,6 +1,6 @@
 /**
  * Plan 44: the Roles routes answered from sample roles, the way the server answers them (§5, §6): a profile read
- * from the lines the browser sends, a search that lists the roles to read and is read in steps, a score out of 10
+ * from the lines the browser sends, a search that lists the roles to read and is read in steps, a score out of 100
  * from answers with quotes and the formula with its caps, Saved, Watch, and a pasted posting scored now.
  *
  * Two places use it. The demo student's Roles tab runs on it in the browser (the demo never calls a server), kept in

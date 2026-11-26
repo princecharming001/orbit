@@ -19,6 +19,7 @@
  */
 import {
   type DismissReason,
+  fitOnHundred,
   type Job,
   type JobLevel,
   levelsFor,
@@ -414,12 +415,26 @@ export const PASTED = 'pasted';
 
 /** Every match kept for the student, with the search each came from. */
 export async function keptMatches(userId: string): Promise<KeptMatchRow[]> {
-  return (await db.roleMatches.where('userId').equals(userId).toArray()) as KeptMatchRow[];
+  const rows = (await db.roleMatches.where('userId').equals(userId).toArray()) as KeptMatchRow[];
+  return rows.map(onHundred);
+}
+
+/** A row kept before the score went out of 100 reads on the new scale (core's fitOnHundred). */
+function onHundred<T extends { match: RoleMatch }>(row: T): T {
+  const f = row.match.fit;
+  if (!f || f.scale === 100) return row;
+  return { ...row, match: { ...row.match, fit: fitOnHundred(f, row.match.answers) } };
+}
+
+/** The least fit shown, out of 100: a filter kept from before (out of 10) is read at ten times. */
+export function fitFloor(minFit: number): number {
+  return minFit > 0 && minFit <= 10 ? (minFit === 1 ? 0 : minFit * 10) : minFit;
 }
 
 /** One kept match by its id. */
 export async function keptMatch(userId: string, matchId: string): Promise<RoleMatch | undefined> {
-  return (await db.roleMatches.get(rowId(userId, matchId)))?.match;
+  const row = await db.roleMatches.get(rowId(userId, matchId));
+  return row ? onHundred(row as KeptMatchRow).match : undefined;
 }
 
 /**
@@ -973,7 +988,7 @@ export const DEFAULT_FILTERS: RoleFilters = {
   remote: false,
   noSponsorship: false,
   wayIn: 'any',
-  minFit: 6,
+  minFit: 50,
   sort: 'best',
 };
 
@@ -1039,7 +1054,7 @@ export function filterMatches(
     }
     // a role not read closely has no number: it is not held back by the least fit
     const s = fitOfMatch(m);
-    if (s !== undefined && s < f.minFit) return false;
+    if (s !== undefined && s < fitFloor(f.minFit)) return false;
     return true;
   });
 }
@@ -1101,10 +1116,10 @@ export function applyWhere(job: Job): { href: string; words: string } {
   return { href, words: host ? `${job.companyName} careers, ${host}` : `${job.companyName} careers` };
 }
 
-/** When nothing scores 6 or more: the best five anyway, marked as stretches. */
+/** When nothing scores 50 or more: the best five anyway, marked as stretches. */
 export function bestStretches(rows: RoleMatch[]): RoleMatch[] {
   return sortMatches(
-    rows.filter((m) => m.fit && m.fit.score >= 3),
+    rows.filter((m) => m.fit && m.fit.score >= 30),
     'fit',
   ).slice(0, 5);
 }
@@ -1145,6 +1160,7 @@ const PART_NAMES = {
   experience: 'Experience',
   education: 'Education',
   level: 'Level',
+  goals: 'Your goals',
 } as const;
 export type FitPartName = keyof typeof PART_NAMES;
 
@@ -1194,6 +1210,18 @@ export function partWords(
       ['experience', exp],
       ['education', edu],
       ['level', lvl],
+      ...(p.goals !== undefined
+        ? [
+            [
+              'goals',
+              p.goals >= 0.99
+                ? 'The kind of work and the place you are after.'
+                : p.goals >= 0.6
+                  ? 'Close to the kind of work you are after.'
+                  : 'Not quite the kind of work or place you picked.',
+            ],
+          ]
+        : []),
     ] as [FitPartName, string][]
   ).map(([part, words]) => ({ part, name: PART_NAMES[part], value: p[part], words }));
 }

@@ -78,7 +78,7 @@ export function PlanFit({ url }: { url?: string }) {
     >
       <div className="flex items-center gap-3">
         <span className="text-[15px] font-medium tabular-nums" data-testid="plan-fit-score">
-          {f.score}/10
+          {f.score}
         </span>
         <FitBar score={f.score} />
         <span className="text-[13px] text-ink-2">{BAND_WORDS[f.band]}</span>

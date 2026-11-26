@@ -1,5 +1,5 @@
 /**
- * Plan 44 §6: reading roles closely and scoring them out of 10.
+ * Plan 44 §6: reading roles closely and scoring them out of 100.
  *
  *   1. The posting's text, from the source side (`RoleSources.text`). A role whose source has no text to give is
  *      scored on what its listing says, and is thin: fewer than three requirements, capped at 6. A role whose text
@@ -19,7 +19,7 @@
  * Everything the model reads that someone else wrote is fenced (`makeFence`).
  */
 import { z } from 'zod/v4';
-import { capsFor, fitOf } from '../../../../packages/core/src/roles/fit.ts';
+import { capsFor, fitOf, goalsOf } from '../../../../packages/core/src/roles/fit.ts';
 import { levelAnswerOf } from '../../../../packages/core/src/roles/profileLevel.ts';
 import { verifyQuote } from '../../../../packages/core/src/roles/quote.ts';
 import {
@@ -531,14 +531,12 @@ export function matchOf(
   const match: RoleMatch = { id: r.id, job, state: r.state, rank: Number(r.rank), status: r.status };
   if (r.dismiss_reason) match.dismissReason = r.dismiss_reason;
   if (r.state === 'read' && fresh && r.fit !== null && r.parts && r.answers) {
-    match.fit = {
-      score: r.fit,
-      raw: r.parts.raw,
-      parts: r.parts.parts,
-      weights: r.parts.weights,
-      caps: r.caps ?? [],
-      band: r.fit >= 9 ? 'strong' : r.fit >= 7 ? 'good' : r.fit >= 5 ? 'stretch' : 'out',
-    };
+    // out of 100 from the kept answers (their caps included): the same answers always give the same score, so a row
+    // read before the score went out of 100 shows the new number with no second read
+    match.fit = fitOf(
+      { ...r.answers, caps: r.caps ?? r.answers.caps ?? [] },
+      { goals: current?.profile ? goalsOf(job, current.profile) : undefined },
+    );
     match.answers = r.answers;
     if (r.reason) match.reason = r.reason;
     if (r.gaps?.length) match.gaps = r.gaps;
@@ -701,16 +699,22 @@ export async function readRows(
 async function release(db: Db, it: Item, stored: StoredProfile): Promise<RoleMatch> {
   await db.sql`update orbit.role_matches set read_at = null where id = ${it.row.id}::uuid and state = 'to_read'`;
   return {
-    ...matchOf({ ...it.row, state: 'to_read' }, it.job, { evidenceHash: stored.evidenceHash }),
+    ...matchOf({ ...it.row, state: 'to_read' }, it.job, {
+      evidenceHash: stored.evidenceHash,
+      profile: stored.profile,
+    }),
     roughFit: roughFitOf(it.job, stored.profile, it.thin ? undefined : it.posting),
   };
 }
 
+/** The `fit` column keeps 1 to 10 (its check and index stay as they are); the score itself is out of 100. */
+const fitColumn = (score: number) => Math.max(1, Math.min(10, Math.round(score / 10)));
+
 async function store(s: Services, it: Item, answers: FitAnswers, stored: StoredProfile): Promise<RoleMatch> {
-  const fit = fitOf(answers, { requirements: it.reqs!.length });
+  const fit = fitOf(answers, { requirements: it.reqs!.length, goals: goalsOf(it.job, stored.profile) });
   const now = s.now();
   const [row] = await s.db.sql<MatchRow>`
-    update orbit.role_matches m set state = 'read', fit = ${fit.score}::smallint,
+    update orbit.role_matches m set state = 'read', fit = ${fitColumn(fit.score)}::smallint,
            parts = ${{ parts: fit.parts, weights: fit.weights, raw: fit.raw }}::jsonb,
            answers = ${{ ...answers, caps: fit.caps }}::jsonb, caps = ${JSON.stringify(fit.caps)}::jsonb,
            reason = ${answers.reason || null}, gaps = ${JSON.stringify(answers.gaps)}::jsonb,
@@ -718,7 +722,7 @@ async function store(s: Services, it: Item, answers: FitAnswers, stored: StoredP
      where m.id = ${it.row.id}::uuid
      returning m.id::text as id, m.job_id::text as job_id, m.search_id::text as search_id, m.evidence_hash, m.state,
                m.rank, m.fit, m.parts, m.answers, m.caps, m.reason, m.gaps, m.status, m.dismiss_reason, m.read_at`;
-  return matchOf(row!, it.job, { evidenceHash: stored.evidenceHash });
+  return matchOf(row!, it.job, { evidenceHash: stored.evidenceHash, profile: stored.profile });
 }
 
 function scoreUser(
@@ -883,9 +887,9 @@ export async function refit(db: Db, userId: string, stored: StoredProfile): Prom
     const job = jobOf({ ...r, id: r.job_id } as JobRow);
     const reqs = r.requirements ?? [];
     const answers = reapply(r.answers!, reqs, stored.profile, job);
-    const fit = fitOf(answers, { requirements: reqs.length });
+    const fit = fitOf(answers, { requirements: reqs.length, goals: goalsOf(job, stored.profile) });
     await db.sql`
-      update orbit.role_matches set fit = ${fit.score}::smallint,
+      update orbit.role_matches set fit = ${fitColumn(fit.score)}::smallint,
              parts = ${{ parts: fit.parts, weights: fit.weights, raw: fit.raw }}::jsonb,
              answers = ${{ ...answers, caps: fit.caps }}::jsonb, caps = ${JSON.stringify(fit.caps)}::jsonb
        where id = ${r.id}::uuid`;
