@@ -437,8 +437,8 @@ describe('the real sources into the real search', () => {
     for (const m of first) {
       expect(m.state, m.job.title).toBe('read');
       expect(m.fit, m.job.title).toBeDefined();
-      expect(m.fit!.score).toBeGreaterThanOrEqual(1);
-      expect(m.fit!.score).toBeLessThanOrEqual(10);
+      expect(m.fit!.score).toBeGreaterThanOrEqual(0);
+      expect(m.fit!.score).toBeLessThanOrEqual(100);
     }
     // read from the board's own text: the student's job line shows Python and SQL, Go only in a project
     const scored = intern[0]!;
@@ -451,7 +451,7 @@ describe('the real sources into the real search', () => {
       you: 'Built a churn model in Python and SQL for the finance team.',
       posting: 'Must have Python.',
     });
-    expect(scored.fit).toMatchObject({ score: 9, band: 'strong', caps: [] });
+    expect(scored.fit).toMatchObject({ score: 83, band: 'strong', caps: [] });
     expect(scored.fit!.parts).toMatchObject({ level: 1 });
     // the data role asks for more: statistics, which the student has from a course (so not shown in work), and
     // Spark, which nothing of theirs shows
@@ -465,7 +465,7 @@ describe('the real sources into the real search', () => {
     // a role whose page Orbit cannot read is scored on its listing, and cannot be a strong fit on paper
     const thin = titled(first, 'Intern Software Engineer')[0]!;
     expect(thin.fit!.caps.map((c) => c.kind)).toContain('thin');
-    expect(thin.fit!.score).toBeLessThanOrEqual(6);
+    expect(thin.fit!.score).toBeLessThanOrEqual(60);
     expect(['stretch', 'out']).toContain(thin.fit!.band);
     // a role that does not sponsor is never capped for a student who was not asked
     expect(thin.fit!.caps.map((c) => c.kind)).not.toContain('sponsorship');

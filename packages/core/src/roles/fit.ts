@@ -46,7 +46,7 @@ export const FIT_WEIGHTS = {
   >,
   level: { at: 1, below: 0.6, stretch: 0.45, far: 0 } satisfies Record<LevelAnswer, number>,
   /** goals: how much of the part is the kind of work, and how much the place */
-  goals: { kind: 0.75, place: 0.25, sameFamily: 0.6 },
+  goals: { kind: 0.75, place: 0.25, sameFamily: 0.8 },
   /** the most each fact lets the score be */
   caps: {
     degree: 30,
