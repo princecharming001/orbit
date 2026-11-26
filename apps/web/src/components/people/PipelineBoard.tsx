@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
 import { useSession } from '../../state/session';
+import { openWarmUpPlan } from '../../state/warmUpPlan';
 import { openWarmUpSheet } from '../../state/warmUpSheet';
 import { Avatar, cx, relDate, Select, Skeleton } from '../../ui';
 import { LogoText } from '../CompanyLogo';
@@ -568,7 +569,8 @@ function CardWhen({
 
 /**
  * A warm-up on its pipeline card. Orbit running it: what it has done and the next step's day, nothing to do. Done by
- * hand (or handed back): the steps done, and "Let Orbit run it" when Orbit can run warm-ups for the student.
+ * hand (or handed back): the steps done, and "Let Orbit run it" when Orbit can run warm-ups for the student. A click
+ * on the line opens the whole plan, step by step (WarmUpPlanView).
  */
 function WarmUpLine({
   chat,
@@ -598,13 +600,27 @@ function WarmUpLine({
         ? `Orbit is running it · ${done} of ${total} done${nextDay ? `, next ${nextDay}` : ''}`
         : `By hand · ${done} of ${total} steps`;
   return (
-    <div className="mt-2" data-testid="card-warmup" data-auto={status ?? 'manual'}>
+    <div className="group/warm relative mt-2" data-testid="card-warmup" data-auto={status ?? 'manual'}>
+      {/* the whole line opens the plan, step by step: it sits over the card's link, and under "Let Orbit run it" */}
+      <button
+        type="button"
+        className="absolute -inset-1 z-10 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        onClick={(e) => {
+          e.preventDefault();
+          openWarmUpPlan({ chatId: chat.id });
+        }}
+        aria-label={`See the warm-up plan for ${person.displayName}`}
+        title="See the plan"
+        data-testid="card-warmup-open"
+      />
       <div className="flex items-center justify-between gap-2 text-[11.5px] text-ink-3">
-        <span className="min-w-0">{words}</span>
+        <span className="min-w-0 underline-offset-2 group-hover/warm:text-ink-2 group-hover/warm:underline">
+          {words}
+        </span>
         {!running && status !== 'done' && next && canAuto && (
           <button
             type="button"
-            className="relative z-10 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-ink-2 underline underline-offset-2 decoration-[#cfcdc9] hover:text-ink hover:decoration-ink"
+            className="relative z-20 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-ink-2 underline underline-offset-2 decoration-[#cfcdc9] hover:text-ink hover:decoration-ink"
             onClick={(e) => {
               e.preventDefault();
               openWarmUpSheet({ personId: person.id, source: chat.source });

@@ -25,6 +25,7 @@ import { lastTouch } from '../engine/search';
 import { draftLists, notYetWritten, startedDrafts, todayCards } from '../engine/today';
 import { useSession } from '../state/session';
 import { useViewState } from '../state/viewState';
+import { openWarmUpPlan } from '../state/warmUpPlan';
 import {
   Avatar,
   Button,
@@ -687,7 +688,14 @@ function ComingUp({
                 >
                   {p.displayName}
                 </Link>
-                <div className="text-[12px] text-ink-3 truncate">
+                {/* the line opens the whole plan, step by step */}
+                <button
+                  type="button"
+                  className="block w-full text-left text-[12px] text-ink-3 truncate underline-offset-2 hover:text-ink hover:underline"
+                  onClick={() => openWarmUpPlan({ chatId: chat.id })}
+                  title="See the plan"
+                  data-testid="upcoming-warmup-open"
+                >
                   {chat.warmUp!.auto?.status === 'running'
                     ? 'Orbit is warming up'
                     : chat.warmUp!.auto?.status === 'done'
@@ -699,7 +707,7 @@ function ComingUp({
                     : new Date(chat.warmUp!.readyAt) <= now || chat.warmUp!.auto?.status === 'done'
                       ? 'first message ready'
                       : `first message ${relDate(chat.warmUp!.readyAt, now)}`}
-                </div>
+                </button>
               </div>
               {next && (
                 <button

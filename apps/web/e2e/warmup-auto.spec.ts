@@ -325,3 +325,94 @@ test.describe('The demo simulates the run, so it can be tried', () => {
     await expect(card.getByTestId('warmup-stop')).toHaveCount(0);
   });
 });
+
+test.describe('The plan, step by step, wherever a warm-up shows', () => {
+  // the screenshot of the plan is taken at twice the pixels
+  test.use({ deviceScaleFactor: 2 });
+
+  test('a click on the pipeline card, on Coming up or on the person page shows every step with its day and time', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await signedIn(page);
+    const sheet = await openSheet(page);
+    await sheet.getByTestId('warmup-start').click();
+    await expect(sheet).toBeHidden({ timeout: 20_000 });
+
+    // the pipeline card: the warm-up line opens the plan
+    await page.goto('people?view=board');
+    const line = page.getByTestId('card-warmup').filter({ hasText: 'Orbit is running it' });
+    await expect(line).toHaveCount(1, { timeout: 15_000 });
+    await line.getByTestId('card-warmup-open').click();
+    const plan = page.getByTestId('warmup-plan-view');
+    await expect(plan).toBeVisible({ timeout: 10_000 });
+    // the card's own link did not open the person
+    await expect(page).toHaveURL(/\/people\?view=board/);
+    await expect(plan.getByTestId('warmup-plan-status')).toHaveText('Orbit is running it');
+    await expect(plan.getByTestId('warmup-plan-step-text')).toHaveText([
+      "Orbit views Priya's profile",
+      "Orbit likes Priya's post",
+      'Orbit comments on that post',
+      'Your connection request and first message are ready for you to send',
+    ]);
+    const when = plan.getByTestId('warmup-plan-when');
+    await expect(when.nth(0)).toHaveText(/^Today, \d{1,2}:\d{2} (AM|PM)$/);
+    await expect(when.nth(1)).toHaveText(/^Thursday, \d{1,2}:\d{2} (AM|PM)$/);
+    await expect(when.nth(2)).toHaveText(/^Friday, \d{1,2}:\d{2} (AM|PM)$/);
+    await expect(
+      plan.getByTestId('warmup-plan-step-react_post').getByTestId('warmup-plan-post'),
+    ).toContainText('New analysts should ship something real in their first week.');
+    await expect(
+      plan.getByTestId('warmup-plan-step-comment_post').getByTestId('warmup-plan-comment'),
+    ).toContainText(DRAFTED);
+    await expect(plan.getByTestId('warmup-plan-step-message')).toContainText(
+      'Nothing goes out until you press Send.',
+    );
+    await expect(plan.getByTestId('warmup-plan-stop')).toBeVisible();
+    await noShouting(page, 'warmup-plan-view');
+    await page
+      .getByRole('dialog', { name: 'Warm-up plan' })
+      .screenshot({ path: 'test-results/warmup-plan-view.png' });
+    await page.keyboard.press('Escape');
+    await expect(plan).toBeHidden();
+
+    // Coming up on Drafts
+    await page.goto('inbox');
+    await page.getByTestId('upcoming-warmup-open').click();
+    await expect(plan).toBeVisible({ timeout: 10_000 });
+    await expect(plan.getByTestId('warmup-plan-step-view_profile')).toContainText(
+      "Orbit views Priya's profile",
+    );
+    // Open their profile goes to the person page and closes the plan
+    await plan.getByTestId('warmup-plan-profile').click();
+    await expect(page.getByRole('heading', { name: 'Priya Rao', level: 1 })).toBeVisible({ timeout: 30_000 });
+    await expect(plan).toBeHidden();
+
+    // the person page: "See the plan" on the warm-up card
+    await page.getByTestId('warmup-card').getByTestId('warmup-see-plan').click();
+    await expect(plan).toBeVisible();
+    await expect(plan.locator('li[data-status]')).toHaveCount(4);
+  });
+
+  test("a warm-up done by hand: the steps are the student's, and the comment is not written yet", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await loadDemo(page);
+    await page.goto('people?view=board');
+    const card = page.getByTestId('chat-card-warming').first();
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await card.getByTestId('card-warmup-open').click();
+    const plan = page.getByTestId('warmup-plan-view');
+    await expect(plan).toBeVisible({ timeout: 10_000 });
+    await expect(page).toHaveURL(/\/people\?view=board/);
+    await expect(plan.getByTestId('warmup-plan-status')).toHaveText('By hand');
+    await expect(plan.getByTestId('warmup-plan-step-view_profile')).toHaveAttribute('data-status', 'done');
+    await expect(plan.getByTestId('warmup-plan-step-react_post')).toContainText(
+      /You react to one of .+ recent posts/,
+    );
+    await expect(plan.getByTestId('warmup-plan-comment-none')).toHaveText('Comment not written yet.');
+    await expect(plan.getByTestId('warmup-plan-step-message')).toContainText('ready for you to send');
+    await noShouting(page, 'warmup-plan-view');
+  });
+});

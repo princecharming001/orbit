@@ -50,6 +50,7 @@ import { OutboxScheduler } from './OutboxScheduler';
 import { ReplyWatch } from './ReplyWatch';
 import { ReadinessChip, ReadinessWatch } from './sync/ReadinessChip';
 import { useLogOut } from './useLogOut';
+import { WarmUpPlanSheet } from './WarmUpPlanView';
 import { WarmUpStartSheet } from './WarmUpStartSheet';
 import { WarmUpWatch } from './WarmUpWatch';
 import { WeekReviewLauncher } from './WeekReview';
@@ -319,6 +320,7 @@ export function AppShell() {
       <ReplyWatch />
       <WarmUpWatch />
       <WarmUpStartSheet />
+      <WarmUpPlanSheet />
       <NotesWatch />
       <WeekReviewLauncher />
       <LinkedInAutoSync />
